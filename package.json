@@ -1,6 +1,6 @@
 {
   "name": "flowition",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Deterministic multi-CLI agent workflow engine: programmatic orchestration of claude/codex/amp/droid/opencode/pi agents with journaled resume, live steering, inspection, and an MCP surface",
   "homepage": "https://github.com/ben-vargas/flowition#readme",
   "repository": {
@@ -11,6 +11,12 @@
     "url": "https://github.com/ben-vargas/flowition/issues"
   },
   "type": "module",
+  "types": "./index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./index.d.ts"
+    }
+  },
   "bin": {
     "flowition": "./bin/flowition.js",
     "flo": "./bin/flowition.js"
@@ -38,6 +44,7 @@
   "author": "Ben Vargas",
   "license": "MIT",
   "files": [
+    "index.d.ts",
     "bin",
     "src",
     "examples",

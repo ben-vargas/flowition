@@ -129,6 +129,51 @@ barrier; `pipeline(items, ...stages)` runs each item through stages with no
 barrier between them — prefer it. `flowition guide` prints the full authoring
 contract, written to be pasted into an agent's context.
 
+### Editor autocomplete
+
+The npm package ships declarations for the workflow toolkit, but editors do not
+search globally installed packages. Install `flowition` locally in the project
+where you author workflows, even if the CLI you run remains the global one:
+
+```sh
+npm install --save-dev flowition
+```
+
+Then use a JSDoc type annotation in the plain-JavaScript workflow:
+
+```js
+// @ts-check
+
+/** @type {import('flowition').WorkflowMeta} */
+export const meta = { name: 'review', description: 'review one target' }
+
+/** @satisfies {import('flowition').JSONSchema} */
+const FINDINGS = {
+  type: 'object',
+  properties: { items: { type: 'array', items: { type: 'string' } } },
+  required: ['items'],
+  additionalProperties: false,
+}
+
+/** @type {import('flowition').Workflow<{ target: string }>} */
+const workflow = async ({ agent, args, phase }) => {
+  phase('Review')
+  return agent(`Review ${args.target} for bugs`, { schema: FINDINGS })
+}
+
+export default workflow
+```
+
+The `@satisfies` tag on a hoisted schema is not optional under `@ts-check`:
+without it `type: 'object'` widens to `string` and no longer matches the schema
+type. A schema written inline in the `agent()` call is contextually typed and
+needs no annotation.
+
+The JSDoc import is erased tooling syntax: it does not import or execute
+`flowition` at runtime — the package exposes types only, and a runtime
+`import('flowition')` fails with `ERR_PACKAGE_PATH_NOT_EXPORTED` by design. A
+global `npm i -g flowition` alone cannot provide this editor resolution.
+
 ### Adapters
 
 | adapter  | steering | resume vehicle                 | schema mode |
