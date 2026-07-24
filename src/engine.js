@@ -587,6 +587,29 @@ function wfCallsite() {
   return null
 }
 
+// A .js workflow in a CommonJS package scope is parsed as CJS and dies on its
+// first `export`/`import` with a bare SyntaxError that names the token but not
+// the cause — likelier than it sounds, since `npm init -y` next to a workflow
+// (our own editor-autocomplete advice) writes "type": "commonjs". Diagnose only
+// when the format really resolved to CommonJS: SyntaxError over an ESM-only
+// token AND the nearest package.json does not declare "type": "module". Naming
+// that package.json is the detail that makes the fix findable.
+function cjsScopeHint(file, err) {
+  if (!(err instanceof SyntaxError) || !/\b(?:export|import)\b/.test(String(err.message))) return ''
+  if (path.extname(file) !== '.js') return ''
+  const fix = 'workflow files are ES modules'
+  for (let dir = path.dirname(file); ; dir = path.dirname(dir)) {
+    let pkg
+    try { pkg = JSON.parse(fs.readFileSync(path.join(dir, 'package.json'), 'utf8')) } catch { pkg = null }
+    if (pkg) {
+      if (pkg.type === 'module') return ''
+      const scope = pkg.type ? `sets "type": "${pkg.type}"` : 'has no "type" field'
+      return ` — ${fix}, but ${path.join(dir, 'package.json')} ${scope}, so Node parsed this .js file as CommonJS; add "type": "module" to that package.json or rename the workflow to .mjs`
+    }
+    if (dir === path.dirname(dir)) return ` — ${fix}, but Node parsed this .js file as CommonJS; add "type": "module" to a package.json next to the workflow or rename it to .mjs`
+  }
+}
+
 export async function runWorkflow(opts) {
   const file = path.resolve(opts.file)
   const defaults = { adapter: 'claude', ...opts.defaults }
@@ -819,7 +842,7 @@ export async function runWorkflow(opts) {
       fn = mod.default
       if (typeof fn !== 'function') throw new WorkflowError('workflow must `export default` an async function taking the toolkit')
     } catch (err) {
-      const msg = String(err?.message ?? err)
+      const msg = String(err?.message ?? err) + cjsScopeHint(file, err)
       journal.append({ type: 'end', status: 'failed', error: msg })
       clearInterval(hb)
       finalize({ runId, status: 'failed', error: msg })

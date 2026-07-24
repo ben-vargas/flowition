@@ -913,6 +913,27 @@ test('module-load failure still produces a terminal journal record and result.js
   assert.ok(readJsonl(journalOf(runId)).some((e) => e.type === 'end' && e.status === 'failed'))
 })
 
+test('module-load: ESM parse failure under a CommonJS package scope names the offending package.json and the fix', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'flowition-cjsscope-'))
+  const pkg = path.join(dir, 'package.json')
+  fs.writeFileSync(pkg, JSON.stringify({ name: 'scratch', type: 'commonjs' }))
+  const wf = path.join(dir, 'wf.workflow.js')
+  fs.writeFileSync(wf, 'export default async function () { return { ok: true } }\n')
+  const runId = 'flo_cjsscope'
+  await assert.rejects(runWorkflow({ file: wf, defaults: { adapter: 'mock' }, runId, quiet: true }), (err) => {
+    assert.equal(err.constructor.name, 'WorkflowError', 'clean CLI error, not a raw stack')
+    assert.match(err.message, /Unexpected token 'export'/, 'underlying parse error stays visible')
+    assert.ok(err.message.includes(pkg), 'names the offending package.json')
+    assert.match(err.message, /"type": "module"/)
+    assert.match(err.message, /\.mjs/)
+    return true
+  })
+  // the journaled/terminal error carries the same diagnosis
+  const result = JSON.parse(fs.readFileSync(path.join(runDir(runId), 'result.json'), 'utf8'))
+  assert.equal(result.status, 'failed')
+  assert.ok(result.error.includes(pkg))
+})
+
 test('readJsonlStrict: prefix-property tail rules', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'flowition-jsonl-'))
   // newline-terminated unparseable record = corruption, even as the final line

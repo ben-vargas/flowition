@@ -139,6 +139,11 @@ where you author workflows, even if the CLI you run remains the global one:
 npm install --save-dev flowition
 ```
 
+Note that workflow files are ES modules, and Node decides how to parse a `.js`
+file from the nearest package.json. If the install above creates one (`npm init
+-y` writes `"type": "commonjs"`), make sure it carries `"type": "module"` — or
+name your workflows `.mjs` — or the workflow will fail to load.
+
 Then use a JSDoc type annotation in the plain-JavaScript workflow:
 
 ```js
