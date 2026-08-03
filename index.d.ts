@@ -167,6 +167,15 @@ export interface AgentOptions {
   cwd?: string
   /** Display label, also usable as a live `sendTo()` target. */
   label?: string
+  /**
+   * Phase this agent belongs to, overriding the ambient `phase()` for this call.
+   *
+   * Use it inside `parallel()`/`pipeline()` stages, where the ambient phase can
+   * move on while an item is still running. A title no `phase()` call has declared
+   * yet opens its own phase group. The value is observational only: it never
+   * affects the resume key.
+   */
+  phase?: string
   /** Explicit resume-cache key; it must be unique within the run. */
   key?: string
   /** Milliseconds without provider output before the current turn is killed; defaults to 30 minutes. */

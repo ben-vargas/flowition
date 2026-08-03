@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16">
+  <!-- The flowition mark: the wordmark's accented "w" (App.tsx: flo[w]ition), drawn
+       as strokes in the §3.5 sprite idiom. 2px rather than the sprite's 1.5 - a tab
+       favicon renders at 16 real pixels and the brand mark has to survive that. Accent
+       values are the "accent" tokens from ui/tokens.css (XML comments forbid the
+       literal custom-property spelling), with the dark-theme value behind
+       prefers-color-scheme exactly like the app's own theming. -->
+  <style>
+    path { stroke: oklch(0.5 0.15 255); }
+    @media (prefers-color-scheme: dark) { path { stroke: oklch(0.72 0.13 255); } }
+  </style>
+  <path d="M2.5 5.5 L5.5 11 L8 6.5 L10.5 11 L13.5 5.5" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

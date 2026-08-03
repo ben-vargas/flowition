@@ -4,13 +4,14 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { spawn } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
-import { LineSplitter, runDir, runsDir, ensureDir, shortId } from './util.js'
+import { LineSplitter, runDir, ensureDir, shortId } from './util.js'
 import { foldEvents } from './events.js'
 import { controlRequest } from './control.js'
 import { Journal } from './journal.js'
 import { GUIDE } from './guide.js'
 import { validate } from './schema.js'
-import { deriveRunState } from './run-state.js'
+import { deriveRunState, listRunIds } from './run-state.js'
+import { installResumeMarker } from './run-lock.js'
 
 const TOOLS = [
   {
@@ -102,7 +103,8 @@ async function callTool(name, a) {
       let prior
       try { prior = Journal.load(runDir(a.runId)) } catch (err) { return { error: `cannot resume ${a.runId}: ${err.message}` } }
       if (!prior.meta) return { error: `no journal for ${a.runId}` }
-      const runId2 = detachResume(a.runId)
+      let runId2
+      try { runId2 = detachResume(a.runId) } catch (err) { return { error: `cannot resume ${a.runId}: ${err.message}` } }
       return { runId: runId2 }
     }
     case 'flowition_status': return runSnapshot(a.runId)
@@ -123,9 +125,9 @@ async function callTool(name, a) {
     case 'flowition_answer': return controlRequest(path.join(runDir(a.runId), 'control.sock'), { cmd: 'answer', qid: a.questionId, value: a.answer }).catch((e) => ({ error: String(e.message) }))
     case 'flowition_cancel': return controlRequest(path.join(runDir(a.runId), 'control.sock'), { cmd: 'cancel', agent: a.agent }).catch((e) => ({ error: String(e.message) }))
     case 'flowition_runs': {
-      let ids = []
-      try { ids = fs.readdirSync(runsDir()).filter((d) => d.startsWith('flo_')) } catch { /* none */ }
-      const snapshots = await Promise.all(ids.map((id) => runSnapshot(id)))
+      // E14: same unfiltered listing as `flowition runs` — custom `--run-id` runs and
+      // dirs still in their startup window are runs too
+      const snapshots = await Promise.all(listRunIds().map((id) => runSnapshot(id)))
       return snapshots.map(({ agents, phases, ...r }) => r)
     }
     case 'flowition_guide': return { guide: GUIDE }
@@ -134,10 +136,10 @@ async function callTool(name, a) {
 }
 
 function detachResume(runId) {
-  const marker = path.join(runDir(runId), '.resuming')
-  const tmp = `${marker}.${process.pid}.tmp`
-  fs.writeFileSync(tmp, String(Date.now()))
-  fs.renameSync(tmp, marker)
+  // Shared handoff protocol (§7.3, src/run-lock.js): the marker is what a concurrent
+  // delete linearizes against, and installing it throws if the run was deleted out from
+  // under this launch — so a resume is never reported as accepted for a run that is gone.
+  installResumeMarker(runDir(runId))
   launchDetached(runId, ['resume', runId, '--json'])
   return runId
 }

@@ -21,7 +21,7 @@ export class AgentError extends Error {
   }
 }
 
-const DEFAULT_STALL_MS = 30 * 60_000
+export const DEFAULT_STALL_MS = 30 * 60_000
 
 export class AgentJob {
   constructor({ adapter, spec, prompt, index, key, label, runId, scratch, transcript, journal, priorSessionId, pendingMail, deliveredWorkflowMail, restoredWorkflowMail, usageCum, controlSock, binPath }) {
@@ -60,6 +60,33 @@ export class AgentJob {
     // when it writes the COMPLETED result record. See runTurn.
     this.sessionlessDelivered = []
     this.lastTool = null
+    // Turn ordinal — namespaces the tool ids a parser has to synthesize (E11), so
+    // two turns of the same agent never write the same id into one transcript.
+    this.turnSeq = 0
+    // Wall-clock of the last REAL provider output (DESIGN §8 E6). Initialized at turn
+    // start and advanced only by markOutput() — the engine's progress timer must never
+    // touch it, or a silent agent would look alive and the §2.4 stall warning would
+    // never fire. null until the first turn starts.
+    this.lastOutputAt = null
+    // Count of real provider outputs, kept SEPARATE from the timestamp: turn start
+    // initializes the silence clock but is not output, so it must not read as a
+    // change. The engine's progress sweep gates on this revision — an agent that
+    // never emits anything has rev 0 forever and produces no progress events.
+    this.outputRev = 0
+  }
+
+  // Turn start: the clock the viewer ages against stallMs begins at admission, so an
+  // agent that never says a word is silent from then, not from event zero. NOT output
+  // — outputRev deliberately stays put.
+  startOutputClock() { this.lastOutputAt = Date.now() }
+
+  // The one signal that means "the provider said something": a parsed stdout line
+  // (the same event that resets the stall timer) or, for direct adapters, an event
+  // emitted through io.emit / the text they return. Never a synthesized event
+  // (parser.finish() at EOF, transcript bookkeeping) — those are ours, not theirs.
+  markOutput() {
+    this.lastOutputAt = Date.now()
+    this.outputRev++
   }
 
   // Returns 'live' | 'queued' | 'replayed'. Live = injected into the running
@@ -72,7 +99,14 @@ export class AgentJob {
   // re-sends of workflow-origin text are absorbed against the restored and
   // delivered multisets below. Default 'operator' for safety: a possible
   // duplicate beats loss.
-  send(message, origin = 'operator', sender = null, callsite = null) {
+  //
+  // `out` is a write-only side channel for E8 (mail correlation): when this send
+  // journals a record, `out.mailId` receives its uuid so the caller can stamp the
+  // same id onto its events. It is NEVER read here and never affects a decision —
+  // SendVerdict is unchanged, and the replay-suppression machinery below must stay
+  // exactly as it is. A suppressed or dropped send journals nothing, so `out.mailId`
+  // simply stays unset (the caller reports null).
+  send(message, origin = 'operator', sender = null, callsite = null, out = null) {
     const text = String(message)
     // Crash-window replay: this send's identity is
     // key+SENDER+CALLSITE+text+ORDINAL — sender is the sending context's
@@ -128,7 +162,8 @@ export class AgentJob {
       return 'dropped'
     }
     const mail = { id: crypto.randomUUID(), text }
-    this.transcript.write('mail-in', { text: mail.text })
+    if (out) out.mailId = mail.id
+    this.transcript.write('mail-in', { text: mail.text, id: mail.id })
     this.journal.append({ type: 'mail', key: this.key, id: mail.id, text: mail.text, origin, ...(seq != null ? { seq } : {}), ...(sender != null ? { sender } : {}), ...(callsite != null ? { callsite } : {}) })
     if (this.adapter.caps.steer === 'live' && this.liveWrite && this.liveWrite(mail)) return 'live'
     const waiter = this.mailWaiters.shift()
@@ -150,7 +185,16 @@ export class AgentJob {
       const t = setTimeout(() => { try { c.kill('SIGKILL') } catch { /* gone */ } }, 5000)
       t.unref?.()
     }
-    // unblock any direct adapter waiting on mail
+    // Unblock any direct adapter waiting on mail. This drain is a ONE-SHOT event, so
+    // it cannot be the whole story: `cancelled` also CLOSES the waiter list for good
+    // (see io.waitMail in runDirectTurn). A direct adapter that was mid-await when
+    // the cancel landed — asleep, or between two script steps — registers its next
+    // waiter strictly AFTER this sweep, into a list nothing will ever drain again.
+    // The control socket has already answered `{ok:true}` by then, so that stranded
+    // waiter is an outcome the API reported and the engine never reached: the agent
+    // never settles, drain() never returns, the run stays live forever (panel round
+    // 3, the SLEEP→WAIT_MAIL race). Closing the list is what makes the two halves
+    // race-free; the sweep alone only covers waiters that already existed.
     for (const w of this.mailWaiters.splice(0)) w('__cancelled__')
   }
 
@@ -224,6 +268,7 @@ export class AgentJob {
 
   runTurn(prompt, mode) {
     this.liveDelivered = []
+    this.startOutputClock()
     const done = this.adapter.direct ? this.runDirectTurn(prompt, mode) : this.runProcessTurn(prompt, mode)
     // Mail (queued-in-prompt or live-injected) counts as delivered only once the
     // turn that carried it completes; a failed turn requeues it (at-least-once).
@@ -262,8 +307,16 @@ export class AgentJob {
 
   async runDirectTurn(prompt, mode) {
     const io = {
-      emit: (e) => this.handleEvent(e),
+      // a direct adapter's emitted event is its stdout line — the real-output signal
+      emit: (e) => { this.markOutput(); this.handleEvent(e) },
       waitMail: () => {
+        // The waiter list is closed once cancelled — every registration from here on
+        // is born already-settled, in the same synchronous segment as the check (a
+        // cancel can never interleave between the two). Cancellation also outranks
+        // the queue: a cancelled turn must not consume pending mail it will never
+        // act on — the message stays queued and its journal record stays open, so a
+        // retry or a resume still carries it (at-least-once, per send()).
+        if (this.cancelled) return Promise.resolve('__cancelled__')
         const m = this.mailQueue.shift()
         if (m) {
           ;(this.liveDelivered ??= []).push(m)
@@ -277,6 +330,9 @@ export class AgentJob {
     }
     const out = await this.adapter.direct({ prompt, spec: this.spec, io })
     if (this.cancelled) throw new AgentError('cancelled', 'agent cancelled')
+    // the returned text is the direct adapter's final output — the other half of
+    // the io.emit signal above
+    this.markOutput()
     this.transcript.write('text', { text: out.text })
     return { text: out.text, structured: out.structured }
   }
@@ -290,7 +346,7 @@ export class AgentJob {
     let outstanding = 1
     let stdinOpen = true
     let stallTimer = null
-    const parser = makeParser(this.adapter.protocol)
+    const parser = makeParser(this.adapter.protocol, { idSeed: `t${++this.turnSeq}` })
     const stderrTail = new RingBuffer()
 
     try {
@@ -370,6 +426,7 @@ export class AgentJob {
       }
       const onLine = (line) => {
         resetStall()
+        this.markOutput()
         let obj
         try { obj = JSON.parse(line) } catch { this.transcript.write('raw', { text: line }); return }
         // A parser bug on a weird event must fail this agent, not the engine.
@@ -421,6 +478,11 @@ export class AgentJob {
     }
   }
 
+  // NOTE: handleEvent deliberately does NOT mark output. It also runs for events the
+  // engine synthesizes itself (parser.finish() at EOF), and marking there would make
+  // a process that emitted nothing look like it had spoken. Real output is marked by
+  // its two true sources: onLine (process adapters) and io.emit/the returned text
+  // (direct adapters).
   handleEvent(e) {
     switch (e.k) {
       case 'session':
@@ -443,9 +505,11 @@ export class AgentJob {
       case 'reasoning': this.transcript.write('reasoning', { text: e.text }); break
       case 'tool':
         this.lastTool = e.name
-        this.transcript.write('tool', { name: e.name, input: e.input })
+        // E11: the id rides through untouched — undefined never reaches the file
+        // (JSON.stringify drops it), so an adapter without ids writes what it always did
+        this.transcript.write('tool', { name: e.name, input: e.input, id: e.id })
         break
-      case 'tool-result': this.transcript.write('tool-result', { name: e.name, output: e.output, isError: e.isError }); break
+      case 'tool-result': this.transcript.write('tool-result', { name: e.name, output: e.output, isError: e.isError, toolUseId: e.toolUseId }); break
       case 'usage':
         if (e.cumulative) {
           // Thread-cumulative report (codex): charge only the growth since the

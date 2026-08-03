@@ -42,6 +42,23 @@ export function renderEvent(ev) {
   }
 }
 
+// States that mean "this attempt is alive or succeeded". Entering one of them must
+// drop the PREVIOUS attempt's failure/outcome fields (DESIGN §8 E15 / G11): the old
+// fold only ever spread-merged, so `flowition status` showed a resumed-and-succeeded
+// agent still carrying its old error — and old runs on disk fold correctly too.
+const CLEARS_ERROR = new Set(['queued', 'running', 'cached', 'done'])
+const STALE_ON_TRANSITION = ['error', 'code', 'errorCode', 'retryable', 'durationMs', 'resultPreview']
+// Annotations, not transitions: they must not overwrite `state` (§6.4 step 3).
+const ANNOTATIONS = new Set(['progress', 'steered'])
+
+function foldAgent(prev, ev) {
+  const base = { ...(prev || {}) }
+  if (CLEARS_ERROR.has(ev.state)) for (const f of STALE_ON_TRANSITION) delete base[f]
+  const merged = { ...base, ...ev }
+  if (ANNOTATIONS.has(ev.state)) merged.state = prev?.state ?? ev.state
+  return merged
+}
+
 // Fold events.jsonl into a status snapshot for `flowition status` / MCP.
 export function foldEvents(dir) {
   const events = readJsonl(path.join(dir, 'events.jsonl'))
@@ -49,7 +66,7 @@ export function foldEvents(dir) {
   for (const ev of events) {
     if (ev.type === 'run') snap.run = { ...(snap.run || {}), ...ev }
     else if (ev.type === 'phase') snap.phases.push(ev.title)
-    else if (ev.type === 'agent') snap.agents.set(ev.index, { ...(snap.agents.get(ev.index) || {}), ...ev })
+    else if (ev.type === 'agent') snap.agents.set(ev.index, foldAgent(snap.agents.get(ev.index), ev))
     else if (ev.type === 'question') snap.questions.set(ev.qid, { ...ev, answered: false })
     else if (ev.type === 'answer' && snap.questions.has(ev.qid)) snap.questions.get(ev.qid).answered = true
     else if (ev.type === 'log') snap.logs.push(ev.message)

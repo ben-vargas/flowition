@@ -1,0 +1,248 @@
+{
+  "note": "DESIGN §3.7's human comp-approval gate, as a ledger instead of prose. HAND-EDITED — the capture script never writes this file, and `approve.mjs` only records rulings. `test/comps-captures.test.js` enforces its shape, its coverage of every (state × viewport) §3.7 names, that each entry's `frame` is a comp frame that ACTUALLY EXISTS in the named file, that both compare frames render two WHOLE panels with a distinct agent in each pane on the axis §2.5 specifies for their viewport (side-by-side at ≥900px, a stacked pair below the 900px breakpoint — the operator's 2026-07-30 amendment, which is itself asserted against DESIGN §2.5 so the comps cannot drift ahead of the spec), that no comp draws a death time §6.2 cannot supply, and that `entryGate` below tells the truth about the rulings. It cannot enforce the rulings themselves: approval is the human reviewer's act, and a test that manufactured it would defeat the gate.",
+  "provenance": "W8a's sign-off predates this file and was recorded only in prose (comps/README.md, built/README.md). The `approved` entries below transcribe it: the W8 entry gate ruled on the W8a comp set, which was authored at 1440 throughout — DESIGN.md:350, :362 and :437 carry amendments made *per that ruling*, which is the evidence that it happened. Per-frame records were not kept then; from W8b round 5 on, this file is where a ruling is recorded, and an entry with no `decidedBy` has not been ruled on.",
+  "conformanceEdits": "W8c corrected seven 9px type declarations in the comp stylesheet to §3.1's 11px floor (§3.2 reserves 9px for the `.ad` adapter monogram, and none of the nine approved deviations D1–D9 is a typography change). Those edits touch every frame, including approved ones, and they do NOT re-open a ruling: approving a comp cannot license a violation of §3.1, so restoring conformance restores what was approved rather than changing it. `test/comps-type-scale.test.js` now runs the same validator the product uses over `docs/frontend/comps/lib`, so the two stylesheets cannot drift apart again. Two frames DID change substantively and are re-opened below, each with its own `why`.",
+  "entryGate": "PASSED — all 8 of §3.7's compositions (four canonical states × two viewports) are approved. The most recent ruling was recorded by Ben Vargas (operator) in the §3.7 gate ruling, via the flowition ask/answer channel — VARIANT B, the stacked pair, chosen over the side-by-side alternative; DESIGN §2.5 amended accordingly (side-by-side normative at >=900px, stacked pair below the 900px breakpoint). Each entry carries its own decidedBy/decidedIn.",
+  "statuses": {
+    "approved": "A human reviewer ruled on this composition. `decidedBy` and `decidedIn` say who and where.",
+    "pending": "Comped, with a frame in the file named below, and awaiting a ruling. `decide` lists what the reviewer must rule on; `howToApprove` is the route."
+  },
+  "ownerNote": "`owner` is a unit from DESIGN's delivery plan (§12's work-unit table) and nothing else. §3.7 assigns every reference comp to W8. W11 appears only as the unit whose BUILT screens are later compared against the cockpit and transcript comps (§3.7: \"W8/W11 acceptance then includes a side-by-side\"), never as the owner of a comp.",
+  "supportingFrames": "Four frames in this directory are NOT §3.7 compositions and carry no ledger entry, because §3.7 names 1440 and 800 and this file may not invent a third required viewport. They exist because §3.3's rule (\"below 900px the rails collapse into drawers and the transcript replaces the cockpit\") needs a floor and an open state to be buildable: `cockpit.html` → \"the run rail OPEN as a drawer (scrim + focus model)\" and \"at 480px\"; `transcript.html` → \"replaces the cockpit at 800px\" and \"at 480px\"; `home.html` → \"Home — 480px\". They are annotated like any other frame and the operator may rule on them in the same sitting, but they do not gate W8.",
+  "compositions": [
+    {
+      "id": "home-1440",
+      "state": "attention-heavy Home",
+      "viewport": 1440,
+      "comp": "home.html",
+      "frame": "Home — attention-heavy",
+      "builtBy": "W8",
+      "builtCaptures": [
+        "built/home-built-light-1440.png",
+        "built/home-built-dark-1440.png"
+      ],
+      "owner": "W8",
+      "status": "approved",
+      "why": "This entry moved BACKWARDS, from approved to pending, in W8c. W8a's ruling approved a stale attention card reading \"Engine died 26m ago\" with a 21m18s runtime beside it. Neither figure exists: `endedAt` is written from a terminal `run` event and from nothing else (§6.2, src/viewer/summaries.js:115-118), and a run is `stale` precisely because the engine went away WITHOUT writing one. The comp was deriving the death time from the run's age (and elsewhere from the `run.lock` mtime, which dates when the engine ACQUIRED the run). The shipped Home already renders this honestly — AttentionStrip.tsx: \"It wrote no terminal event, so there is no time of death to report\" — so the approved comp contradicted its OWN committed built captures, which are the §3.7 side-by-side evidence for this very entry. The card now states what it knows and the runtime figure is gone with it. That is a change to what the screen says, not a stylesheet correction, so the old ruling does not carry.",
+      "decide": [
+        "annotation 11 — the stale card states the time of death as UNKNOWN and reports the start time instead, rather than dating the death from startedAt or the run.lock mtime. The alternative is a W6 change adding an authoritative `lastSeenAt` to RunSummary, which would let the card carry a real number",
+        "annotation 11 — the elapsed figure (\"21m18s\") is dropped from the stale card entirely, because elapsed(startedAt, null, now) counts upward forever on a run that stopped",
+        "annotations 1-7 — unchanged from the W8a ruling (the three-card attention strip, the single accent action, the budget gauge on Home, filter chips, blank-not-zero, older-engine badges, 44px density). Re-confirm or restate"
+      ],
+      "decidedBy": "Ben Vargas (operator)",
+      "decidedIn": "the §3.7 gate ruling, via the flowition ask/answer channel — approved as re-drawn: the stale card states the time of death as unknown, and the no-fabricated-death-time rule is binding"
+    },
+    {
+      "id": "cockpit-live-1440",
+      "state": "live cockpit with running Gantt",
+      "viewport": 1440,
+      "comp": "cockpit.html",
+      "frame": "Run cockpit — Timeline (default tab, live run, budget overshoot)",
+      "builtBy": "W11",
+      "builtCaptures": [
+        "built/cockpit-live-built-light-1440.png",
+        "built/cockpit-live-built-dark-1440.png"
+      ],
+      "owner": "W8",
+      "status": "approved",
+      "capturedIn": "W11 fix round 1. The captures are photographs of the real cockpit against a real engine run (see capture-built.mjs), and each carries the browser's own measurement of §3.7's grid and §2.4's shared Gantt axis; test/comps-captures.test.js asserts both.",
+      "decidedBy": "human reviewer",
+      "decidedIn": "W8a sign-off (the W8 entry gate)",
+      "sideBySide": {
+        "comparedIn": "W11 fix round 3",
+        "comparedBy": "W11 implementing lane (not a ruling — approval is the human reviewer's act, recorded in decidedBy/decidedIn above)",
+        "method": "docs/frontend/comps/cockpit.html frame \"Run cockpit — Timeline (default tab, live run, budget overshoot)\" opened beside built/cockpit-live-built-{light,dark}-1440.png, element by element, top-left to bottom-right. The composition is additionally MEASURED in the browser that rendered it (capture-built.mjs → layout.grid/axis/landmarks) and asserted by test/comps-captures.test.js, so the parts a photograph cannot settle are checked mechanically rather than by eye.",
+        "matches": [
+          "§3.7's grid: run rail 280 │ main 840 │ inbox 320, adjacent and filling 1440 (measured, asserted)",
+          "header: name + click-copy run id + state chip, then elapsed / agents / tokens in-out / cost / budget gauge; the gauge plots output tokens against budget.total with a hatched overshoot zone and the words \"soft ceiling\"",
+          "lineage strip under the header, then the last-log row with the Log lane affordance, then the three tabs with Timeline active",
+          "Timeline: the saturation strip above the lanes, one lane per agent, ruler / strip / lanes on ONE axis (measured, asserted)",
+          "inbox: the three registers in §2.4's order with the comp's counts — 1 open question with its text inline, one answered question collapsed to its E7 answer value, 2 agent reports (mail dir:out) linking to their agents, 3 steering records with origin, delivery verdict and the journalled callsite"
+        ],
+        "differences": [
+          "The open question carries the W12 slot note (\"the answer composer arrives with W12's control wiring (§7.2)\") where the comp draws the composer itself. §12 assigns \"inbox rail, composers\" to W12 and §7.2 the control bridge they post through; W11 renders the register and names the missing control rather than drawing an input that cannot send. CockpitProps.inbox replaces the whole column when W12 lands.",
+          "All three steers read `queued` and two say `no callsite journalled`. Both are FACTS OF THE FIXTURE, not of the UI: the mock adapter's sleeper takes steers as queued follow-up turns, and the operator's `flowition send` carries no workflow source position — only the workflow's own sendTo() does, and its callsite is on screen. The comp draws a `dropped` verdict in red; the product renders that class (`.verdict.dropped`) and cockpit.test.tsx covers it.",
+          "The panel's three judges are ECHO agents that finish in ~0ms, so their bars are marks rather than the comp's wide bands, and no agent is quiet long enough for the amber Q2 tag. The comp's world is a 14-minute run; the fixture's is a 25-second one.",
+          "Cost reads `not journalled` and no log line is present: the mock adapter prices nothing and these workflows never call log(). §2.3's \"empty ≠ zero\" (parity #53/#114) forbids fabricating $0.00, and parity #59's row states the absence.",
+          "The header carries a \"show args\" disclosure the comps do not draw. §13 Q4 requires it (\"behind an explicit show args disclosure in the cockpit header\"), and it postdates the comp set; it renders only when RunDetail.hasArgs is true, is closed in the capture, and fetches /api/runs/:id?include=args on the click alone — so it adds one small control row and no content the approved composition rules on."
+        ]
+      }
+    },
+    {
+      "id": "cockpit-stale-1440",
+      "state": "failed/stale cockpit",
+      "viewport": 1440,
+      "comp": "cockpit.html",
+      "frame": "Cockpit — degraded and empty states",
+      "builtBy": "W11",
+      "builtCaptures": [
+        "built/cockpit-stale-built-light-1440.png",
+        "built/cockpit-stale-built-dark-1440.png"
+      ],
+      "owner": "W8",
+      "status": "approved",
+      "capturedIn": "W11 fix round 1. The measurement attached to these two captures is what proves the stale run's resume card is NOT promoted above the tabs at this viewport — annotation 18 scopes that reorder to 800px.",
+      "decidedBy": "human reviewer",
+      "decidedIn": "W8a sign-off (the W8 entry gate)",
+      "sideBySide": {
+        "comparedIn": "W11 fix round 3",
+        "comparedBy": "W11 implementing lane",
+        "method": "cockpit.html's stale frame beside built/cockpit-stale-built-{light,dark}-1440.png, plus the browser measurement.",
+        "matches": [
+          "§3.7's grid, measured; the resume card BELOW the tabs at this viewport (asserted)",
+          "the header states the time of death as `not recorded` and reports the start instead — the ruling recorded on this entry",
+          "agents left mid-flight render orphaned, never as live spinners (parity #58)",
+          "the inbox carries the report the first agent sent before the engine died"
+        ],
+        "differences": [
+          "The fixture's dead run has three sleeper probes rather than the comp's mixed population, so the lanes are uniform.",
+          "No steering history and no questions: nothing steered this run before it died. The registers state that in words rather than rendering empty boxes.",
+          "The last attempt in the lineage strip is drawn STALE, hatched, at a fixed 44px, and its tooltip reads \"time of death not recorded\" rather than \"→ now\". The comp draws the strip without ruling on this case; the shipped screen follows the same no-fabricated-death-time ruling its own died cell obeys (W11 review round 3, B1)."
+        ]
+      }
+    },
+    {
+      "id": "transcript-compare-1440",
+      "state": "two-panel transcript compare",
+      "viewport": 1440,
+      "comp": "transcript.html",
+      "frame": "Two-panel compare at 1440px (§3.7's fourth canonical state)",
+      "builtBy": "W10",
+      "builtCaptures": [],
+      "owner": "W8",
+      "status": "approved",
+      "why": "This entry moved BACKWARDS, from approved to pending, in W8b round 6. W8a's ruling approved it with a stated deviation: the compare was shown as the docked ?a=3 affordance rather than a rendered second panel. Review round 3 rejected the deviation — §2.5 is 'Up to two panels side-by-side', and one pane plus a button is the state BEFORE a comparison. The deviation is withdrawn and the composition is now drawn for real (both panels, both viewports). A ruling on the old composition cannot carry over to a different one, so this needs its own.",
+      "decide": [
+        "annotation 14 — entering the compare collapses BOTH rails to strips (48px + 44px), so each panel is 674px, over the 607px the row types were designed at. The alternative is keeping the 280px run rail and letting each panel fall to 534px",
+        "annotation 15 — one bar for the pair: it names both agents and owns Swap and the single Close that ends the comparison, while each panel keeps only its own search, pin toggle and close",
+        "annotation 16 — the second panel is a FULL panel: header, facts row, row types, and the footer a non-running agent gets (composer disabled with the reason, no working indicator, parity #58) — not a summary column"
+      ],
+      "decidedBy": "Ben Vargas (operator)",
+      "decidedIn": "the §3.7 gate ruling, via the flowition ask/answer channel — approved as drawn: side-by-side remains normative at this viewport, both rails collapse to strips on entering the compare"
+    },
+    {
+      "id": "home-800",
+      "state": "attention-heavy Home",
+      "viewport": 800,
+      "comp": "home.html",
+      "frame": "Home — 800px (§3.7's second required viewport)",
+      "builtBy": "W8",
+      "builtCaptures": [
+        "built/home-built-light-800.png",
+        "built/home-built-dark-800.png"
+      ],
+      "owner": "W8",
+      "status": "approved",
+      "why": "W8a comped 1440 only (its brief fixed the viewport), so this frame is W8b's. It is the one pending composition whose screen is already BUILT, which is why it carries built captures and the others do not: §3.7's side-by-side is available for it now — and, since W8c corrected the stale card, the comp and the capture now agree about it.",
+      "decide": [
+        "annotation 8 — the run rail as a 44px icon strip below 900px, opened as an overlay drawer (parity #42), rather than a persistent 200px rail",
+        "annotation 9 — the attention queue stacked one card per row instead of the 1440 three-across strip",
+        "annotation 10 — dropping the adapter cluster and the output-token column to buy back the name column, with cost and duration kept",
+        "annotation 11 — the stale card's time of death stated as unknown (same ruling as home-1440; the card is shared)",
+        "supporting frame, not a §3.7 composition: \"Home — 480px\" draws the floor of §3.3's single 900px breakpoint. Annotation 12: the run table stops being a table and each row wraps into a two-line record, with the column header row dropped because every remaining value is self-describing. The alternative is keeping three columns and truncating the name"
+      ],
+      "decidedBy": "Ben Vargas (operator)",
+      "decidedIn": "the §3.7 gate ruling, via the flowition ask/answer channel — approved as drawn, including the single 900px breakpoint and the 44px rail strip"
+    },
+    {
+      "id": "cockpit-live-800",
+      "state": "live cockpit with running Gantt",
+      "viewport": 800,
+      "comp": "cockpit.html",
+      "frame": "Run cockpit — live, at 800px (§3.7's second required viewport)",
+      "builtBy": "W11",
+      "builtCaptures": [
+        "built/cockpit-live-built-light-800.png",
+        "built/cockpit-live-built-dark-800.png"
+      ],
+      "owner": "W8",
+      "status": "approved",
+      "capturedIn": "W11 fix round 1. Annotation 14's two 44px drawer handles are asserted from the browser's measurement, not from the picture.",
+      "why": "Comped in W8b round 5. The built captures arrived with W11's fix round 1 — §3.7's side-by-side for this composition is part of W11's acceptance, not W8's. The RULING is still W8's gate: §3.7 puts approval before implementation, and the cockpit's design system is what W8 ships. W8c added the two frames this composition was missing — the drawer OPEN, and the 480px floor — so the <900px rules can be ruled on rather than inferred.",
+      "decide": [
+        "annotation 14 — both rails as 44px drawer handles below 900px (88px of an 800px viewport), rather than one strip plus a top-bar inbox button",
+        "annotation 15 — the header wrapping to four rows with the budget gauge given a full-width row of its own",
+        "annotation 16 — the Gantt at label 170 / track 350 with the two-minute grid kept, rather than a four-minute grid below 900px",
+        "annotation 17 — all three tabs kept inline, nothing moved into an overflow menu",
+        "supporting frame: \"the run rail OPEN as a drawer\". Annotations 20–22 — the scrim is a real click-to-dismiss element at ink 42% (not a tint on the panel), the top bar stays uncovered, opening moves focus to the drawer HEADER, Escape closes and restores focus to the 44px handle, and Tab is trapped while the scrim is up (role=dialog aria-modal). Rule also on the drawer coming from the same edge as its handle, at 320px",
+        "supporting frame: \"at 480px\". Annotations 23–25 — one breakpoint only (900px, no second threshold); header metrics wrap two-per-line; the tab row scrolls rather than collapsing into a menu; the Gantt is neither dropped nor rescaled but SCROLLS horizontally with ruler, saturation strip and lanes on one axis; the saturation strip keeps full height because it is the tab's whole argument (Q5). The alternative on the Gantt is a four-minute grid below 600px"
+      ],
+      "decidedBy": "Ben Vargas (operator)",
+      "decidedIn": "the §3.7 gate ruling, via the flowition ask/answer channel — approved as drawn, including the one-axis Gantt scroll and the drawer focus model in the supporting frames",
+      "sideBySide": {
+        "comparedIn": "W11 fix round 3",
+        "comparedBy": "W11 implementing lane",
+        "method": "cockpit.html frame \"Run cockpit — live, at 800px\" beside built/cockpit-live-built-{light,dark}-800.png, plus the browser measurement.",
+        "matches": [
+          "annotation 14: BOTH rails as 44px drawer handles (measured [44, 44], asserted), the inbox handle keeping its open-question badge \"1\"",
+          "annotation 15: the header wraps and the budget gauge takes a full-width row of its own",
+          "annotation 16: the Gantt keeps its grid and scrolls on one axis rather than being rescaled",
+          "annotation 17: all three tabs inline, nothing in an overflow menu"
+        ],
+        "differences": [
+          "The same fixture-content differences as cockpit-live-1440 (short bars, no cost, no log line).",
+          "The drawer itself is not photographed: it is a closed handle in this composition. Its focus model — focus to the drawer heading on open, Escape and scrim restoring focus to the handle, and Tab TRAPPED while the scrim is up — is the supporting frame's, and is covered by cockpit.test.tsx rather than by a still.",
+          "The header carries a \"show args\" disclosure the comps do not draw. §13 Q4 requires it (\"behind an explicit show args disclosure in the cockpit header\"), and it postdates the comp set; it renders only when RunDetail.hasArgs is true, is closed in the capture, and fetches /api/runs/:id?include=args on the click alone — so it adds one small control row and no content the approved composition rules on."
+        ]
+      }
+    },
+    {
+      "id": "cockpit-stale-800",
+      "state": "failed/stale cockpit",
+      "viewport": 800,
+      "comp": "cockpit.html",
+      "frame": "Run cockpit — failed / stale, at 800px",
+      "builtBy": "W11",
+      "builtCaptures": [
+        "built/cockpit-stale-built-light-800.png",
+        "built/cockpit-stale-built-dark-800.png"
+      ],
+      "owner": "W8",
+      "status": "approved",
+      "capturedIn": "W11 fix round 1. Annotation 18's promotion of the resume card above the tabs is asserted here — and, against the 1440 entry, asserted NOT to happen there.",
+      "why": "Comped in W8b round 5, built by W11, and CORRECTED in W8c. The round-5 frame printed \"died 26m ago\" in the header and justified it in an annotation as the `run.lock` mtime. That is not a death timestamp — the lock is written when the engine ACQUIRES the run, so its mtime dates the start — and W6 exposes no death-time field at all. Approving that frame would have instructed W11 to contradict both the live API and the Home screen W8 already shipped. The metric now reads \"not recorded · started 1h10m ago\" and the annotation states why, which is a different composition from the one round 5 offered.",
+      "decide": [
+        "annotation 18 — promoting the resume card ABOVE the tabs at 800px. This is the one place the narrow layout reorders rather than reflows, which the rest of the comp set deliberately avoids",
+        "annotation 19 — orphaned agents dimmed with bars stopping at the last event rather than extended to \"now\"",
+        "annotation 19 — the `died` cell reading \"not recorded · started 1h10m ago\" rather than a figure derived from startedAt or the run.lock mtime. The alternative is dropping the cell entirely on a run that has no death time to show; the third option, a real number, requires a W6 `lastSeenAt` and is not a rendering choice"
+      ],
+      "decidedBy": "Ben Vargas (operator)",
+      "decidedIn": "the §3.7 gate ruling, via the flowition ask/answer channel — approved as re-drawn: the died cell reads \"not recorded · started 1h10m ago\", no death time is derived from startedAt or the run.lock mtime",
+      "sideBySide": {
+        "comparedIn": "W11 fix round 3",
+        "comparedBy": "W11 implementing lane",
+        "method": "cockpit.html's 800px stale frame beside built/cockpit-stale-built-{light,dark}-800.png, plus the browser measurement.",
+        "matches": [
+          "annotation 18: the resume card is promoted ABOVE the tabs at this viewport and only at this viewport (asserted from the measured DOM order)",
+          "both rails as 44px handles; the header wrapping of annotation 15"
+        ],
+        "differences": [
+          "The same fixture-content differences as cockpit-stale-1440.",
+          "The last attempt in the lineage strip is drawn STALE, hatched, at a fixed 44px, and its tooltip reads \"time of death not recorded\" rather than \"→ now\". The comp draws the strip without ruling on this case; the shipped screen follows the same no-fabricated-death-time ruling its own died cell obeys (W11 review round 3, B1)."
+        ]
+      }
+    },
+    {
+      "id": "transcript-compare-800",
+      "state": "two-panel transcript compare",
+      "viewport": 800,
+      "comp": "transcript.html",
+      "frame": "Two-panel compare at 800px (§3.7's second required viewport)",
+      "builtBy": "W10",
+      "builtCaptures": [],
+      "owner": "W8",
+      "status": "approved",
+      "why": "Comped in round 5 as a tablist (a switcher — correctly rejected), REDRAWN in round 6 as a vertical stack, REDRAWN AGAIN in W8c as the side-by-side pair §2.5 then specified, with the stack kept beside it as VARIANT B. This was the one slot in the set where the operator was asked to CHOOSE between two drawings rather than confirm one, because adopting the stack meant amending a normative sentence and an implementation lane cannot do that. THE OPERATOR CHOSE VARIANT B. The stacked pair is now the composition this entry names, the side-by-side drawing is retained in transcript.html as ALTERNATIVE A (considered, not chosen), and DESIGN §2.5 carries the amendment as a marked operator ruling: side-by-side stays normative at ≥900px, and below §3.3's 900px breakpoint the compare renders as a stacked pair (full-width panels, sequential scroll).",
+      "ruling": "VARIANT B — the stacked pair. Recorded by Ben Vargas via the flowition ask/answer channel, together with the DESIGN §2.5 amendment that the choice required. The reason on the record: at 800px both rails are 44px handles, so side by side each pane is ~355px, under the 607px the row types were designed at — the same row then wraps differently on the two sides, and the operator is comparing two renderings rather than two answers. The stack keeps both panes at the full 712px and spends scrollback depth instead, which annotation 12's shared pin bar buys back by anchoring both panes to the same step. W10 builds the stacked form below 900px; the ≥900px composition (transcript-compare-1440) is unchanged.",
+      "decide": [
+        "THE VARIANT CHOICE — annotations 11 and 18. (A) the side-by-side pair: two ~355px panes, each with a 340px minimum so a narrower viewport scrolls the PAIR horizontally rather than degrading into a switcher; the cost is that the facts row wraps, the gutter narrows 56 → 40px, and cards wrap where the 1440 frame does not. (B) the stacked pair: both panes at the full 712px so a row renders identically in both, ~370px of height each, and §2.5 needs an amendment recorded in DESIGN. RULED: (B), with the §2.5 amendment made",
+        "annotation 12 — the shared pin bar (both panes anchored to the same step, plus the output-token delta) as the thing that keeps two short/narrow panes showing the same moment. Identical in both drawings; load-bearing in the chosen one, since stacked panes are never at eye level together",
+        "annotation 13 — the rails as 44px handles, matching the cockpit at 800 rather than a second idiom",
+        "annotation 17 — the seam between panes heavier than any rule inside a pane, so one agent's rows cannot be read as the other's. Stacked, the two panes share a column, a width and an edge, so the seam is 2px hairline-strong rather than a hairline",
+        "supporting frames, not §3.7 compositions: \"Transcript replaces the cockpit\" at 800px and 480px (§3.3). Annotations 20–22 — the back affordance NAMES the run it returns to rather than saying \"back\", and the agent stepper (\"6 of 10\", j/k) lives on that bar rather than only in the run rail drawer"
+      ],
+      "decidedBy": "Ben Vargas (operator)",
+      "decidedIn": "the §3.7 gate ruling, via the flowition ask/answer channel — VARIANT B, the stacked pair, chosen over the side-by-side alternative; DESIGN §2.5 amended accordingly (side-by-side normative at >=900px, stacked pair below the 900px breakpoint)"
+    }
+  ]
+}

@@ -6,6 +6,10 @@ export class Semaphore {
     this.active = 0
     this.queue = []
   }
+  // Admission gauge for the queued/running events (DESIGN §8 E4). Only `queued` is
+  // an accessor: `active` is an assigned field (the constructor's `this.active = 0`
+  // would throw against a prototype getter in strict mode) — read it directly.
+  get queued() { return this.queue.length }
   async acquire() {
     if (this.active < this.limit) { this.active++; return }
     await new Promise((resolve) => this.queue.push(resolve))

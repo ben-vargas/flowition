@@ -19,6 +19,39 @@ const run = (args) =>
     )
   })
 
+const CAPABILITIES = ['send', 'answer', 'cancel', 'resume', 'delete']
+
+/**
+ * Start `flowition viewer --json` for real, resolve the announced `{port, control}`
+ * record, then stop it. Asserting on the parser alone would not prove what the running
+ * server was actually granted, and the grant is the thing §7.2 gates.
+ *
+ * Always spawned with an explicit `--port 0`: an explicit port is never satisfied by
+ * reuse, so each case binds its own secondary and cannot inherit another case's grant.
+ */
+async function viewerGrant(args) {
+  const child = spawn(process.execPath, [bin, 'viewer', '--json', '--port', '0', ...args], { env, stdio: ['ignore', 'pipe', 'pipe'] })
+  const exited = new Promise((resolve) => child.on('exit', resolve))
+  let out = ''
+  let err = ''
+  child.stdout.setEncoding('utf8')
+  child.stderr.setEncoding('utf8')
+  child.stderr.on('data', (chunk) => { err += chunk })
+  try {
+    return await new Promise((resolve, reject) => {
+      child.stdout.on('data', (chunk) => {
+        out += chunk
+        const line = out.split('\n').find((l) => l.trim().startsWith('{'))
+        if (line) { try { resolve(JSON.parse(line)) } catch { /* still arriving */ } }
+      })
+      exited.then((code) => reject(new Error(`viewer exited ${code} before announcing\nstdout: ${out}\nstderr: ${err}`)))
+    })
+  } finally {
+    child.kill('SIGTERM')
+    await exited
+  }
+}
+
 test('cli parser: boolean flags do not consume positionals', async () => {
   const status = await run(['status', '--json', 'flo_missing'])
   assert.equal(status.code, 0, status.stderr)
@@ -30,6 +63,60 @@ test('cli parser: boolean flags do not consume positionals', async () => {
   const result = await run(['result', '--wait', 'flo_complete', '--json'])
   assert.equal(result.code, 0, result.stderr)
   assert.equal(JSON.parse(result.stdout).result, 'ok')
+})
+
+test('cli parser: --control never grants more than the space-separated word asked for', async () => {
+  // The whole point: `--control answer` used to parse as bare `--control`, drop `answer`
+  // on the floor and hand the operator all five capabilities. Every other value flag in
+  // this CLI takes the space form, so this is the natural typing — and its failure
+  // direction is always MORE privilege. It must be an error, never a silent widening.
+  for (const word of ['answer', 'resume', 'send,cancel', 'bogus', 'send answer']) {
+    const result = await run(['viewer', '--control', word])
+    assert.equal(result.code, 1, `--control ${word} must be refused: ${result.stderr}`)
+    assert.equal(
+      result.stderr.trim(),
+      `flowition: option --control takes its value with '=' — write --control=${word}, not --control ${word} (bare --control enables every capability)`,
+      `--control ${word}`,
+    )
+    assert.doesNotMatch(result.stderr, /\n\s+at /, 'preconditions print clean, never a stack')
+    // A refusal must not have announced a URL — nothing was started, nothing was granted.
+    assert.equal(result.stdout, '', `--control ${word} must not announce a viewer`)
+  }
+})
+
+test('cli parser: --control rejects bogus values and stray positionals in every form', async () => {
+  for (const [args, message] of [
+    [['viewer', '--control=bogus'], 'unknown --control capability "bogus" — choose from send,answer,cancel,resume,delete'],
+    [['viewer', '--control=send,bogus'], 'unknown --control capability "bogus" — choose from send,answer,cancel,resume,delete'],
+    [['viewer', '--control='], '--control needs at least one capability: send,answer,cancel,resume,delete'],
+    [['viewer', '--control=,'], '--control needs at least one capability: send,answer,cancel,resume,delete'],
+    // The `=` form parses, so the trailing word becomes a positional the viewer used to
+    // ignore — the same "you asked for something that was discarded" failure.
+    [['viewer', '--control=send', 'answer'], 'viewer takes no arguments (got "answer") — capabilities are a \'=\' list: --control=send,answer'],
+    [['viewer', 'answer'], 'viewer takes no arguments (got "answer") — capabilities are a \'=\' list: --control=send,answer'],
+  ]) {
+    const result = await run(args)
+    assert.equal(result.code, 1, args.join(' '))
+    assert.equal(result.stderr.trim(), `flowition: ${message}`, args.join(' '))
+    assert.doesNotMatch(result.stderr, /\n\s+at /, args.join(' '))
+    assert.equal(result.stdout, '', args.join(' '))
+  }
+})
+
+test('cli parser: the --control forms that ARE valid grant exactly what they name', async () => {
+  // The bare form still means "all five" — but only where it cannot be swallowing a
+  // capability word: followed by another option, or last on the line.
+  assert.deepEqual((await viewerGrant(['--control'])).control, CAPABILITIES)
+  assert.deepEqual((await viewerGrant(['--control', '--idle-timeout', '5'])).control, CAPABILITIES)
+  assert.deepEqual((await viewerGrant(['--control=send,answer,cancel,resume,delete'])).control, CAPABILITIES)
+
+  // The `=` list is the only way to name a subset, and it grants that subset and no more.
+  assert.deepEqual((await viewerGrant(['--control=resume'])).control, ['resume'])
+  assert.deepEqual((await viewerGrant(['--control=delete,send'])).control, ['send', 'delete'], 'canonical order, not argv order')
+  assert.deepEqual((await viewerGrant(['--control= resume , send '])).control, ['send', 'resume'], 'surrounding whitespace is trimmed')
+
+  // And the default is still read-only.
+  assert.deepEqual((await viewerGrant([])).control, [])
 })
 
 test('cli parser: value options reject missing values', async () => {

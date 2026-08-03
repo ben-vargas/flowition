@@ -7,7 +7,7 @@ with programmatic control flow. Flowition is both *invokable by* agents (CLI wit
 spawns a real CLI process); agents inside a run can call back into flowition (`flowition post`,
 or even `flowition run` recursively) via injected `FLOWITION_*` env vars.
 
-Design lineage: Claude Code's Workflow tool and omegacode. Flowition keeps their strengths
+Design lineage: Claude Code's Workflow tool and prior CLI orchestrators. Flowition keeps their strengths
 (deterministic scripts, journaled replay, chained positional resume keys, per-agent
 transcripts) and adds the four things they lack:
 
@@ -24,7 +24,7 @@ transcripts) and adds the four things they lack:
 ```
 bin/flowition.js            CLI entry
 src/cli.js             commands: run, resume, runs, status, tail, send, answer,
-                       cancel, post, result, doctor, guide, mcp
+                       cancel, post, result, rm, prune, viewer, doctor, guide, mcp
 src/engine.js          run loop: module load, DSL toolkit, journal replay, budget,
                        control-socket handlers, heartbeat, outcome
 src/agent-proc.js      AgentJob: one agent() call across 1..n provider turns
@@ -42,6 +42,133 @@ src/schema.js          minimal JSON Schema validator + prompt contract
 src/mcp.js             MCP stdio server (flowition_run/status/result/send/answer/…)
 src/guide.js           authoring guide served by `flowition guide` / MCP flowition_guide
 ```
+
+## Viewer
+
+The v1 viewer is one long-lived Node HTTP process plus a prebuilt browser SPA.
+`flowition viewer` serves the runs under the current `FLOWITION_HOME`; it is an
+observer and control-socket bridge, not another workflow engine. It never imports
+`src/engine.js`, `src/agent-proc.js`, or `src/adapters/**`, never holds a run lock,
+and never loads or executes a workflow module. Resume is delegated to a detached
+CLI process, and delete is delegated to the same lock-aware retention module used
+by `flowition rm`.
+
+### Process and module map
+
+```
+src/viewer/                       shipped Node server; node: builtins + reviewed relatives
+  index.js          bind/reuse, HMAC discovery, rendezvous, auto-start, idle shutdown
+  http.js           Host/auth/origin/content-type gates, CSP/headers, error envelope
+  auth.js           home ownership, 0600 read token, ephemeral control token, capabilities
+  routes.js         read, stream, search, session, and mutation route dispatch
+  summaries.js      paginated run listing and identity-keyed summary cache
+  snapshot.js       run detail from event fold + journal join + derived liveness
+  fold.js           tolerant event fold shared with the SPA
+  journal-view.js   lossy, read-only journal projection; never journal repair
+  tail.js           bounded byte-domain JSONL tailing, torn-line and rotation handling
+  cursor.js         composite SSE cursor encode/parse
+  stream.js         multiplexed SSE replay/tail, resets, batching, backpressure
+  pages.js          bounded transcript and event pages
+  search.js         bounded, deadline-limited in-run search
+  control-bridge.js control-socket send/answer/cancel; detached resume; retention delete
+  audit.js          append-only lifecycle/control audit records outside run directories
+  static.js         realpath-contained viewer/dist serving, content types, cache policy
+
+viewer/                           private TypeScript/React build workspace
+  src/api/          authenticated fetch + EventSource clients
+  src/app/          hash router, token bootstrap, shell and run rail
+  src/state/        snapshot/poll/SSE stores
+  src/features/     Home, cockpit, transcript/result, and opt-in controls
+  src/lib/          bounded Markdown and ANSI projection
+  dist/             committed prebuilt assets; the only viewer/ subtree published
+```
+
+The root package has no runtime `dependencies`. The SPA's runtime and build
+dependencies stay isolated in the private `viewer/` package; globally installed
+users receive `viewer/dist/**` rather than its toolchain. CI builds into a temporary
+directory, byte-compares the complete output tree with committed `viewer/dist`,
+rejects inline script/style output, and checks the real `npm pack` manifest for both
+the static assets and `src/viewer/**`. The root suite runs separately without
+`viewer/node_modules`.
+
+### Startup and capability model
+
+The default listener is `127.0.0.1:4646`; a fixed-port collision walks through
+4655, while `--port 0` requests one ephemeral port. A primary writes a 0600
+`$FLOWITION_HOME/viewer.json` rendezvous record. Reuse is accepted only after a
+challenge response proves knowledge of the read token with HMAC; an unauthenticated
+`/healthz` shape alone never causes a token-bearing URL to be printed.
+
+A human-attended foreground `flowition run` starts discovery concurrently with the
+workflow. It auto-starts only on a TTY without `--detach`, `--json`, `--quiet`,
+`--no-viewer`, or `FLOWITION_NO_VIEWER=1`, prints a deep link only after the
+challenge succeeds, and always starts the server with idle shutdown and without
+control capabilities. MCP and detached paths never auto-start a viewer.
+
+The default capability set is empty. `--control` enables
+`send,answer,cancel,resume,delete`; `--control=<comma-list>` enables a subset.
+Every absent capability remains a 403 at the HTTP boundary and is reported by
+`GET /api/session` so the SPA fails closed. Because the control token is minted
+in memory and never persisted, another CLI process cannot attach control to an
+existing viewer or recover it with `--print-url`; restart with `--control` or use
+an explicit secondary port.
+
+### Security posture and residuals
+
+The viewer exposes prompts, args, transcripts, provider session metadata, and
+results that are otherwise protected by 0700 run directories. Loopback binding
+alone is not treated as authentication:
+
+- every `/api` read requires a persistent 32-byte read token held in a 0600 file;
+  equality is constant-time, and discovery proves token knowledge without sending it;
+- mutation requests additionally require the ephemeral control token, an exact
+  same-origin `Origin`, JSON content type, capability grant, and bounded bodies;
+- printed tokens travel in the URL fragment, never an HTTP request target or process
+  argument; the SPA moves them to `sessionStorage` and scrubs the fragment before routing;
+- the server uses a strict Host allowlist, emits no CORS headers and no cookies, redacts
+  query tokens from diagnostics, and logs no request or transcript bodies;
+- the static policy is `default-src 'none'`, first-party script/style/font/connect
+  only, no framing, and no inline script/style. Transcript Markdown and ANSI become
+  bounded React elements; raw HTML, remote images, and `innerHTML` paths are excluded.
+
+Read-only is a statement about run-control capabilities, not about the process
+touching no files: the server creates/reads its token, startup lock, and rendezvous
+under `FLOWITION_HOME`, and the shared liveness classifier may clean an aged
+`.resuming` marker. It does not repair or rewrite journal/event/transcript streams.
+Lifecycle operations are possible only when explicitly enabled; delete moves a
+non-live run to Flowition's trash under the shared run lock, and resume delegates
+the unchanged engine hash/key checks to a detached CLI.
+
+Accepted residuals are explicit. Other local users can observe that a loopback port
+exists. A process running as the same user can read the token and run files; that
+adversary already has the CLI's full authority and is out of scope. A control token
+is an instruction channel into agents running with full user permissions, so it is
+RCE-equivalent in impact even though the viewer itself never executes a workflow.
+The v1 viewer is supported on macOS and Linux, not Windows, and is not a remote or
+multi-user service.
+
+### On-disk contract and compatibility
+
+The durable source is still `$FLOWITION_HOME/runs/<runId>/`, described in
+[Persistence & resume](#persistence--resume). The viewer combines, rather than
+conflates, its three append-only JSONL domains:
+
+- `events.jsonl` supplies run/phase/agent/log/question/mail chronology;
+- `journal.jsonl` supplies metadata, attempts, usage, answers, sessions, and results;
+- `agents/<index>.jsonl` supplies the per-agent transcript.
+
+It also derives liveness from `run.lock`, `control.sock`, `.heartbeat`,
+`.resuming`, and terminal `result.json`; detached `run.log` and lifecycle trash
+remain separate artifacts. Readers are bounded and lossy: torn final lines,
+oversize records, missing files, unknown record types, and fields absent from old
+runs degrade to unknown/omitted UI state rather than triggering a migration or a
+workflow replay. New viewer-facing journal data is additive, and none of it enters
+the resume-key derivation.
+
+The normative contracts are [DESIGN §4–§7 and §16.6](docs/frontend/DESIGN.md);
+the field-level inventory, writer locations, and historical artifact caveats are
+in [RECON-flowition §1](docs/frontend/RECON-flowition.md). Source remains decisive
+when those historical citations refer to an older commit.
 
 ## Workflow contract
 
@@ -269,7 +396,7 @@ steer their agents — the "invoked by agents" half of the loop.
 Deliberately out of scope for this phase: every adapter runs with its most permissive
 flags (`--dangerously-skip-permissions`, `--dangerously-bypass-approvals-and-sandbox`,
 `--skip-permissions-unsafe`, `--auto`). The adapter layer is where per-mode sandbox
-policies would slot in later (omegacode's per-provider sandbox matrix is the
+policies would slot in later (a per-provider sandbox matrix is the
 reference design).
 
 ## amp agent modes
@@ -419,4 +546,3 @@ work whose key a resumed run's control flow never revisits.
 - Steering a turn-steer adapter *after* its final turn completed is a no-op (the
   agent already resolved); `flowition status` shows queued counts so operators can see it.
 - The stall watchdog (30 min default, `stallMs` per agent) is the only turn timeout.
-- No web viewer yet — `flowition tail -f` / `status --json` are the observation surfaces.

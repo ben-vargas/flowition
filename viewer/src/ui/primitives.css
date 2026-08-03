@@ -1,0 +1,344 @@
+/* The shared primitive layer (DESIGN §9.2 `ui/`), ported from the approved W8a comps
+ * (docs/frontend/comps/lib/css.mjs). Later units compose from these classes; nothing here
+ * is screen-specific.
+ *
+ * §3.7 action hierarchy: exactly ONE primary-accent action per screen region. Everything
+ * else is a quiet outline. Delete is additionally red-text.
+ */
+
+/* ---- surfaces ---------------------------------------------------------- */
+.card {
+  background: var(--surface);
+  border: 1px solid var(--hairline);
+  border-radius: var(--r2);
+}
+/* §3.3: elevation is border+shadow, never tint. */
+.raised { background: var(--surface-raised); box-shadow: var(--shadow-raised); }
+
+/* ---- buttons ----------------------------------------------------------- */
+.btn {
+  display: inline-flex; align-items: center; gap: 5px;
+  height: 24px; padding: 0 9px;
+  border: 1px solid var(--border); border-radius: var(--r1);
+  font: 500 var(--fs-micro)/1 var(--sans); color: var(--text-2);
+  white-space: nowrap;
+  transition: background var(--d-hover) var(--ease), color var(--d-hover) var(--ease),
+              border-color var(--d-hover) var(--ease);
+}
+.btn:hover:not([disabled]):not([aria-disabled="true"]) {
+  background: var(--surface-raised); color: var(--text); border-color: var(--text-3);
+}
+.btn.sm { height: 20px; padding: 0 7px; }
+.btn.lg { height: 28px; padding: 0 12px; font-size: var(--fs-meta); }
+.btn.primary {
+  background: var(--accent); border-color: transparent; color: var(--on-accent); font-weight: 500;
+}
+.btn.primary:hover:not([disabled]) {
+  background: color-mix(in oklab, var(--accent) 88%, var(--text)); color: var(--on-accent);
+}
+.btn.danger { color: var(--st-failed); }
+.btn.danger:hover:not([disabled]) {
+  color: var(--st-failed); border-color: var(--st-failed); background: var(--st-failed-tint);
+}
+/* The ARMED half of a two-step action, and a shared primitive because three features arm a
+   button the same way: home's attention-card Resume (AttentionStrip.tsx), the cockpit
+   header's Resume/Replay (RunHeader.tsx) and control's per-agent Cancel
+   (SteerComposer.tsx). §3.7 gives a screen region exactly ONE accent fill, so an armed
+   button is weighted with a state colour and a strong edge rather than a second fill
+   competing with that region's primary — it reads as "this one is live now" without
+   outranking the product. */
+.btn.arm { color: var(--st-stale); border-color: var(--st-stale); font-weight: 500; }
+.btn.arm:hover:not([disabled]) { background: var(--st-stale-tint); }
+/* Armed AND destructive: `arm` supplies the weight, `danger` keeps the meaning. `.btn.arm`
+   and `.btn.danger` are both (0,2,0), so with no rule here the colour of a confirmation
+   that KILLS an agent would be decided by stylesheet order — and it was, painting
+   control's armed Cancel in the stale amber of a run that has gone quiet. This is (0,3,0)
+   and settles it by meaning rather than by bundle position. */
+.btn.arm.danger { color: var(--st-failed); border-color: var(--st-failed); }
+.btn.arm.danger:hover:not([disabled]) { background: var(--st-failed-tint); }
+.btn.ghost { border-color: transparent; }
+.btn.ghost:hover:not([disabled]) { border-color: var(--hairline-strong); }
+.btn[disabled], .btn[aria-disabled="true"] { opacity: 0.5; cursor: not-allowed; }
+.btn .ic { opacity: 0.85; }
+.icb {
+  display: grid; place-items: center; width: 24px; height: 24px;
+  border-radius: var(--r1); color: var(--text-3);
+  transition: background var(--d-hover) var(--ease), color var(--d-hover) var(--ease);
+}
+.icb:hover { background: var(--surface-raised); color: var(--text); }
+.icb.sm { width: 20px; height: 20px; }
+
+/* The segmented control. A shared primitive, not cockpit chrome: the cockpit picks a
+   timeline zoom, a log source and an agent grouping with it, and the result screen picks a
+   value rendering with the same three-role markup (`<div class="seg" role="group">` of
+   buttons, one `.sel`). It lived in cockpit.css until the §3 scope audit, which is how the
+   result screen came to be dressed by a stylesheet that knows nothing about it. */
+.seg { display: inline-flex; border: 1px solid var(--border); border-radius: var(--r1); overflow: hidden; }
+.seg button {
+  display: flex; align-items: center; gap: 5px;
+  padding: 3px 9px; font: 500 var(--fs-micro)/1.3 var(--sans); color: var(--text-2);
+  white-space: nowrap;
+  transition: background var(--d-hover) var(--ease), color var(--d-hover) var(--ease);
+}
+.seg button + button { border-left: 1px solid var(--border); }
+.seg button:hover { background: var(--surface-raised); color: var(--text); }
+/* Selected is STATE, not an action: a tint plus an inset accent edge. §3.7 gives the one
+   accent fill in this region to nothing at all — the cockpit's primary action is the
+   inbox composer's Send, which lives in the other column. */
+.seg button.sel {
+  background: var(--surface-selected); color: var(--text);
+  box-shadow: inset 0 -2px 0 var(--accent);
+}
+
+kbd {
+  font: 500 var(--fs-micro)/1 var(--mono); border: 1px solid var(--hairline-strong);
+  border-bottom-width: 2px; border-radius: var(--r1); padding: 2px 4px; color: var(--text-2);
+}
+
+/* ---- icons (§3.5) ------------------------------------------------------ */
+.ic { width: 16px; height: 16px; flex: none; stroke: currentColor; fill: none;
+      stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
+.ic-12 { width: 12px; height: 12px; stroke-width: 1.7; }
+.ic-14 { width: 14px; height: 14px; stroke-width: 1.6; }
+.ic-20 { width: 20px; height: 20px; stroke-width: 1.4; }
+@keyframes spin { to { transform: rotate(360deg); } }
+/* §3.4: the running spinner is the only looping animation, and reduced-motion kills it
+   (base.css), leaving the static half-dashed circle the spec asks for. */
+.ic-spin { animation: spin 1.1s linear infinite; transform-origin: 50% 50%; }
+
+/* ---- §3.2 status chips — the only saturated thing at rest --------------- */
+.chip {
+  display: inline-flex; align-items: center; gap: 4px;
+  height: 18px; padding: 0 6px 0 4px;
+  border-radius: var(--r1);
+  font: 500 var(--fs-micro)/1 var(--sans);
+  white-space: nowrap;
+}
+.chip .ic { width: 12px; height: 12px; stroke-width: 1.7; }
+.chip.q  { background: var(--st-queued-tint);    color: var(--st-queued); }
+.chip.r  { background: var(--st-running-tint);   color: var(--st-running); }
+.chip.d  { background: var(--st-done-tint);      color: var(--st-done); }
+.chip.c  { background: var(--st-cached-tint);    color: var(--st-cached); }
+.chip.f  { background: var(--st-failed-tint);    color: var(--st-failed); }
+.chip.x  { background: var(--st-cancelled-tint); color: var(--st-cancelled); }
+.chip.s  { background: var(--st-stale-tint);     color: var(--st-stale); }
+.chip.b  { background: var(--st-blocked-tint);   color: var(--st-blocked); }
+.chip.st { background: var(--st-steered-tint);   color: var(--st-steered); }
+.chip.u  { background: var(--st-queued-tint);    color: var(--st-queued); }
+
+/* ---- chip lines (W15) — a chip is a box in its column, never a decal over the next one -
+ *
+ * Two shipped defects shared ONE root cause, which is why the cure is a class here rather
+ * than two patches at the two sites: a `flex: none` chip inside a row whose overflow
+ * computes to `visible` leaves its own box and PAINTS OVER whatever is beside it. The
+ * agents table's `spawn_failed` badge measured x699–793 inside a cell ending at x736, on
+ * top of the `wait` column's value; the read-only cockpit header's lifecycle row measured
+ * 791px wide inside a 924px container it started 509px into, putting a destructive
+ * `Delete` button on the inbox rail. Both rows now carry `.chipline`.
+ *
+ * Two dispositions, because a table row and a header row want different things from the
+ * same rule:
+ *   • `.chipline` CLIPS. Nothing it contains can be painted outside it, full stop. Its
+ *     chips shrink and ellipsize rather than escape; the caller decides which of them is
+ *     allowed to yield first (see `.at-row .st-cell` in cockpit.css), and anything that
+ *     can be truncated carries its full text in a `title` and in the row's `aria-label`,
+ *     which is parity #54's existing rule for this cell applied to the whole line.
+ *   • `.chipline.wrap` WRAPS instead — for a row of interactive controls, dropping to a
+ *     second line keeps every button readable and hittable, where clipping would hide
+ *     one. It still has to be SHRINKABLE, or the line overflows its column before it ever
+ *     reaches its own wrap point, which is exactly what the header did.
+ */
+.chipline { min-width: 0; overflow: hidden; }
+.chipline > .chip, .chipline > .badge {
+  flex: 0 1 auto; min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+/* `flex: 0 1 auto` + the `min-width: 0` above is the whole fix on this side: the row's
+   flex base size is still its single-line max-content width — which is what makes it sit
+   on one line whenever one line fits — but it is now allowed to SHRINK to the space its
+   container actually has, and a shrunk wrapping container wraps. `flex: none` (the shipped
+   value) removed the shrink and the row left the column instead of wrapping inside it. */
+.chipline.wrap { overflow: visible; flex-wrap: wrap; flex: 0 1 auto; }
+.chipline.wrap > * { max-width: 100%; }
+
+/* Glyph-only status marks. §3.6: state is NEVER carried by color alone — every mark
+   ships an adjacent visually-hidden label (see StatusGlyph.tsx). */
+.g   { display: inline-grid; place-items: center; width: 16px; height: 16px; flex: none; }
+.g.q { color: var(--st-queued); }  .g.r { color: var(--st-running); }
+.g.d { color: var(--st-done); }    .g.c { color: var(--st-cached); }
+.g.f { color: var(--st-failed); }  .g.x { color: var(--st-cancelled); }
+.g.s { color: var(--st-stale); }   .g.b { color: var(--st-blocked); }
+.g.u { color: var(--text-3); }     /* unknown -> neutral info circle, never a check (#56) */
+.g.orphan { opacity: 0.45; }
+
+/* ---- neutral badges (detached log, resumed xN, budget, approximate, …) --- */
+.badge {
+  display: inline-flex; align-items: center; gap: 3px;
+  height: 16px; padding: 0 5px;
+  border: 1px solid var(--hairline-strong); border-radius: var(--r1);
+  font: 500 var(--fs-micro)/1 var(--sans); letter-spacing: 0.02em; color: var(--text-3);
+  white-space: nowrap;
+}
+.badge.warn { border-color: color-mix(in oklab, var(--st-stale) 40%, var(--canvas));
+              color: var(--st-stale); background: var(--st-stale-tint); }
+.badge.ask  { border-color: color-mix(in oklab, var(--st-blocked) 40%, var(--canvas));
+              color: var(--st-blocked); background: var(--st-blocked-tint); }
+.badge.replay { border-color: color-mix(in oklab, var(--st-cached) 40%, var(--canvas));
+                color: var(--st-cached); background: var(--st-cached-tint); }
+.badge.err { border-color: color-mix(in oklab, var(--st-failed) 40%, var(--canvas));
+             color: var(--st-failed); background: var(--st-failed-tint);
+             font-family: var(--mono); font-size: var(--fs-micro); }
+.count {
+  font: 500 var(--fs-micro)/1 var(--mono); color: var(--text-3);
+  background: var(--surface-raised); border: 1px solid var(--hairline);
+  border-radius: var(--r1); padding: 2px 4px;
+}
+
+/* ---- §3.2 adapter monogram badges. Never a vendor brand mark (#57). ----- */
+.ad {
+  display: inline-grid; place-items: center; flex: none;
+  width: 16px; height: 16px; border-radius: var(--r2);
+  font: 600 9px/1 var(--sans); letter-spacing: 0.01em;
+  border: 1px solid transparent;
+}
+.ad-claude   { background: var(--ad-claude-tint);   color: var(--ad-claude);
+               border-color: color-mix(in oklab, var(--ad-claude) 26%, var(--canvas)); }
+.ad-codex    { background: var(--ad-codex-tint);    color: var(--ad-codex);
+               border-color: color-mix(in oklab, var(--ad-codex) 26%, var(--canvas)); }
+.ad-amp      { background: var(--ad-amp-tint);      color: var(--ad-amp);
+               border-color: color-mix(in oklab, var(--ad-amp) 26%, var(--canvas)); }
+.ad-droid    { background: var(--ad-droid-tint);    color: var(--ad-droid);
+               border-color: color-mix(in oklab, var(--ad-droid) 26%, var(--canvas)); }
+.ad-opencode { background: var(--ad-opencode-tint); color: var(--ad-opencode);
+               border-color: color-mix(in oklab, var(--ad-opencode) 26%, var(--canvas)); }
+.ad-pi       { background: var(--ad-pi-tint);       color: var(--ad-pi);
+               border-color: color-mix(in oklab, var(--ad-pi) 26%, var(--canvas)); }
+.ad-mock     { background: var(--ad-mock-tint);     color: var(--ad-mock);
+               border-color: color-mix(in oklab, var(--ad-mock) 26%, var(--canvas)); }
+.ad-unknown  { background: var(--ad-unknown-tint);  color: var(--ad-unknown);
+               border-color: color-mix(in oklab, var(--ad-unknown) 26%, var(--canvas)); }
+.ad-cluster { display: inline-flex; align-items: center; gap: 3px; }
+.ad-cluster .more { font: 500 var(--fs-micro)/1 var(--mono); color: var(--text-3); }
+
+/* ---- inputs ------------------------------------------------------------ */
+.inp {
+  width: 100%; height: 28px; padding: 0 8px;
+  background: var(--canvas); color: var(--text);
+  border: 1px solid var(--border); border-radius: var(--r1);
+  font-size: var(--fs-meta);
+}
+.inp::placeholder { color: var(--text-3); }
+.inp:focus-visible { border-color: var(--accent); outline-offset: 1px; }
+.inp[disabled] { background: var(--surface-raised); color: var(--text-3); border-color: var(--hairline-strong); }
+.search { position: relative; }
+.search .ic { position: absolute; left: 7px; top: 50%; transform: translateY(-50%); color: var(--text-3); }
+.search .inp { padding-left: 27px; }
+
+/* ---- filter chips ------------------------------------------------------ */
+.fchip {
+  display: inline-flex; align-items: center; gap: 5px;
+  height: 24px; padding: 0 9px;
+  border: 1px solid var(--hairline-strong); border-radius: var(--r1);
+  font: 500 var(--fs-micro)/1 var(--sans); color: var(--text-2);
+  transition: background var(--d-hover) var(--ease);
+}
+.fchip:hover { background: var(--surface-raised); }
+/* A filter is state, not an action — selected is a tint plus an accent-38% edge, never
+   an accent fill (§3.7 gives Home its one fill to the answer composer's Send). */
+.fchip[aria-pressed="true"] {
+  background: var(--surface-selected); border-color: color-mix(in oklab, var(--accent) 38%, var(--canvas));
+  color: var(--text);
+}
+.fchip .n { font-size: var(--fs-micro); color: var(--text-3); }
+
+/* ---- empty / error / loading (§2.3, parity #40) ------------------------ */
+/* §3.4: "the running-state spinner is the only looping animation". The skeleton therefore
+   does NOT pulse — it fades in once, on the same 160ms disclosure curve as everything
+   else, and then holds. A second heartbeat on screen would compete with the one signal
+   that is allowed to move, and a still skeleton reads as "structure, not yet data"
+   perfectly well. `ui/contrast.test.ts` pins the single-loop invariant across the sheets. */
+.skel {
+  background: var(--hairline); border-radius: var(--r1); height: 9px;
+  animation: skel-in var(--d-disc) var(--ease) 1;
+}
+@keyframes skel-in { from { opacity: 0; } to { opacity: 1; } }
+.banner {
+  display: flex; align-items: center; gap: var(--s2);
+  padding: 9px var(--s3); border-radius: var(--r2);
+  background: var(--st-failed-tint);
+  border: 1px solid color-mix(in oklab, var(--st-failed) 32%, var(--canvas));
+  font-size: var(--fs-meta); color: var(--text);
+}
+.banner .ic { color: var(--st-failed); }
+/* A degraded-but-not-dead state: partial data, not a failed screen. §3.2's amber, so it
+   is legible as "incomplete" beside the red of "unreachable" without a second idiom. */
+.banner.warn {
+  background: var(--st-stale-tint);
+  border-color: color-mix(in oklab, var(--st-stale) 32%, var(--canvas));
+}
+.banner.warn .ic { color: var(--st-stale); }
+.banner code { font: 400 11px/1 var(--mono); }
+.banner .mono { font-size: var(--fs-micro); }
+.empty { display: grid; justify-items: center; gap: var(--s3); padding: var(--s8) var(--s6); text-align: center; }
+.empty h3 { font: 400 var(--fs-display)/1.25 var(--sans); }
+.empty p { font-size: var(--fs-meta); color: var(--text-2); max-width: 46ch; line-height: 1.55; }
+.snippet {
+  display: flex; align-items: center; gap: var(--s2);
+  padding: 8px 10px; background: var(--surface-raised);
+  border: 1px solid var(--hairline); border-radius: var(--r2);
+  font: 400 var(--fs-meta)/1 var(--mono);
+}
+.snippet .p { color: var(--text-3); }
+
+/* ---- budget gauge (§2.4; Home's live card uses it too) ----------------- */
+.gauge { display: grid; gap: 5px; }
+.gauge-bar {
+  position: relative; height: 8px; border-radius: var(--r1);
+  background: var(--hairline); overflow: hidden;
+}
+.gauge-bar .fill { position: absolute; inset: 0 auto 0 0; background: var(--accent); }
+.gauge-bar .over {
+  position: absolute; top: 0; bottom: 0;
+  background:
+    repeating-linear-gradient(135deg, var(--st-failed) 0 2px, transparent 2px 5px),
+    var(--st-failed-tint);
+}
+.gauge-bar .ceiling {
+  position: absolute; top: -2px; bottom: -2px; width: 1px;
+  background: var(--text); opacity: 0.55;
+}
+.gauge-legend { display: flex; align-items: baseline; gap: 6px;
+                font: 400 var(--fs-micro)/1 var(--mono); color: var(--text-3); }
+.gauge-legend b { color: var(--text); font-weight: 500; }
+.gauge-legend .over-l { color: var(--st-failed); }
+.gauge-legend .soft {
+  border: 1px dotted var(--hairline-strong); border-radius: var(--r1); padding: 1px 4px;
+  font-family: var(--sans); font-size: var(--fs-micro);
+}
+
+/* ---- scroll fade affordance (#107): only where content is actually clipped */
+.fade-t,
+.fade-b { position: relative; }
+.fade-t::before,
+.fade-b::after {
+  content: ""; position: absolute; z-index: 2; left: 0; right: 0; height: 24px; pointer-events: none;
+}
+.fade-t::before {
+  top: 0;
+  background: linear-gradient(to bottom, var(--canvas), transparent);
+}
+.fade-b::after {
+  bottom: 0;
+  background: linear-gradient(to top, var(--canvas), transparent);
+}
+.fade-t.on-surface::before { background: linear-gradient(to bottom, var(--surface), transparent); }
+.fade-b.on-surface::after { background: linear-gradient(to top, var(--surface), transparent); }
+.fade-t.on-well::before { background: linear-gradient(to bottom, var(--well), transparent); }
+.fade-b.on-well::after { background: linear-gradient(to top, var(--well), transparent); }
+
+/* ---- §3.4: a 300ms accent-8% pulse marks a row whose state changed ------ */
+@keyframes state-pulse {
+  from { background: color-mix(in oklab, var(--accent) 8%, var(--canvas)); }
+  to   { background: transparent; }
+}
+.pulse { animation: state-pulse 300ms var(--ease); }

@@ -43,6 +43,34 @@ Two file-level gotchas that waste real time:
 - **Workflow files are ES modules.** Node decides how to parse a `.js` file from the nearest package.json — it needs `"type": "module"`, or name the file `.mjs`, or the workflow fails to load.
 - **`node --check file.workflow.js` before launching.** An unescaped backtick inside a template-literal prompt is a real and easy failure; catch it in one second instead of after a spawn.
 
+## Where the workflow file lives (durability and organization)
+
+A workflow file is pure input — every run's own record (journal, events, transcripts,
+result) always lands in `$FLOWITION_HOME/runs/<runId>/` no matter where the file came
+from. But the file stays load-bearing after launch: `flowition resume` re-executes it and
+refuses unless the file and its local imports are byte-identical, and the journal stores
+the file's hash, not its source. A workflow authored in an OS temp dir or session
+scratchpad therefore costs you two things when that dir is cleaned: any interrupted run
+becomes unresumable, and the program text that produced a recorded run is gone.
+
+- **Author durable workflows in `~/.flowition/workflows/<project>/`**, where `<project>`
+  is the basename of the directory the run targets (its `--cwd`): workflows operating on
+  `~/work/api-server` live in `~/.flowition/workflows/api-server/`. A workflow that is
+  project tooling worth versioning and sharing belongs in the target repo instead — the
+  same rules below still apply to it.
+- **Name by purpose; iterate by NEW FILE, never by edit**: `<purpose>.workflow.mjs`,
+  then `<purpose>-r2.workflow.mjs`, `-r3`, … Resume refuses a changed hash by design, so
+  editing a file that has a run you might still resume strands that run. Leave prior
+  revisions in place until their runs are terminal and will never be resumed.
+- **Always `.mjs` under `~/.flowition/workflows/`** — there is no package.json there, so
+  a `.js` file parses as CommonJS and fails to load.
+- **Side files read at module load** (findings lists, args files) live next to the
+  workflow and follow the same immutability rule. Their content is not hash-checked, but
+  it typically feeds prompts, and prompts feed resume keys — changing one silently turns
+  a replay into a re-run.
+- Truly disposable one-shots may live anywhere, accepting that they are unresumable and
+  unrecoverable once their directory is cleaned.
+
 ## The toolkit
 
 - **agent(prompt, opts?) → Promise<string | JSONValue>** — run an agent via the selected adapter; resolves to its final text, or the validated JSON value when `opts.schema` is set. opts: `adapter` (`'claude' | 'codex' | 'amp' | 'droid' | 'opencode' | 'pi' | 'mock'`, default: the run's `--adapter`), `model` (model id for that CLI; on amp it selects an agent *mode* — see Adapters), `mode` (amp-only alias of model), `effort` (`'none'|'minimal'|'low'|'medium'|'high'|'xhigh'|'max'`, mapped per adapter), `system` (system prompt: native flag on claude/droid/pi; amp/codex/opencode get it prepended to the first turn of a fresh session), `schema` (JSON Schema forced on the final answer), `cwd`, `label` (display label, also a `sendTo()`/`flowition send` target), `key` (explicit resume-cache key, unique per run), `stallMs` (kill the current turn after this long with no provider output; default 30 minutes). A directly-awaited failed agent throws; inside `parallel()`/`pipeline()` an agent-process failure degrades that item to `null` while workflow errors and other exceptions still reject.

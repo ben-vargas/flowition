@@ -1,0 +1,180 @@
+/* W12 — the write surface's own styles (DESIGN §3, §7.2).
+ *
+ * §16.3: React Aria supplies BEHAVIOR; every pixel here is §3's token system, and no
+ * component-kit stylesheet is imported anywhere in this feature. §3.7's action hierarchy
+ * holds: exactly one primary-accent action per region (the answer composer's Send in the
+ * inbox, the steer composer's Send in the transcript footer); Cancel/Resume/Delete stay
+ * quiet outline buttons, with Delete additionally red-text (`.btn.danger`, primitives.css).
+ */
+
+/* ---- modal (Dialog.tsx) ------------------------------------------------------------ */
+
+.ctl-scrim {
+  position: fixed; inset: 0; z-index: 100;
+  display: flex; align-items: flex-start; justify-content: center;
+  padding: 12vh 16px 16px;
+  background: color-mix(in oklab, var(--ink) 34%, transparent);
+}
+
+.ctl-dialog {
+  background: var(--canvas);
+  border: 1px solid var(--hairline-strong);
+  border-radius: var(--r2, 6px);
+  box-shadow: var(--shadow-raised);
+  padding: var(--s4);
+  width: 100%;
+  max-height: 76vh;
+  overflow: auto;
+  display: flex; flex-direction: column; gap: var(--s3);
+}
+.ctl-dialog.confirm { max-width: 480px; }
+.ctl-dialog.wide { max-width: 620px; padding: var(--s3); }
+.ctl-dialog.danger { border-top: 2px solid var(--st-failed); }
+
+.ctl-title { font: 600 var(--fs-title)/1.3 var(--sans); margin: 0; }
+.ctl-desc { font-size: var(--fs-meta); color: var(--text-2); line-height: 1.55; }
+.ctl-actions { display: flex; gap: var(--s2); justify-content: flex-end; }
+.ctl-facts { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 6px; }
+.ctl-facts li { font-size: var(--fs-meta); color: var(--text-2); line-height: 1.5; }
+.ctl-facts li.dim { color: var(--text-3); }
+.ctl-note { font-size: var(--fs-micro); color: var(--text-3); margin: 0; line-height: 1.5; }
+
+.ctl-fail {
+  display: flex; align-items: flex-start; gap: 6px; margin: 0;
+  font-size: var(--fs-meta); color: var(--st-failed); line-height: 1.5;
+}
+.ctl-fail .ic { margin-top: 2px; }
+
+.ctl-typed { display: flex; flex-direction: column; gap: 6px; }
+.ctl-typed label { font-size: var(--fs-meta); color: var(--text-2); }
+.ctl-typed .inp { width: 100%; }
+
+/* ---- toasts (§3.6: role=status, never focus-stealing) ------------------------------ */
+
+/* `--action-floor` is the height of the whole lower interactive exclusion zone on the current
+   screen — today §2.5's steer composer AND the transcript's two "Jump to latest" controls,
+   which sit directly above it on the same right edge (features/control/actionFloor.ts). The
+   stack floats ABOVE all of it, so a toast can never sit on a control the operator is
+   reaching for. 0 elsewhere, which is the shipped geometry unchanged. `pointer-events` splits
+   the layer from the cards: the empty space in and around the stack stops being a click
+   shield — but the cards themselves take clicks, which is exactly why the lift has to cover
+   every control beneath them and not just the last one someone noticed. */
+.ctl-toasts {
+  position: fixed; right: 16px; bottom: calc(16px + var(--action-floor, 0px)); z-index: 110;
+  display: flex; flex-direction: column; gap: var(--s2); max-width: 420px;
+  pointer-events: none;
+}
+.ctl-toast {
+  pointer-events: auto;
+  display: flex; align-items: flex-start; gap: var(--s2);
+  background: var(--surface-raised); border: 1px solid var(--hairline-strong);
+  border-left: 2px solid var(--st-done);
+  border-radius: var(--r1, 4px); padding: 8px 10px;
+  font-size: var(--fs-meta); color: var(--text); line-height: 1.5;
+  box-shadow: var(--shadow-raised);
+}
+.ctl-toast.warn { border-left-color: var(--st-stale); }
+.ctl-toast .icb { margin-left: auto; }
+
+/* ---- lock chips (§7.2 — locked, never hidden) -------------------------------------- */
+
+.lock-chip {
+  display: inline-flex; align-items: baseline; gap: 4px; flex-wrap: wrap;
+  font: 500 var(--fs-micro)/1.4 var(--sans);
+  padding: 2px 6px; border-radius: 999px;
+  border: 1px solid var(--hairline-strong); color: var(--text-3);
+  max-width: 100%;
+}
+.lock-chip.locked { color: var(--st-cancelled); }
+.lock-chip.unknown { color: var(--st-stale); }
+.lock-chip .lock-word { white-space: nowrap; }
+/* The action-row form: one line, never wrapped mid-flag. */
+.lock-chip.compact { flex-wrap: nowrap; white-space: nowrap; }
+/* The §7.2 explanation itself — visible text, never a tooltip (round 6, B1). */
+.lock-chip .lock-why {
+  font-weight: 400; color: var(--text-3); white-space: normal;
+}
+
+/* ---- inbox answer composer (§2.4/§7.2) --------------------------------------------- */
+
+.ctl-answer { display: grid; grid-template-columns: 1fr auto; gap: 6px; margin-top: 8px; }
+.ctl-answer .inp { min-width: 0; }
+.ctl-answer .hint, .ctl-answer .qid { grid-column: 1 / -1; }
+.ctl-answer .hint {
+  font-size: var(--fs-micro); color: var(--text-3); display: flex; gap: 6px; flex-wrap: wrap;
+}
+.ctl-answer .hint.bad { color: var(--st-failed); }
+.qitem.answered.pending { opacity: 0.6; }
+
+/* ---- steer composer (§2.5 footer) --------------------------------------------------- */
+
+.steer { display: flex; flex-direction: column; gap: 6px; width: 100%; }
+.steer-form { display: flex; align-items: center; gap: 6px; }
+.steer-inp { flex: 1 1 auto; min-width: 0; }
+.steer-cancel { display: inline-flex; align-items: center; gap: 6px; }
+.steer-why { font-size: var(--fs-micro); color: var(--text-3); display: flex; gap: 8px; flex-wrap: wrap; }
+.steer-why.bad { color: var(--st-failed); }
+
+.steer-receipts { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.receipt {
+  display: grid; grid-template-columns: auto 1fr; gap: 4px 8px;
+  font-size: var(--fs-micro); color: var(--text-2);
+  border-left: 2px solid var(--hairline-strong); padding-left: 8px;
+}
+.receipt .rc-msg { color: var(--text); overflow-wrap: anywhere; }
+.receipt .rc-why { grid-column: 2; color: var(--text-3); }
+.receipt.t-delivered { border-left-color: var(--st-done); }
+.receipt.t-waiting { border-left-color: var(--st-queued); }
+.receipt.t-warn { border-left-color: var(--st-stale); }
+
+.verdict-chip {
+  display: inline-flex; align-items: center; padding: 1px 6px; border-radius: 999px;
+  font: 600 var(--fs-micro)/1.5 var(--mono);
+  background: var(--surface-raised); color: var(--text-2);
+}
+.verdict-chip.t-delivered { background: var(--st-done-tint); color: var(--st-done); }
+.verdict-chip.t-waiting { background: var(--st-queued-tint); color: var(--st-queued); }
+/* §7.2: `dropped` renders amber with "agent already settled". */
+.verdict-chip.t-warn { background: var(--st-stale-tint); color: var(--st-stale); }
+
+.mf .verdict.t-warn { color: var(--st-stale); }
+.mf .verdict.t-muted { color: var(--text-3); }
+
+/* ---- command palette (§2.7) --------------------------------------------------------- */
+
+.pal { display: flex; flex-direction: column; gap: var(--s2); }
+.pal-input { height: 30px; font-size: var(--fs-prose); }
+.pal-list {
+  list-style: none; margin: 0; padding: 0; max-height: 46vh; overflow: auto;
+  border: 1px solid var(--hairline); border-radius: var(--r1, 4px);
+}
+.pal-row {
+  display: flex; align-items: center; gap: var(--s2);
+  padding: 6px 10px; font-size: var(--fs-meta); cursor: pointer;
+  border-bottom: 1px solid var(--hairline);
+}
+.pal-row:last-child { border-bottom: 0; }
+.pal-row.on { background: var(--surface-selected); }
+.pal-row.locked { cursor: not-allowed; }
+.pal-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pal-kind {
+  margin-left: auto; font: 500 var(--fs-micro)/1 var(--mono); color: var(--text-3);
+}
+.pal-hint, .pal-why { font-size: var(--fs-micro); color: var(--text-3); }
+.pal-why { color: var(--st-cancelled); }
+.pal-empty, .pal-foot { margin: 0; font-size: var(--fs-micro); color: var(--text-3); }
+
+.kb-list { margin: 0; display: grid; grid-template-columns: 1fr 1fr; gap: 6px var(--s4); }
+.kb-row { display: flex; align-items: baseline; gap: var(--s2); }
+.kb-row dt { flex: none; }
+.kb-row dd { margin: 0; font-size: var(--fs-meta); color: var(--text-2); }
+.kb-row kbd {
+  font: 500 var(--fs-micro)/1.6 var(--mono);
+  border: 1px solid var(--hairline-strong); border-radius: var(--r1, 4px);
+  padding: 1px 5px; color: var(--text-2); background: var(--surface);
+}
+
+@media (max-width: 899px) {
+  .kb-list { grid-template-columns: 1fr; }
+  .ctl-scrim { padding: 8vh 8px 8px; }
+}

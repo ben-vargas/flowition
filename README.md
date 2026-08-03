@@ -79,7 +79,7 @@ Contributors can install from a clone instead:
 git clone https://github.com/ben-vargas/flowition.git
 cd flowition
 npm link        # exposes `flowition` (and `flo`) on PATH
-npm test        # 144 tests against the in-process mock adapter; no API credits consumed
+npm test        # root node:test suite; mock adapter, no API credits consumed
 ```
 
 ## Quick start
@@ -107,6 +107,47 @@ flowition answer <runId> q0 "ship it"    # answer a workflow ask()
 flowition cancel <runId> --agent 0       # cancel one agent (omit --agent for the run)
 flowition resume <runId>                 # replay finished agents; continue interrupted ones
 ```
+
+## Viewer
+
+`flowition viewer` starts the v1 browser UI for the runs under
+`$FLOWITION_HOME/runs` (default `~/.flowition/runs`). It binds loopback only and
+prints an authenticated URL:
+
+```sh
+flowition viewer                         # read-only; Ctrl-C stops it
+flowition viewer --open                  # also open the URL on macOS/Linux
+flowition viewer --port 0                # choose an ephemeral port
+flowition viewer --control               # opt in to all five mutations
+flowition viewer --control=send,answer   # or grant only a subset
+```
+
+The default is deliberately read-only: send, answer, cancel, resume, and delete
+routes return 403 until their capability is enabled with `--control`. Starting
+with `--control` mints a control token that exists only in that server process.
+It cannot be added to an already-running viewer; stop that process and restart
+it with `--control`, or use an explicit second `--port`.
+
+For a foreground, non-JSON, non-quiet run in a TTY, `flowition run` discovers or
+auto-starts a viewer and prints a verified deep link to the run. Detached, MCP,
+`--json`, and `--quiet` runs never auto-start it. Disable this behavior with
+`--no-viewer` or `FLOWITION_NO_VIEWER=1`. Auto-started viewers are read-only and
+use idle shutdown (15 minutes by default); an explicit server can opt into the
+same policy with `--idle-shutdown --idle-timeout <minutes>`.
+
+The printed URL carries the read token, and for a fresh `--control` process the
+control token, in the URL fragment. The browser moves them into
+`sessionStorage` and removes them from the address bar before routing.
+`flowition viewer --print-url` prints a fresh read-only URL for a live instance;
+it cannot recover the in-memory control token. Treat a viewer URL as sensitive:
+the read token exposes prompts, transcripts, args, and results for this
+Flowition home, while the control token can steer full-permission agents and
+change run lifecycle state.
+
+The viewer reads the same append-only artifacts used by the CLI and degrades
+unknown or older fields instead of requiring a migration. The exact module,
+security, packaging, and on-disk contracts are documented in
+[ARCHITECTURE.md](ARCHITECTURE.md#viewer).
 
 ## Core concepts
 
@@ -253,6 +294,7 @@ journaled (including failed and cancelled agents) and restored on resume.
 | `flowition cancel <runId>` | Cancel the run, or one agent with `--agent N` |
 | `flowition post <msg…>` | Agent→operator progress report; run/agent come from `FLOWITION_*` env or `--run`/`--agent` |
 | `flowition result <runId>` | Print the final result; `--wait [seconds]` blocks until one exists |
+| `flowition viewer` | Serve the authenticated local run UI. `--port N`, `--control[=send,answer,cancel,resume,delete]`, `--idle-shutdown`, `--idle-timeout M`, `--open`, `--print-url`, `--json` |
 | `flowition doctor` | Check each adapter CLI: found, version, steering/resume/schema capabilities, amp modes |
 | `flowition guide` | Print the workflow authoring guide (written for agents) |
 | `flowition mcp` | Serve flowition as an MCP stdio server |
@@ -272,6 +314,9 @@ and steer its agents — the "invoked by agents" half of the loop. Agents
 | variable | effect |
 |----------|--------|
 | `FLOWITION_HOME` | State directory; runs live in `$FLOWITION_HOME/runs/<runId>/` (default `~/.flowition`) |
+| `FLOWITION_NO_VIEWER` | Set to `1` to disable viewer auto-start for foreground TTY runs |
+| `FLOWITION_VIEWER_PORT` | Default viewer port when `--port` is absent (normally `4646`) |
+| `FLOWITION_VIEWER_LOG` | Set to `1` for metadata-only HTTP access lines; queries and bodies are not logged |
 | `FLOWITION_<CLI>_BIN` | Override an adapter's executable, e.g. `FLOWITION_CLAUDE_BIN=/opt/claude` |
 | `FLOWITION_AMP_PLUGINS_DIR` | Where amp agent-mode plugins are discovered (default `~/.config/amp/plugins`) |
 
@@ -291,13 +336,26 @@ anything the invoking user can, in the workflow's `cwd` and beyond.
 Run only workflows you trust, with prompts you trust, on machines where that
 level of access is acceptable — ideally inside a container or VM for anything
 untrusted. Run directories are created `0700` (they contain full transcripts).
-Residual caveats are documented honestly in
-[ARCHITECTURE.md → Known limitations](ARCHITECTURE.md#known-limitations).
+
+The viewer does not turn that local trust boundary into a remote service. It
+binds `127.0.0.1` only, requires a 0600-file read token for every API read, has
+no cookies or CORS, and is read-only unless `--control` explicitly grants
+capabilities. Mutations additionally require an ephemeral in-memory control
+token, same-origin requests, and JSON. The static UI is shipped under a
+`script-src 'self'; style-src 'self'` CSP and renders transcript data without an
+HTML injection path.
+
+Those controls do not sandbox Flowition. A control credential can steer agents
+that already run with full user permissions. Loopback port presence is visible
+to other local users, and a process running as your user can read the token and
+the run files; that same-user adversary already has the CLI's access and is out
+of scope. See [ARCHITECTURE.md → Viewer](ARCHITECTURE.md#viewer) for the full
+posture and residuals.
 
 ## Development
 
 ```
-npm test    # 144 tests via node:test against a deterministic in-process mock adapter
+npm test    # root node:test suite against a deterministic in-process mock adapter
 ```
 
 The suite consumes no API credits and needs none of the real CLIs installed.
@@ -309,12 +367,12 @@ against the real CLIs.
 
 ## Status and roadmap
 
-v0.1. Before this first release the engine went through an extensive adversarial
+v0.1, including the first local viewer. Before this first release the engine went through an extensive adversarial
 review campaign — many rounds of cross-model review and fix validation, every
 confirmed finding fixed under a regression test. The suite that campaign produced
-ships with the project. Planned next: a web viewer for runs (today
-`flowition tail -f` and `flowition status --json` are the observation surfaces),
-a sandboxing phase at the adapter layer, and more adapters.
+ships with the project. The viewer is intentionally v1: local macOS/Linux only,
+read-only by default, and backed directly by run-directory artifacts rather than a
+database. Planned next: a sandboxing phase at the adapter layer and more adapters.
 
 ## License
 

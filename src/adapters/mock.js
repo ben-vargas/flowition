@@ -7,8 +7,15 @@
 //   WAIT_MAIL           block until a mail message arrives; result = "mail:<text>"
 //   FAILN <name> <n>    fail while invocation count for <name> <= n (counters persist
 //                       in $FLOWITION_HOME/mock-counters/ so resume tests cross processes)
+//   FAILRETRY <name> <n> as FAILN, but the error is RETRYABLE — the engine re-executes
+//                       the same job in place (src/engine.js retry branch) instead of
+//                       failing the agent, which is the only way to script that path
+//                       without a real process dying on a signal
 //   BADJSON_ONCE <name> first invocation returns "not json", later ones return {"ok":true}
 //   TOOL <name>         emit a tool + tool-result pair
+//   NOSESSION           suppress the automatic opening session event, so the turn emits
+//                       NOTHING until it returns — the only way to script a genuinely
+//                       silent provider (DESIGN §8 E6: a silent agent emits no progress)
 // A resume/follow-up turn invokes direct() with mode:'resume' and the follow-up prompt.
 import fs from 'node:fs'
 import path from 'node:path'
@@ -39,7 +46,8 @@ export default {
 
   // io: { emit(event), waitMail(): Promise<string>, mode, sessionId }
   async direct({ prompt, io }) {
-    io.emit({ k: 'session', id: io.sessionId ?? 'mock-session-1' })
+    const silent = /(^|\n)\s*NOSESSION\s*(\n|$)/.test(prompt)
+    if (!silent) io.emit({ k: 'session', id: io.sessionId ?? 'mock-session-1' })
     // corrective follow-up turn from the schema-retry loop
     if (io.mode === 'resume' && prompt.includes('failed schema validation')) {
       io.emit({ k: 'usage', input: 5, output: 3 })
@@ -70,9 +78,16 @@ export default {
         const count = bumpCounter(name)
         if (count <= Number(n)) throw Object.assign(new Error(`mock planned failure ${count}/${n}`), { retryable: false })
         result = `recovered:${name}:${count}`
+      } else if (cmd === 'FAILRETRY') {
+        const [name, n] = arg.split(' ')
+        const count = bumpCounter(name)
+        if (count <= Number(n)) throw Object.assign(new Error(`mock retryable failure ${count}/${n}`), { retryable: true })
+        result = `recovered:${name}:${count}`
       } else if (cmd === 'BADJSON_ONCE') {
         const count = bumpCounter(arg)
         result = count <= 1 ? 'this is definitely not json' : '{"ok":true}'
+      } else if (cmd === 'NOSESSION') {
+        // handled above, before the script runs — never a fallback result
       } else if (cmd === 'CORRECT_WITH') {
         // used as follow-up prompt content marker in schema-retry tests — ignore
       } else {

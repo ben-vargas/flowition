@@ -80,6 +80,9 @@ export class Journal {
       // below, after mail-done records have cleared what was delivered or dropped.
       restoredWorkflowMail: new Map(),
       started: new Map(),   // key -> started entry
+      // key -> number of result records seen for it (E9). `results` is last-wins and
+      // hides history; this is the attempt count a resumed attempt numbers itself from.
+      attemptCounts: new Map(),
       answers: new Map(),   // qid -> value
       indexByKey: new Map(),
       maxIndex: -1,
@@ -141,6 +144,7 @@ export class Journal {
         }
         case 'result':
           state.results.set(e.key, e)
+          state.attemptCounts.set(e.key, (state.attemptCounts.get(e.key) ?? 0) + 1)
           state.indexByKey.set(e.key, e.index)
           state.maxIndex = Math.max(state.maxIndex, e.index)
           if (e.usage) {

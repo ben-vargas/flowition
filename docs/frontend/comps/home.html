@@ -1,0 +1,2570 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=1440">
+<title>flowition viewer — Home</title>
+<style>
+[data-theme="light"] {
+  --canvas: oklch(0.975 0.004 95);
+  --ink: oklch(0.21 0.015 255);
+  --accent: oklch(0.5 0.15 255);
+  --tint: 12%;
+  --ad-tint: 14%;
+
+  --surface: color-mix(in oklab, var(--ink) 3%, var(--canvas));
+  --surface-raised: color-mix(in oklab, var(--ink) 6%, var(--canvas));
+  --surface-selected: color-mix(in oklab, var(--accent) 10%, var(--canvas));
+  --hairline: color-mix(in oklab, var(--ink) 12%, var(--canvas));
+  --hairline-strong: color-mix(in oklab, var(--ink) 25%, var(--canvas));
+  --border: color-mix(in oklab, var(--ink) 52%, var(--canvas));
+
+  --text: var(--ink);
+  --text-2: color-mix(in oklab, var(--ink) 74%, var(--canvas));
+  --text-3: color-mix(in oklab, var(--ink) 62%, var(--canvas));
+  --on-accent: var(--canvas);
+
+  --st-queued: color-mix(in oklab, var(--ink) 62%, var(--canvas));
+  --st-cancelled: color-mix(in oklab, var(--ink) 74%, var(--canvas));
+  --st-running: oklch(0.5 0.16 250);
+  --st-done: oklch(0.49 0.14 150);
+  --st-cached: oklch(0.48 0.11 190);
+  --st-failed: oklch(0.52 0.2 25);
+  --st-stale: oklch(0.5 0.15 75);
+  --st-blocked: oklch(0.52 0.17 300);
+  --st-steered: var(--st-blocked);
+
+  --st-queued-tint: color-mix(in oklab, var(--st-queued) var(--tint), var(--canvas));
+  --st-running-tint: color-mix(in oklab, var(--st-running) var(--tint), var(--canvas));
+  --st-done-tint: color-mix(in oklab, var(--st-done) var(--tint), var(--canvas));
+  --st-cached-tint: color-mix(in oklab, var(--st-cached) var(--tint), var(--canvas));
+  --st-failed-tint: color-mix(in oklab, var(--st-failed) var(--tint), var(--canvas));
+  --st-cancelled-tint: color-mix(in oklab, var(--st-cancelled) var(--tint), var(--canvas));
+  --st-stale-tint: color-mix(in oklab, var(--st-stale) var(--tint), var(--canvas));
+  --st-blocked-tint: color-mix(in oklab, var(--st-blocked) var(--tint), var(--canvas));
+  --st-steered-tint: color-mix(in oklab, var(--st-steered) var(--tint), var(--canvas));
+
+  --ad-claude: oklch(0.5 0.13 40);
+  --ad-codex: oklch(0.47 0.11 220);
+  --ad-amp: oklch(0.49 0.12 85);
+  --ad-droid: oklch(0.47 0.13 130);
+  --ad-opencode: oklch(0.5 0.13 295);
+  --ad-pi: oklch(0.5 0.13 350);
+  --ad-mock: var(--text-3);
+  --ad-unknown: var(--text-3);
+  --ad-claude-tint: color-mix(in oklab, var(--ad-claude) var(--ad-tint), var(--canvas));
+  --ad-codex-tint: color-mix(in oklab, var(--ad-codex) var(--ad-tint), var(--canvas));
+  --ad-amp-tint: color-mix(in oklab, var(--ad-amp) var(--ad-tint), var(--canvas));
+  --ad-droid-tint: color-mix(in oklab, var(--ad-droid) var(--ad-tint), var(--canvas));
+  --ad-opencode-tint: color-mix(in oklab, var(--ad-opencode) var(--ad-tint), var(--canvas));
+  --ad-pi-tint: color-mix(in oklab, var(--ad-pi) var(--ad-tint), var(--canvas));
+  --ad-mock-tint: color-mix(in oklab, var(--ad-mock) var(--ad-tint), var(--canvas));
+  --ad-unknown-tint: color-mix(in oklab, var(--ad-unknown) var(--ad-tint), var(--canvas));
+
+  --shadow-raised: 0 1px 1px oklch(0.21 0.015 255 / 0.05), 0 6px 16px -8px oklch(0.21 0.015 255 / 0.14);
+  color-scheme: light;
+}
+
+[data-theme="dark"] {
+  --canvas: oklch(0.165 0.012 255);
+  --ink: oklch(0.93 0.006 95);
+  --accent: oklch(0.72 0.13 255);
+  --tint: 16%;
+  --ad-tint: 16%;
+
+  --surface: color-mix(in oklab, var(--ink) 4%, var(--canvas));
+  --surface-raised: color-mix(in oklab, var(--ink) 7%, var(--canvas));
+  --surface-selected: color-mix(in oklab, var(--accent) 14%, var(--canvas));
+  --hairline: color-mix(in oklab, var(--ink) 14%, var(--canvas));
+  --hairline-strong: color-mix(in oklab, var(--ink) 25%, var(--canvas));
+  --border: color-mix(in oklab, var(--ink) 46%, var(--canvas));
+
+  --text: var(--ink);
+  --text-2: color-mix(in oklab, var(--ink) 74%, var(--canvas));
+  --text-3: color-mix(in oklab, var(--ink) 62%, var(--canvas));
+  --on-accent: var(--canvas);
+
+  --st-queued: color-mix(in oklab, var(--ink) 62%, var(--canvas));
+  --st-cancelled: color-mix(in oklab, var(--ink) 74%, var(--canvas));
+  --st-running: oklch(0.7 0.14 250);
+  --st-done: oklch(0.7 0.13 150);
+  --st-cached: oklch(0.72 0.1 190);
+  --st-failed: oklch(0.66 0.19 25);
+  --st-stale: oklch(0.76 0.14 75);
+  --st-blocked: oklch(0.7 0.15 300);
+  --st-steered: var(--st-blocked);
+
+  --st-queued-tint: color-mix(in oklab, var(--st-queued) var(--tint), var(--canvas));
+  --st-running-tint: color-mix(in oklab, var(--st-running) var(--tint), var(--canvas));
+  --st-done-tint: color-mix(in oklab, var(--st-done) var(--tint), var(--canvas));
+  --st-cached-tint: color-mix(in oklab, var(--st-cached) var(--tint), var(--canvas));
+  --st-failed-tint: color-mix(in oklab, var(--st-failed) var(--tint), var(--canvas));
+  --st-cancelled-tint: color-mix(in oklab, var(--st-cancelled) var(--tint), var(--canvas));
+  --st-stale-tint: color-mix(in oklab, var(--st-stale) var(--tint), var(--canvas));
+  --st-blocked-tint: color-mix(in oklab, var(--st-blocked) var(--tint), var(--canvas));
+  --st-steered-tint: color-mix(in oklab, var(--st-steered) var(--tint), var(--canvas));
+
+  --ad-claude: oklch(0.72 0.12 40);
+  --ad-codex: oklch(0.72 0.1 220);
+  --ad-amp: oklch(0.78 0.11 85);
+  --ad-droid: oklch(0.74 0.12 130);
+  --ad-opencode: oklch(0.7 0.12 295);
+  --ad-pi: oklch(0.72 0.12 350);
+  --ad-mock: var(--text-3);
+  --ad-unknown: var(--text-3);
+  --ad-claude-tint: color-mix(in oklab, var(--ad-claude) var(--ad-tint), var(--canvas));
+  --ad-codex-tint: color-mix(in oklab, var(--ad-codex) var(--ad-tint), var(--canvas));
+  --ad-amp-tint: color-mix(in oklab, var(--ad-amp) var(--ad-tint), var(--canvas));
+  --ad-droid-tint: color-mix(in oklab, var(--ad-droid) var(--ad-tint), var(--canvas));
+  --ad-opencode-tint: color-mix(in oklab, var(--ad-opencode) var(--ad-tint), var(--canvas));
+  --ad-pi-tint: color-mix(in oklab, var(--ad-pi) var(--ad-tint), var(--canvas));
+  --ad-mock-tint: color-mix(in oklab, var(--ad-mock) var(--ad-tint), var(--canvas));
+  --ad-unknown-tint: color-mix(in oklab, var(--ad-unknown) var(--ad-tint), var(--canvas));
+
+  --shadow-raised: 0 1px 1px oklch(0.05 0 0 / 0.5), 0 8px 20px -10px oklch(0.05 0 0 / 0.7);
+  color-scheme: dark;
+}
+
+:root {
+  --well: oklch(0.19 0.01 255);
+  --well-text: oklch(0.9 0.005 95);
+  --ansi-0: oklch(0.34 0.012 255);
+  --ansi-1: oklch(0.68 0.17 25);
+  --ansi-2: oklch(0.76 0.15 145);
+  --ansi-3: oklch(0.84 0.13 90);
+  --ansi-4: oklch(0.72 0.13 255);
+  --ansi-5: oklch(0.72 0.15 315);
+  --ansi-6: oklch(0.8 0.1 200);
+  --ansi-7: oklch(0.9 0.005 95);
+  --ansi-8: oklch(0.62 0.012 255);
+  --ansi-9: oklch(0.76 0.16 25);
+  --ansi-10: oklch(0.85 0.14 145);
+  --ansi-11: oklch(0.9 0.12 92);
+  --ansi-12: oklch(0.8 0.11 255);
+  --ansi-13: oklch(0.8 0.13 315);
+  --ansi-14: oklch(0.88 0.09 200);
+  --ansi-15: oklch(0.98 0.002 95);
+}
+
+/* ==========================================================================
+   §3.1 Typography. NOTHING IS LINKED — no @font-face, no external request.
+   The stacks name the intended vendored faces first and fall back to system
+   faces so these comps render identically offline. Judge layout, hierarchy,
+   density and color here; webfont metrics shift ~1-2% and change nothing
+   structural.
+   ========================================================================== */
+:root {
+  --sans: "IBM Plex Sans", ui-sans-serif, system-ui, -apple-system,
+          "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --mono: "JetBrains Mono", ui-monospace, SFMono-Regular, "SF Mono", Menlo,
+          Consolas, "Liberation Mono", monospace;
+
+  --fs-micro: 11px;  --fs-meta: 12px;  --fs-ui: 13px;
+  --fs-prose: 14px;  --fs-title: 16px; --fs-screen: 20px; --fs-display: 24px;
+  --lh-prose: 1.45; --lh-ui: 1.3;
+
+  /* §3.3 4px base scale */
+  --s1: 4px; --s2: 8px; --s3: 12px; --s4: 16px; --s5: 20px; --s6: 24px;
+  --s7: 32px; --s8: 48px;
+  --row-run: 44px; --row-agent: 32px; --gutter-transcript: 12px;
+
+  --r1: 2px;  /* chips, buttons, inputs, bars */
+  --r2: 3px;  /* cards, panels, badges */
+
+  /* §3.4 motion */
+  --d-hover: 120ms; --d-disc: 160ms; --d-panel: 200ms;
+  --ease: cubic-bezier(0.2, 0, 0, 1);
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0;
+  min-width: 1440px;
+  background: var(--canvas);
+  color: var(--text);
+  font: 400 var(--fs-ui)/var(--lh-ui) var(--sans);
+  font-feature-settings: "tnum" 1;
+  -webkit-font-smoothing: antialiased;
+}
+h1, h2, h3, h4, p, ul, ol, figure { margin: 0; }
+ul, ol { padding: 0; list-style: none; }
+button, input, textarea, select { font: inherit; color: inherit; }
+button { background: none; border: 0; padding: 0; cursor: pointer; }
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; text-underline-offset: 2px; }
+
+/* §3.6 focus: 2px accent ring, 2px offset, no positive tabindex anywhere. */
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: var(--r1); }
+.demo-focus { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* ---- type utilities ---------------------------------------------------- */
+.lbl {          /* the instrument-panel micro label — the system's signature */
+  font: 600 var(--fs-micro)/1 var(--sans);
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--text-3);
+  font-feature-settings: "tnum" 1;
+}
+.micro { font-size: var(--fs-micro); }
+.meta  { font-size: var(--fs-meta); color: var(--text-2); }
+.dim   { color: var(--text-3); }
+.strong { font-weight: 500; }
+.mono  { font-family: var(--mono); font-feature-settings: "tnum" 1; }
+.n     { font-family: var(--mono); font-variant-numeric: tabular-nums; text-align: right; }
+.trunc { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.vh {
+  position: absolute; width: 1px; height: 1px; overflow: hidden;
+  clip-path: inset(50%); white-space: nowrap;
+}
+
+/* ==========================================================================
+   Comp chrome — deliberately NOT part of the product. Dotted rules and a
+   mono voice mark it as annotation so the reviewer does not judge it.
+   ========================================================================== */
+.chrome {
+  position: sticky; top: 0; z-index: 60;
+  display: flex; align-items: center; gap: var(--s4);
+  padding: 10px var(--s6);
+  background: var(--canvas);
+  border-bottom: 1px dashed var(--hairline-strong);
+  font-family: var(--mono); font-size: var(--fs-micro);
+  color: var(--text-3);
+}
+.chrome b { color: var(--text); font-weight: 500; }
+.chrome .sep { color: var(--hairline-strong); }
+.chrome-right { margin-left: auto; display: flex; align-items: center; gap: var(--s2); }
+.seg { display: inline-flex; border: 1px solid var(--border); border-radius: var(--r1); overflow: hidden; }
+.seg button {
+  display: flex; align-items: center; gap: 5px;
+  padding: 3px 9px; font: 500 var(--fs-micro)/1.3 var(--sans); color: var(--text-2);
+  transition: background var(--d-hover) var(--ease), color var(--d-hover) var(--ease);
+}
+.seg button + button { border-left: 1px solid var(--border); }
+.seg button:hover { background: var(--surface-raised); color: var(--text); }
+/* Accent fill on a segmented control is reserved for the COMP CHROME theme toggle.
+   In-product segmented state uses .sel — a selected control is state, not an action,
+   and §3.7 allows exactly one accent-filled action per screen region. */
+[data-theme="light"] .chrome .seg button.on-l,
+[data-theme="dark"]  .chrome .seg button.on-d { background: var(--accent); color: var(--on-accent); }
+.seg button.sel {
+  background: var(--surface-selected); color: var(--text);
+  box-shadow: inset 0 -2px 0 var(--accent);
+}
+.frame-wrap { padding: var(--s6) var(--s6) var(--s8); }
+.frame-head { display: flex; align-items: baseline; gap: var(--s3); margin-bottom: 10px; }
+.frame-head h2 { font: 500 var(--fs-title)/1.2 var(--sans); }
+.frame-head .w { font-family: var(--mono); font-size: var(--fs-micro); color: var(--text-3); }
+.frame {
+  position: relative;
+  width: 1440px;
+  background: var(--canvas);
+  border: 1px solid var(--hairline-strong);
+  border-radius: var(--r2);
+  overflow: hidden;
+}
+/* §3.7's SECOND required viewport. A comp frame is a fixed-width box inside a 1440px
+   page, so a media query cannot fire for it — the app's max-width:900px rules
+   (viewer/src/features/home/home.css) are mirrored here under .frame.w800, one for one.
+   Anything that appears below must appear there. */
+.frame.w800 { width: 800px; }
+.w800 .home { padding: var(--s4) var(--s3) var(--s5); }
+.w800 .attn-grid { grid-template-columns: 1fr; }
+.w800 .rt-row { grid-template-columns: 18px minmax(0, 1fr) 74px 78px 82px 82px; gap: var(--s2); }
+.w800 .rt-row > .col-ad, .w800 .rt-row > .col-out { display: none; }
+.w800 .rt-name .rid { display: none; }
+.w800 .rt-name .nm { flex: 1 1 auto; min-width: 108px; }
+.w800 .rt-badges { flex: 0 1 auto; overflow: hidden; }
+.w800 .rt-tools { flex-wrap: wrap; }
+.w800 .rt-tools .search { width: 100%; margin-left: 0; }
+/* …and the cockpit / transcript rules §3.3 gives below 900px: rails become drawer handles,
+   the header wraps, and the transcript replaces the split instead of halving it. */
+.w800 .cockpit.narrow { grid-template-columns: 44px minmax(0, 1fr) 44px; }
+.w800 .strip.drawer { align-items: center; }
+.w800 .rhead.narrow { padding-bottom: var(--s2); }
+.w800 .rhead.narrow .rhead-top { margin-bottom: 4px; }
+.w800 .rhead.narrow .rhead-top h1 { min-width: 0; }
+.w800 .rhead-sub { display: flex; align-items: center; gap: var(--s2); margin-bottom: 8px; }
+.w800 .rhead-metrics { margin-bottom: 8px; }
+.w800 .metric.gauge-cell.wide {
+  display: block; padding: 8px var(--s3); margin-bottom: 8px;
+  border: 1px solid var(--hairline); border-radius: var(--r2); background: var(--surface);
+}
+.w800 .rhead-lineage { display: flex; align-items: center; gap: var(--s3); }
+.w800 .tabs .kb { display: none; }
+.w800 .tl { padding: var(--s3) 14px var(--s4); }
+.w800 .exec.orphan { opacity: 0.45; }
+
+/* ==========================================================================
+   480px — the floor. NOT one of §3.7's required viewports (it names 1440 and
+   800); it is here because "below 900px the rails collapse into drawers"
+   (§3.3) needs a bottom as well as a top, and a rule with no floor is a rule
+   nobody can build against. 480 frames carry BOTH classes, so every <900px
+   rule above still applies and these state only what changes AGAIN.
+
+   The single breakpoint is 900px, per §3.3 — the same one at 800 and at 480.
+   Nothing here introduces a second one: what differs at 480 is that fixed
+   columns stop fitting, so rows wrap and the Gantt scrolls.
+   ========================================================================== */
+.frame.w480 { width: 480px; }
+.w480 .topbar { gap: var(--s2); padding: 0 var(--s2); }
+.w480 .brand .v { display: none; }
+.w480 .ro-chip { white-space: nowrap; }
+.w480 .rhead-top h1 { font-size: var(--fs-title); }
+.w480 .tl-head { flex-wrap: wrap; row-gap: 4px; }
+.w480 .lastlog a { white-space: nowrap; }
+.w480 .home { padding: var(--s3) var(--s2) var(--s4); }
+.w480 .home-head { flex-wrap: wrap; row-gap: 6px; }
+.w480 .attn { margin-bottom: var(--s4); }
+/* The table becomes one wrapped record per run: line 1 identity, line 2 the numbers as a
+   meta strip. Every value is self-describing (a/b agents, $ cost, m/s duration, a relative
+   time), which is why the header row can go — a column label with no column is furniture. */
+.w480 .rt-row.head { display: none; }
+.w480 .rt-row {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 0 6px;
+  height: auto; min-height: 52px; padding: 8px var(--s3);
+}
+.w480 .rt-row > .g { order: 0; margin-right: 2px; }
+.w480 .rt-row > .rt-name { order: 1; flex: 1 1 0; }
+.w480 .rt-row > span:nth-child(n+4) {
+  order: 2; flex: none; width: auto; flex-basis: auto; text-align: left;
+  display: inline-flex; align-items: center;
+  font-size: var(--fs-micro); color: var(--text-2);
+}
+/* inline-flex above matters: .progress-mini is a flex box, so an inline wrapper would
+   push the separator onto its own line. */
+.w480 .rt-row > span:nth-child(n+4):not(:last-child)::after {
+  content: "·"; margin-left: 6px; color: var(--text-3);
+}
+.w480 .rt-row > .rt-name { flex-basis: 100%; }
+/* The two columns dropped at 800 stay dropped at 480 — a value that reappears as the
+   viewport gets smaller is a value the operator cannot predict. */
+.w480 .rt-row > .col-ad, .w480 .rt-row > .col-out { display: none; }
+.w480 .rt-name .nm { min-width: 0; }
+.w480 .rt-tools .search { width: 100%; }
+.w480 .progress-mini .bar { width: 24px; }
+
+/* Cockpit at 480. The header metrics wrap to two per line; the tab row scrolls rather
+   than collapsing into a menu (a tab behind a menu is a tab nobody uses, and that argument
+   does not weaken at 480); the Gantt keeps its scale and SCROLLS horizontally, because a
+   time axis that rescales per viewport is not the same trace drawn narrower. */
+.w480 .rhead-metrics { flex-wrap: wrap; }
+.w480 .rhead-metrics .metric { min-width: 50% !important; }
+.w480 .rhead-metrics .metric:nth-child(odd) { border-left: 0; }
+.w480 .tabs { overflow-x: auto; }
+.w480 .tl { padding: var(--s2) var(--s2) var(--s3); }
+/* The Gantt is neither dropped nor rescaled: the lane label narrows and the whole plot —
+   ruler, saturation strip and lanes together, so they stay on one axis — scrolls sideways
+   inside the tab. A time axis that rescales per viewport is a different trace. */
+.tl-scrollx { overflow-x: auto; flex: 1; min-height: 0; }
+
+/* §3.3's "the transcript replaces the cockpit" needs the way BACK to be part of the
+   composition: the bar names the run it returns to rather than saying "back", and carries
+   the agent stepper so moving between agents is not a round trip through the cockpit. */
+.backbar {
+  display: flex; align-items: center; gap: 6px; flex: none; min-width: 0;
+  height: 32px; padding: 0 var(--s2);
+  border-bottom: 1px solid var(--hairline); background: var(--surface);
+}
+.backbar .k { color: var(--text-3); }
+.backbar .bb-right { margin-left: auto; display: flex; align-items: center; gap: 4px; flex: none; }
+.ic.flip { transform: rotate(180deg); }
+.w480 .cockpit.narrow { grid-template-columns: 44px minmax(0, 1fr) 44px; }
+.w480 .cmp-panes { --cmp-pane-min: 300px; }
+.w480 .drawer-panel { width: 300px; }
+/* The transcript panel below 900px: nothing is removed, everything wraps. A panel that
+   dropped controls at a viewport would make "close" mean different things per screen. */
+.w480 .tp-head { padding: var(--s2) var(--s2) 7px; }
+.w480 .tp-head .r1 { flex-wrap: wrap; gap: 5px; }
+.w480 .tp-head .r1 .right { flex-basis: 100%; }
+.w480 .tp-head .r1 .aidx, .w480 .tp-head .r1 .chip { white-space: nowrap; }
+.w480 .tp-facts { line-height: 1.5; }
+.w480 .tp-facts > span { padding: 0 6px; }
+.w480 .attempt-bar, .w480 .prompt-block .ph, .w480 .composer .hint { flex-wrap: wrap; }
+.w480 .trow { grid-template-columns: 44px minmax(0, 1fr); gap: var(--s2); padding-right: var(--s2); }
+.w480 .backbar .k, .w480 .backbar .trunc { display: none; }
+
+/* --------------------------------------------------------------------------
+   Rails as DRAWERS (§3.3 "below 900px the rails collapse into drawers",
+   parity #42) — the open state, with the §3.6 focus model drawn rather than
+   described. The scrim is a sibling of the panel, both inside the .app box,
+   so the frame shows the overlay exactly as the product renders it.
+   -------------------------------------------------------------------------- */
+.drawer-scrim {
+  position: absolute; inset: 44px 0 0 0; z-index: 30;
+  background: color-mix(in oklab, var(--ink) 42%, transparent);
+}
+.drawer-panel {
+  position: absolute; top: 44px; bottom: 0; z-index: 31;
+  width: 320px; display: flex; flex-direction: column;
+  background: var(--canvas); box-shadow: 0 0 24px color-mix(in oklab, var(--ink) 28%, transparent);
+}
+.drawer-panel.left  { left: 0;  border-right: 1px solid var(--hairline-strong); }
+.drawer-panel.right { right: 0; border-left: 1px solid var(--hairline-strong); }
+.drawer-head {
+  display: flex; align-items: center; gap: var(--s2); flex: none;
+  height: 34px; padding: 0 var(--s3); border-bottom: 1px solid var(--hairline);
+}
+.drawer-head .right { margin-left: auto; display: flex; align-items: center; gap: 4px; }
+/* The focus ring is DRAWN here, not implied: opening the drawer moves focus to its header
+   (§3.6), and the annotation names what Escape does with it. */
+.drawer-head .demo-focus { border-radius: var(--r1); }
+.drawer-note {
+  margin: auto var(--s3) var(--s3); padding: var(--s2) 10px; flex: none;
+  border: 1px dashed var(--hairline-strong); border-radius: var(--r2);
+  font: 400 var(--fs-micro)/1.5 var(--mono); color: var(--text-2); background: var(--surface);
+}
+.resume-card {
+  margin: 0 var(--s3) var(--s3); padding: var(--s3);
+  border: 1px solid var(--hairline-strong); border-left: 2px solid var(--st-stale);
+  border-radius: var(--r2); background: var(--surface-raised);
+}
+.resume-card .rc-top { display: flex; align-items: center; gap: 7px; margin-bottom: 6px; font-size: var(--fs-ui); }
+.resume-card p { font-size: var(--fs-meta); color: var(--text-2); line-height: 1.5; margin-bottom: 10px; }
+.resume-card .rc-actions { display: flex; align-items: center; gap: 6px; }
+/* §3.7's fourth canonical state: two transcript panels, side by side at 1440 and stacked
+   at 800. BOTH panes are always rendered — a switcher that shows one at a time is a
+   different feature, and §2.5's "up to two panels side-by-side" is not it. */
+.cmp2 { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+/* SIDE BY SIDE IS THE SPECIFIED LAYOUT AT >=900px. §2.5: "Up to two panels side-by-side",
+   scoped to >=900px by the operator's 2026-07-30 amendment (below 900px the pair stacks —
+   see .cmp-panes.stack). The --cmp-pane-min variable is the floor a pane may not go under;
+   below two of those the PAIR scrolls horizontally rather than one pane disappearing,
+   because a compare that degrades into a switcher is a different feature. data-layout is on
+   the element so the §3.7 gate test can assert the composition rather than infer it from a
+   class name. */
+.cmp-panes {
+  flex: 1; min-height: 0; display: grid;
+  --cmp-pane-min: 340px;
+  grid-template-columns: repeat(2, minmax(var(--cmp-pane-min), 1fr));
+  overflow-x: auto; overflow-y: hidden;
+}
+.cmp-panes > .tp + .tp { border-left: 1px solid var(--hairline); }
+/* The <900px composition, per the operator's §2.5 amendment: stacked. Both panes keep the
+   full column width, so a row renders identically in both; the pair scrolls sequentially.
+   The seam between panes is heavier than any rule inside one, because the failure mode of a
+   stacked compare — one agent's rows read as the other's — is sharper than side by side:
+   the two panes share a column, a width and an edge. */
+.cmp-panes.stack {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr) minmax(0, 1fr);
+  overflow-x: hidden;
+}
+.cmp-panes.stack > .tp + .tp { border-left: 0; border-top: 2px solid var(--hairline-strong); }
+/* What a ~355px pane costs, made visible rather than hidden: the gutter narrows, the facts
+   row wraps, and the prose column stops being the binding constraint. Nothing is removed —
+   a pane that dropped rows would not be comparable to the one beside it. */
+.w800 .cmp-panes[data-layout="side-by-side"] .tp-head { padding: var(--s2) var(--s2) 7px; }
+.w800 .cmp-panes[data-layout="side-by-side"] .tp-head .r1 {
+  flex-wrap: wrap; gap: 5px; margin-bottom: 6px;
+}
+.w800 .cmp-panes[data-layout="side-by-side"] .tp-head .r1 h2 { font-size: var(--fs-ui); }
+.w800 .cmp-panes[data-layout="side-by-side"] .tp-head .r1 .aidx,
+.w800 .cmp-panes[data-layout="side-by-side"] .tp-head .r1 .chip { white-space: nowrap; }
+/* The per-pane controls take a line of their own rather than being cut off or turned into
+   unlabelled icons — at 355px the labels are what tells the operator that "Close" closes
+   THIS pane and not the comparison. */
+.w800 .cmp-panes[data-layout="side-by-side"] .tp-head .r1 .right { flex-basis: 100%; }
+.w800 .cmp-panes[data-layout="side-by-side"] .tp-facts { line-height: 1.5; }
+.w800 .cmp-panes[data-layout="side-by-side"] .tp-facts > span { padding: 0 6px; }
+.w800 .cmp-panes[data-layout="side-by-side"] .attempt-bar { flex-wrap: wrap; }
+.w800 .cmp-panes[data-layout="side-by-side"] .trow {
+  grid-template-columns: 44px minmax(0, 1fr); gap: var(--s2); padding-right: var(--s2);
+}
+.w800 .cmp-panes[data-layout="side-by-side"] .tp-body { padding-top: var(--s2); }
+.w800 .cmp-panes[data-layout="side-by-side"] .tp-foot { padding: 7px var(--s2); }
+.w800 .cmp-panes[data-layout="side-by-side"] .composer .hint { flex-wrap: wrap; }
+.w800 .cmp-panes[data-layout="side-by-side"] .prompt-block .ph { flex-wrap: wrap; }
+.cmp-bar {
+  display: flex; align-items: center; gap: var(--s2); height: 34px; padding: 0 var(--s3);
+  border-bottom: 1px solid var(--hairline); flex: none; font-size: var(--fs-meta);
+}
+.cmp-bar .cmp-who { display: flex; align-items: center; gap: 6px; }
+.cmp-bar .cmp-who .aidx { font: 400 var(--fs-micro)/1 var(--mono); color: var(--text-3); }
+.cmp-bar .k { font: 400 var(--fs-micro)/1 var(--mono); color: var(--text-3); }
+.cmp-right { margin-left: auto; display: flex; align-items: center; gap: 6px; }
+.cmp-pin {
+  display: flex; align-items: center; gap: var(--s2); padding: 7px var(--s3);
+  background: var(--surface); border-bottom: 1px solid var(--hairline); flex: none;
+  font-size: var(--fs-micro); color: var(--text-2);
+}
+.cmp-pin .k { font: 400 var(--fs-micro)/1 var(--mono); color: var(--text-3); }
+.cmp-pin .delta { font: 400 var(--fs-micro)/1 var(--mono); font-variant-numeric: tabular-nums; }
+/* In the stacked form the pane headers carry the identity of the agent whose rows follow,
+   so they stay; what goes is the vertical padding a full-height panel can afford. */
+.cmp-panes.stack .tp-head { padding-top: var(--s2); padding-bottom: 7px; }
+.cmp-panes.stack .attempt-bar { margin-top: 7px; }
+.mk {   /* numbered annotation marker */
+  position: absolute; z-index: 40;
+  display: grid; place-items: center;
+  width: 17px; height: 17px; border-radius: 999px;
+  background: var(--canvas); border: 1px solid var(--accent); color: var(--accent);
+  font: 500 var(--fs-micro)/1 var(--mono);
+}
+.notes { width: 1440px; margin: var(--s4) auto 0; }
+.notes ol { counter-reset: n; }
+.notes li {
+  counter-increment: n; position: relative;
+  padding: 5px 0 5px 30px; font-size: var(--fs-meta); line-height: 1.5;
+  color: var(--text-2); border-top: 1px dotted var(--hairline-strong);
+}
+.notes li::before {
+  content: counter(n); position: absolute; left: 0; top: 6px;
+  display: grid; place-items: center; width: 17px; height: 17px; border-radius: 999px;
+  border: 1px solid var(--accent); color: var(--accent); font: 500 var(--fs-micro)/1 var(--mono);
+}
+.notes li code, .prose code {
+  font: 400 11px/1.4 var(--mono);
+  background: var(--surface-raised); border: 1px solid var(--hairline);
+  border-radius: var(--r1); padding: 1px 4px;
+}
+.notes li b { color: var(--text); font-weight: 500; }
+
+/* ==========================================================================
+   Primitives
+   ========================================================================== */
+.card {
+  background: var(--surface);
+  border: 1px solid var(--hairline);
+  border-radius: var(--r2);
+}
+.raised { background: var(--surface-raised); box-shadow: var(--shadow-raised); }
+
+/* Buttons: quiet by default (§3.7 action hierarchy). */
+.btn {
+  display: inline-flex; align-items: center; gap: 5px;
+  height: 24px; padding: 0 9px;
+  border: 1px solid var(--border); border-radius: var(--r1);
+  font: 500 var(--fs-micro)/1 var(--sans); color: var(--text-2);
+  white-space: nowrap;
+  transition: background var(--d-hover) var(--ease), color var(--d-hover) var(--ease),
+              border-color var(--d-hover) var(--ease);
+}
+.btn:hover { background: var(--surface-raised); color: var(--text); border-color: var(--text-3); }
+.btn.sm { height: 20px; padding: 0 7px; }
+.btn.lg { height: 28px; padding: 0 12px; font-size: var(--fs-meta); }
+.btn.primary {
+  background: var(--accent); border-color: transparent; color: var(--on-accent); font-weight: 500;
+}
+.btn.primary:hover { background: color-mix(in oklab, var(--accent) 88%, var(--text)); color: var(--on-accent); }
+.btn.danger { color: var(--st-failed); }
+.btn.danger:hover { color: var(--st-failed); border-color: var(--st-failed); background: var(--st-failed-tint); }
+.btn.ghost { border-color: transparent; }
+.btn.ghost:hover { border-color: var(--hairline-strong); }
+.btn[disabled], .btn[aria-disabled="true"] { opacity: 0.5; cursor: not-allowed; }
+.btn .ic { opacity: 0.85; }
+.icb {
+  display: grid; place-items: center; width: 24px; height: 24px;
+  border-radius: var(--r1); color: var(--text-3);
+  transition: background var(--d-hover) var(--ease), color var(--d-hover) var(--ease);
+}
+.icb:hover { background: var(--surface-raised); color: var(--text); }
+
+/* Icons */
+.ic { width: 16px; height: 16px; flex: none; stroke: currentColor; fill: none;
+      stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
+.ic-12 { width: 12px; height: 12px; stroke-width: 1.7; }
+.ic-14 { width: 14px; height: 14px; stroke-width: 1.6; }
+.ic-20 { width: 20px; height: 20px; stroke-width: 1.4; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.ic-spin { animation: spin 1.1s linear infinite; transform-origin: 50% 50%; }
+
+/* §3.2 status chips — the only saturated thing at rest. */
+.chip {
+  display: inline-flex; align-items: center; gap: 4px;
+  height: 18px; padding: 0 6px 0 4px;
+  border-radius: var(--r1);
+  font: 500 var(--fs-micro)/1 var(--sans);
+  white-space: nowrap;
+}
+.chip .ic { width: 12px; height: 12px; stroke-width: 1.7; }
+.chip.q  { background: var(--st-queued-tint);    color: var(--st-queued); }
+.chip.r  { background: var(--st-running-tint);   color: var(--st-running); }
+.chip.d  { background: var(--st-done-tint);      color: var(--st-done); }
+.chip.c  { background: var(--st-cached-tint);    color: var(--st-cached); }
+.chip.f  { background: var(--st-failed-tint);    color: var(--st-failed); }
+.chip.x  { background: var(--st-cancelled-tint); color: var(--st-cancelled); }
+.chip.s  { background: var(--st-stale-tint);     color: var(--st-stale); }
+.chip.b  { background: var(--st-blocked-tint);   color: var(--st-blocked); }
+.chip.st { background: var(--st-steered-tint);   color: var(--st-steered); }
+/* Glyph-only status marks (quiet lists suppress the done check per §3.2). */
+.g   { display: inline-grid; place-items: center; width: 16px; height: 16px; flex: none; }
+.g.q { color: var(--st-queued); }  .g.r { color: var(--st-running); }
+.g.d { color: var(--st-done); }    .g.c { color: var(--st-cached); }
+.g.f { color: var(--st-failed); }  .g.x { color: var(--st-cancelled); }
+.g.s { color: var(--st-stale); }   .g.b { color: var(--st-blocked); }
+.g.u { color: var(--text-3); }     /* unknown state -> neutral info, never a check */
+.g.orphan { opacity: 0.45; }
+
+/* Neutral badges (detached log, resumed xN, budget, approximate, ...) */
+.badge {
+  display: inline-flex; align-items: center; gap: 3px;
+  height: 16px; padding: 0 5px;
+  border: 1px solid var(--hairline-strong); border-radius: var(--r1);
+  font: 500 var(--fs-micro)/1 var(--sans); letter-spacing: 0.02em; color: var(--text-3);
+  white-space: nowrap;
+}
+.badge.warn { border-color: color-mix(in oklab, var(--st-stale) 40%, var(--canvas));
+              color: var(--st-stale); background: var(--st-stale-tint); }
+.badge.ask  { border-color: color-mix(in oklab, var(--st-blocked) 40%, var(--canvas));
+              color: var(--st-blocked); background: var(--st-blocked-tint); }
+.badge.replay { border-color: color-mix(in oklab, var(--st-cached) 40%, var(--canvas));
+                color: var(--st-cached); background: var(--st-cached-tint); }
+.badge.err { border-color: color-mix(in oklab, var(--st-failed) 40%, var(--canvas));
+             color: var(--st-failed); background: var(--st-failed-tint);
+             font-family: var(--mono); font-size: var(--fs-micro); }
+.count {   /* count pill in section headers */
+  font: 500 var(--fs-micro)/1 var(--mono); color: var(--text-3);
+  background: var(--surface-raised); border: 1px solid var(--hairline);
+  border-radius: var(--r1); padding: 2px 4px;
+}
+
+/* §3.2 adapter monogram badges. Never a vendor brand mark (parity #57). */
+.ad {
+  display: inline-grid; place-items: center; flex: none;
+  width: 16px; height: 16px; border-radius: var(--r2);
+  font: 600 9px/1 var(--sans); letter-spacing: 0.01em;
+  border: 1px solid transparent;
+}
+.ad-claude   { background: var(--ad-claude-tint);   color: var(--ad-claude);
+               border-color: color-mix(in oklab, var(--ad-claude) 26%, var(--canvas)); }
+.ad-codex    { background: var(--ad-codex-tint);    color: var(--ad-codex);
+               border-color: color-mix(in oklab, var(--ad-codex) 26%, var(--canvas)); }
+.ad-amp      { background: var(--ad-amp-tint);      color: var(--ad-amp);
+               border-color: color-mix(in oklab, var(--ad-amp) 26%, var(--canvas)); }
+.ad-droid    { background: var(--ad-droid-tint);    color: var(--ad-droid);
+               border-color: color-mix(in oklab, var(--ad-droid) 26%, var(--canvas)); }
+.ad-opencode { background: var(--ad-opencode-tint); color: var(--ad-opencode);
+               border-color: color-mix(in oklab, var(--ad-opencode) 26%, var(--canvas)); }
+.ad-pi       { background: var(--ad-pi-tint);       color: var(--ad-pi);
+               border-color: color-mix(in oklab, var(--ad-pi) 26%, var(--canvas)); }
+.ad-mock     { background: var(--ad-mock-tint);     color: var(--ad-mock);
+               border-color: color-mix(in oklab, var(--ad-mock) 26%, var(--canvas)); }
+.ad-unknown  { background: var(--ad-unknown-tint);  color: var(--ad-unknown);
+               border-color: color-mix(in oklab, var(--ad-unknown) 26%, var(--canvas)); }
+.ad-cluster { display: inline-flex; align-items: center; gap: 3px; }
+.ad-cluster .more { font: 500 var(--fs-micro)/1 var(--mono); color: var(--text-3); }
+
+/* Inputs */
+.inp {
+  width: 100%; height: 28px; padding: 0 8px;
+  background: var(--canvas); color: var(--text);
+  border: 1px solid var(--border); border-radius: var(--r1);
+  font-size: var(--fs-meta);
+}
+.inp::placeholder { color: var(--text-3); }
+.inp:focus-visible { border-color: var(--accent); outline-offset: 1px; }
+.inp[disabled] { background: var(--surface-raised); color: var(--text-3); border-color: var(--hairline-strong); }
+.search { position: relative; }
+.search .ic { position: absolute; left: 7px; top: 50%; transform: translateY(-50%); color: var(--text-3); }
+.search .inp { padding-left: 27px; }
+
+/* Filter chips */
+.fchip {
+  display: inline-flex; align-items: center; gap: 5px;
+  height: 24px; padding: 0 9px;
+  border: 1px solid var(--hairline-strong); border-radius: var(--r1);
+  font: 500 var(--fs-micro)/1 var(--sans); color: var(--text-2);
+  transition: background var(--d-hover) var(--ease);
+}
+.fchip:hover { background: var(--surface-raised); }
+.fchip[aria-pressed="true"] {
+  background: var(--surface-selected); border-color: color-mix(in oklab, var(--accent) 38%, var(--canvas));
+  color: var(--text);
+}
+.fchip .n { font-size: var(--fs-micro); color: var(--text-3); }
+
+/* Scroll fade affordance (#107): shown only where content is actually clipped. */
+.fade-b { position: relative; }
+.fade-b::after {
+  content: ""; position: absolute; inset: auto 0 0 0; height: 24px; pointer-events: none;
+  background: linear-gradient(to top, var(--canvas), transparent);
+}
+.fade-b.on-surface::after { background: linear-gradient(to top, var(--surface), transparent); }
+
+/* ==========================================================================
+   App shell (§3.7 cockpit grid)
+   ========================================================================== */
+.app { position: relative; display: flex; flex-direction: column; height: 100%; background: var(--canvas); }
+.topbar {
+  display: flex; align-items: center; gap: var(--s4);
+  height: 44px; padding: 0 var(--s4);
+  border-bottom: 1px solid var(--hairline);
+  background: var(--canvas);
+}
+.brand { display: flex; align-items: baseline; gap: 7px; }
+.brand .wm {
+  font: 600 var(--fs-meta)/1 var(--sans); letter-spacing: 0.02em;
+}
+.brand .wm i { font-style: normal; color: var(--accent); }
+.brand .v { font: 400 var(--fs-micro)/1 var(--mono); color: var(--text-3); }
+.topbar .nav { display: flex; gap: 2px; margin-left: var(--s3); }
+.topbar .nav a {
+  padding: 4px 8px; border-radius: var(--r1);
+  font: 500 var(--fs-meta)/1.2 var(--sans); color: var(--text-3); text-decoration: none;
+}
+.topbar .nav a[aria-current] { color: var(--text); background: var(--surface-raised); }
+.topbar-right { margin-left: auto; display: flex; align-items: center; gap: var(--s2); }
+.ro-chip {
+  display: inline-flex; align-items: center; gap: 5px; height: 20px; padding: 0 7px;
+  border: 1px dashed var(--hairline-strong); border-radius: var(--r1);
+  font: 500 var(--fs-micro)/1 var(--sans); letter-spacing: 0.04em; text-transform: uppercase;
+  color: var(--text-3);
+}
+
+.cockpit { display: grid; height: 860px; min-height: 0; }
+.cockpit.full  { grid-template-columns: 280px minmax(640px, 1fr) 320px; }
+.cockpit.split { grid-template-columns: 48px minmax(400px, 741px) 607px 44px; }
+/* Compare: both rails collapse to strips so the two panels get 674px each — over the 607px
+   the row types were designed at, which is what makes the two sides comparable. */
+.cockpit.compare { grid-template-columns: 48px minmax(0, 1fr) 44px; }
+.col { min-width: 0; min-height: 0; display: flex; flex-direction: column; }
+.col + .col { border-left: 1px solid var(--hairline); }
+
+.sect {
+  display: flex; align-items: center; gap: var(--s2);
+  height: 28px; padding: 0 var(--s3); flex: none;
+  border-bottom: 1px solid var(--hairline);
+  background: var(--canvas);
+}
+.sect .lbl { white-space: nowrap; }
+.sect-right { margin-left: auto; display: flex; align-items: center; gap: var(--s1); }
+.scroller { overflow: hidden; flex: 1; min-height: 0; }
+
+/* Run rail (§2.2) */
+.rail-run .rrow {
+  display: grid; grid-template-columns: 16px 1fr auto; align-items: center;
+  gap: var(--s2); padding: 7px var(--s3) 7px 10px;
+  border-left: 2px solid transparent; cursor: pointer;
+  transition: background var(--d-hover) var(--ease);
+}
+.rail-run .rrow:hover { background: var(--surface); }
+.rail-run .rrow[aria-current] {
+  background: var(--surface-selected); border-left-color: var(--accent);
+}
+.rail-run .rrow .nm { font-size: var(--fs-meta); font-weight: 500; }
+.rail-run .rrow .sub { font: 400 var(--fs-micro)/1.3 var(--mono); color: var(--text-3); margin-top: 2px; }
+.rail-run .rrow .when { font: 400 var(--fs-micro)/1 var(--mono); color: var(--text-3); }
+
+/* Collapsed rail -> icon strip */
+.strip {
+  display: flex; flex-direction: column; align-items: center; gap: var(--s3);
+  padding: var(--s3) 0; background: var(--canvas);
+}
+.strip .vlbl {
+  writing-mode: vertical-rl; text-orientation: mixed;
+  font: 600 var(--fs-micro)/1 var(--sans); letter-spacing: 0.12em; text-transform: uppercase;
+  color: var(--text-3); margin-top: var(--s2);
+}
+.strip .dotn {
+  display: grid; place-items: center; min-width: 16px; height: 16px; padding: 0 3px;
+  border-radius: var(--r1); background: var(--st-blocked-tint); color: var(--st-blocked);
+  font: 600 var(--fs-micro)/1 var(--mono);
+}
+
+/* Tabs (§2.4) */
+.tabs { display: flex; align-items: stretch; height: 34px; flex: none;
+        border-bottom: 1px solid var(--hairline); padding: 0 var(--s3); gap: 2px; }
+.tabs button {
+  display: inline-flex; align-items: center; gap: 6px; padding: 0 10px;
+  font: 500 var(--fs-meta)/1 var(--sans); color: var(--text-3);
+  border-bottom: 2px solid transparent; margin-bottom: -1px;
+  transition: color var(--d-hover) var(--ease);
+}
+.tabs button:hover { color: var(--text); }
+.tabs button[aria-selected="true"] { color: var(--text); border-bottom-color: var(--accent); }
+.tabs .kb { margin-left: auto; display: flex; align-items: center; gap: var(--s2); }
+
+/* ==========================================================================
+   Home (§2.3)
+   ========================================================================== */
+.home { padding: var(--s5) var(--s6) 0; }
+.home-head { display: flex; align-items: flex-end; gap: var(--s3); margin-bottom: var(--s4); }
+.home-head h1 { font: 500 var(--fs-screen)/1.2 var(--sans); }
+.home-head .sub { font-size: var(--fs-meta); color: var(--text-3); padding-bottom: 2px; }
+
+/* Attention strip — the operator's work queue, not a list (§2.3 / Q1). */
+.attn { margin-bottom: var(--s5); }
+.attn-head { display: flex; align-items: center; gap: var(--s2); margin-bottom: var(--s2); }
+.attn-grid { display: grid; grid-template-columns: 1.35fr 1fr 1fr; gap: var(--s3); }
+.acard {
+  position: relative; padding: var(--s3) var(--s3) var(--s3) var(--s4);
+  background: var(--surface); border: 1px solid var(--hairline); border-radius: var(--r2);
+}
+.acard::before {
+  content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 3px;
+  border-radius: var(--r2) 0 0 var(--r2);
+}
+.acard.ask::before   { background: var(--st-blocked); }
+.acard.stale::before { background: var(--st-stale); }
+.acard.live::before  { background: var(--st-running); }
+.acard-top { display: flex; align-items: center; gap: var(--s2); margin-bottom: 7px; }
+.acard-top .nm { font-size: var(--fs-meta); font-weight: 500; }
+.acard-top .rid { font: 400 var(--fs-micro)/1 var(--mono); color: var(--text-3); }
+.acard-top .right { margin-left: auto; display: flex; align-items: center; gap: 6px; }
+.qtext {
+  font-size: var(--fs-meta); line-height: 1.5; color: var(--text);
+  border-left: 2px solid var(--st-blocked-tint); padding-left: 9px; margin-bottom: 10px;
+}
+.qtext .who { display: block; font: 400 var(--fs-micro)/1 var(--mono); color: var(--text-3); margin-bottom: 4px; }
+.answer { display: grid; grid-template-columns: 1fr auto; gap: 6px; }
+.answer .hint { grid-column: 1 / -1; font: 400 var(--fs-micro)/1 var(--mono); color: var(--text-3); }
+.acard .why { font-size: var(--fs-meta); color: var(--text-2); line-height: 1.5; margin-bottom: 10px; }
+.acard .why code { font: 400 11px/1 var(--mono); color: var(--text); }
+.acard-actions { display: flex; align-items: center; gap: 6px; }
+.ticker { display: grid; grid-template-columns: auto 1fr; gap: 3px var(--s3); align-items: baseline;
+          margin-bottom: 10px; }
+.ticker dt { font: 600 var(--fs-micro)/1.6 var(--sans); letter-spacing: 0.09em; text-transform: uppercase;
+             color: var(--text-3); }
+.ticker dd { margin: 0; font: 400 var(--fs-meta)/1.6 var(--mono); }
+.ticker dd b { font-weight: 500; }
+
+/* Run table (§2.3) */
+.rt { border: 1px solid var(--hairline); border-radius: var(--r2); background: var(--canvas);
+      overflow: hidden; }
+.rt-tools { display: flex; align-items: center; gap: var(--s2); padding: var(--s2) var(--s3);
+            border-bottom: 1px solid var(--hairline); }
+.rt-tools .search { width: 220px; margin-left: auto; }
+.rt-row {
+  display: grid;
+  grid-template-columns:
+    18px minmax(0, 1fr) 96px 74px 72px 78px 82px 82px;
+  align-items: center; gap: var(--s3);
+  padding: 0 var(--s3);
+  height: var(--row-run);
+  border-top: 1px solid var(--hairline);
+  border-left: 2px solid transparent;
+  transition: background var(--d-hover) var(--ease);
+}
+.rt-row.head {
+  height: 26px; border-top: 0; background: var(--surface);
+  border-bottom: 1px solid var(--hairline);
+}
+.rt-row.head > * { color: var(--text-3); }
+.rt-row.head .n, .rt-row.head .r { text-align: right; }
+.rt-row:not(.head):hover { background: var(--surface); cursor: pointer; }
+.rt-row:not(.head):hover .nm { color: var(--accent); }
+.rt-row.sel { background: var(--surface-selected); border-left-color: var(--accent); }
+.rt-name { display: flex; align-items: baseline; gap: var(--s2); min-width: 0; }
+.rt-name .nm { font-size: var(--fs-ui); font-weight: 500; }
+.rt-name .rid { font: 400 var(--fs-micro)/1 var(--mono); color: var(--text-3); }
+.rt-badges { display: flex; align-items: center; gap: 4px; margin-left: 2px; }
+.rt-row .n { font-size: var(--fs-meta); }
+.rt-row .when { font: 400 var(--fs-meta)/1 var(--mono); color: var(--text-3); text-align: right; }
+.rt-more { display: flex; justify-content: center; padding: var(--s3); border-top: 1px solid var(--hairline); }
+.progress-mini {
+  display: flex; align-items: center; gap: 6px; font: 400 var(--fs-meta)/1 var(--mono);
+}
+.progress-mini .bar { width: 34px; height: 3px; border-radius: 2px; background: var(--hairline); overflow: hidden; }
+.progress-mini .bar i { display: block; height: 100%; background: var(--text-3); }
+.progress-mini .bar i.r { background: var(--st-running); }
+.progress-mini .bar i.d { background: var(--st-done); }
+.progress-mini .bar i.f { background: var(--st-failed); }
+
+/* Skeleton / empty / error states (§2.3) */
+.skel { background: var(--hairline); border-radius: var(--r1); height: 9px; }
+.banner {
+  display: flex; align-items: center; gap: var(--s2);
+  padding: 9px var(--s3); border-radius: var(--r2);
+  background: var(--st-failed-tint);
+  border: 1px solid color-mix(in oklab, var(--st-failed) 32%, var(--canvas));
+  font-size: var(--fs-meta); color: var(--text);
+}
+.banner .ic { color: var(--st-failed); }
+.banner code { font: 400 11px/1 var(--mono); }
+.empty { display: grid; justify-items: center; gap: var(--s3); padding: var(--s8) var(--s6); text-align: center; }
+.empty h3 { font: 400 var(--fs-display)/1.25 var(--sans); }
+.empty p { font-size: var(--fs-meta); color: var(--text-2); max-width: 46ch; line-height: 1.55; }
+.snippet {
+  display: flex; align-items: center; gap: var(--s2);
+  padding: 8px 10px; background: var(--surface-raised);
+  border: 1px solid var(--hairline); border-radius: var(--r2);
+  font: 400 var(--fs-meta)/1 var(--mono);
+}
+.snippet .p { color: var(--text-3); }
+
+/* ==========================================================================
+   Cockpit (§2.4)
+   ========================================================================== */
+.rhead { padding: var(--s3) var(--s4) 10px; border-bottom: 1px solid var(--hairline); flex: none; }
+.rhead-top { display: flex; align-items: center; gap: var(--s2); margin-bottom: 10px; }
+.rhead-top h1 { font: 500 var(--fs-title)/1.2 var(--sans); }
+.rhead-top .rid {
+  display: inline-flex; align-items: center; gap: 4px;
+  font: 400 var(--fs-micro)/1 var(--mono); color: var(--text-3);
+  border: 1px solid transparent; border-radius: var(--r1); padding: 2px 4px;
+  transition: background var(--d-hover) var(--ease);
+}
+.rhead-top .rid:hover { background: var(--surface-raised); border-color: var(--hairline); color: var(--text-2); }
+.rhead-actions { margin-left: auto; display: flex; align-items: center; gap: 6px; }
+.live-detail {
+  display: inline-flex; align-items: center; gap: 5px;
+  font: 400 var(--fs-micro)/1 var(--mono); color: var(--text-3);
+}
+.live-detail::before {
+  content: ""; width: 4px; height: 4px; border-radius: 999px; background: var(--st-running);
+}
+.rhead-metrics {
+  display: flex; align-items: stretch; gap: 0; margin-bottom: 10px;
+  border: 1px solid var(--hairline); border-radius: var(--r2); background: var(--surface);
+  overflow: hidden;
+}
+.metric { padding: 7px var(--s3); min-width: 0; }
+.metric + .metric { border-left: 1px solid var(--hairline); }
+.metric .lbl { display: block; margin-bottom: 4px; }
+.metric .v { font: 400 var(--fs-ui)/1.15 var(--mono); font-variant-numeric: tabular-nums; }
+.metric .v b { font-weight: 500; }
+.metric .v .u { color: var(--text-3); }
+.metric.gauge-cell { flex: 1; }
+.metric.tick .v { color: var(--st-running); }
+
+/* Budget gauge (§2.4) — output tokens vs budget.total, soft ceiling. */
+.gauge { display: grid; gap: 5px; }
+.gauge-bar {
+  position: relative; height: 8px; border-radius: var(--r1);
+  background: var(--hairline); overflow: hidden;
+}
+.gauge-bar .fill { position: absolute; inset: 0 auto 0 0; background: var(--accent); }
+.gauge-bar .over {
+  position: absolute; top: 0; bottom: 0;
+  background:
+    repeating-linear-gradient(135deg,
+      var(--st-failed) 0 2px, transparent 2px 5px),
+    var(--st-failed-tint);
+}
+.gauge-bar .ceiling {
+  position: absolute; top: -2px; bottom: -2px; width: 1px;
+  background: var(--text); opacity: 0.55;
+}
+.gauge-legend { display: flex; align-items: baseline; gap: 6px;
+                font: 400 var(--fs-micro)/1 var(--mono); color: var(--text-3); }
+.gauge-legend b { color: var(--text); font-weight: 500; }
+.gauge-legend .over-l { color: var(--st-failed); }
+.gauge-legend .soft {
+  border: 1px dotted var(--hairline-strong); border-radius: var(--r1); padding: 1px 4px;
+  font-family: var(--sans); font-size: var(--fs-micro);
+}
+
+/* Resume lineage strip (§2.4) */
+.lineage { display: flex; align-items: center; gap: 5px; }
+.lineage .seg-l {
+  position: relative; height: 5px; border-radius: 1px; background: var(--text-3);
+}
+.lineage .seg-l.interrupted { background: var(--st-cancelled); }
+.lineage .seg-l.failed { background: var(--st-failed); }
+.lineage .seg-l.running { background: var(--st-running); }
+.lineage .seg-l.stub { background: repeating-linear-gradient(90deg, var(--st-failed) 0 2px, transparent 2px 4px); }
+.lineage .cap { font: 400 var(--fs-micro)/1 var(--mono); color: var(--text-3); }
+
+/* Last log line (parity #59) */
+.lastlog {
+  display: flex; align-items: center; gap: 7px; min-width: 0;
+  padding: 5px var(--s4); border-bottom: 1px solid var(--hairline);
+  background: var(--surface); flex: none;
+  font: 400 var(--fs-micro)/1.35 var(--mono); color: var(--text-2);
+}
+.lastlog .src {
+  font: 600 var(--fs-micro)/1 var(--sans); letter-spacing: 0.06em; text-transform: uppercase;
+  color: var(--text-3); border: 1px solid var(--hairline-strong); border-radius: var(--r1);
+  padding: 2px 4px; flex: none;
+}
+
+/* ---- Timeline / Gantt (§2.4) ------------------------------------------- */
+.tl { padding: var(--s3) var(--s4) var(--s4); overflow: hidden; }
+.tl-head { display: flex; align-items: center; gap: var(--s3); margin-bottom: 10px; }
+.tl-head .zoom { margin-left: auto; display: flex; align-items: center; gap: 4px; }
+.tl-note {
+  font-size: var(--fs-micro); color: var(--text-3); font-family: var(--mono);
+}
+/* Saturation: TWO separated series, never stacked. The top plot answers "am I at the
+   ceiling"; the rail beneath answers "how deep is the queue". Stacking them would bury
+   the ceiling rule, which is the one line the chart exists to show. */
+.sat { margin-bottom: 12px; }
+.sat-wrap { display: grid; grid-template-columns: 168px 1fr; }
+.sat-axes { display: grid; grid-template-rows: 40px 13px; padding-right: var(--s3); }
+.sat-axes > span { align-self: center; text-align: right; }
+.sat-body {
+  position: relative;
+  border: 1px solid var(--hairline); border-radius: var(--r1);
+  background: var(--surface); overflow: hidden;
+}
+.sat-plot { position: relative; height: 38px; }
+.sat-plot .step {
+  position: absolute; bottom: 0;
+  background: color-mix(in oklab, var(--accent) 42%, var(--surface));
+  border-top: 1px solid color-mix(in oklab, var(--accent) 70%, var(--surface));
+}
+.sat-plot .step.pinned {
+  background: color-mix(in oklab, var(--accent) 78%, var(--surface));
+  border-top-color: var(--accent);
+}
+.sat-plot .ceil {
+  position: absolute; left: 0; right: 0; height: 0;
+  border-top: 1px dashed var(--text-2);
+}
+.sat-plot .ceil span {
+  position: absolute; right: 4px; top: -15px;
+  font: 500 var(--fs-micro)/1 var(--mono); color: var(--text-2);
+  background: var(--surface); padding: 1px 3px;
+}
+.sat-plot .pin-band {
+  position: absolute; top: 0; bottom: 0;
+  background: color-mix(in oklab, var(--accent) 6%, transparent);
+  border-left: 1px dotted color-mix(in oklab, var(--accent) 50%, var(--surface));
+  border-right: 1px dotted color-mix(in oklab, var(--accent) 50%, var(--surface));
+}
+.sat-plot .pin-band span {
+  position: absolute; top: 1px; left: 5px;
+  font: 500 var(--fs-micro)/1 var(--mono); color: var(--accent);
+}
+.sat-rail {
+  position: relative; height: 16px;
+  border-top: 1px solid var(--hairline); background: var(--canvas);
+}
+.sat-rail .qd {
+  position: absolute; top: 1px;
+  background: repeating-linear-gradient(135deg, var(--text-3) 0 1px, transparent 1px 4px);
+}
+/* The queue-depth label sits ON the hatch it names, so it carries a canvas chip: at the
+   §3.1 floor of 11px (the 9px it used to be is not a tier the spec has) hatched strokes
+   read straight through the counters otherwise. */
+.sat-rail .qn {
+  position: absolute; top: 2px; font: 500 var(--fs-micro)/12px var(--mono); color: var(--text-2);
+  margin-left: 5px; padding: 0 4px; background: var(--canvas); border-radius: var(--r1);
+}
+.sat-legend { display: flex; align-items: center; gap: var(--s3); margin: 6px 0 0 168px;
+              font: 400 var(--fs-micro)/1 var(--mono); color: var(--text-3); }
+.sat-legend i { display: inline-block; width: 12px; height: 7px; border-radius: 1px; margin-right: 5px;
+                vertical-align: -1px; border: 1px solid var(--hairline-strong); }
+
+.ruler { position: relative; height: 16px; margin-left: 168px; border-bottom: 1px solid var(--hairline); }
+.ruler .tk { position: absolute; top: 0; bottom: 0; border-left: 1px solid var(--hairline); }
+.ruler .tk span { position: absolute; left: 4px; top: 2px; font: 400 var(--fs-micro)/1 var(--mono); color: var(--text-3); }
+.lanes { position: relative; }
+.lanes .grid { position: absolute; inset: 0; pointer-events: none; }
+.lanes .grid .gl { position: absolute; top: 0; bottom: 0; border-left: 1px solid var(--hairline); opacity: 0.6; }
+.lane {
+  position: relative; display: grid; grid-template-columns: 168px 1fr;
+  align-items: center; height: var(--row-agent);
+  border-bottom: 1px solid var(--hairline);
+}
+.lane:hover { background: var(--surface); }
+.lane-label { display: flex; align-items: center; gap: 6px; padding-right: var(--s3); min-width: 0; }
+.lane-label .idx { font: 400 var(--fs-micro)/1 var(--mono); color: var(--text-3); width: 14px; text-align: right; flex: none; }
+.lane-label .nm { font-size: var(--fs-meta); }
+.lane-track { position: relative; height: 100%; }
+.bar {
+  position: absolute; top: 50%; transform: translateY(-50%);
+  height: 14px; border-radius: var(--r1); display: flex; align-items: stretch; overflow: hidden;
+}
+.bar .wait {
+  background:
+    repeating-linear-gradient(135deg, var(--text-3) 0 1px, transparent 1px 4px),
+    var(--surface-raised);
+  border: 1px solid var(--hairline-strong); border-right: 0;
+  border-radius: var(--r1) 0 0 var(--r1);
+}
+.bar .exec { border-radius: 0 var(--r1) var(--r1) 0; position: relative; }
+.bar.nowait .exec { border-radius: var(--r1); }
+.bar.nowait .wait { display: none; }
+.bar .exec.d { background: var(--st-done); }
+.bar .exec.r { background: var(--st-running); }
+.bar .exec.f { background: var(--st-failed); }
+.bar .exec.c { background: var(--st-cached); }
+.bar .exec.x { background: var(--st-cancelled); }
+.bar .exec .notch { position: absolute; top: 3px; bottom: 3px; width: 1px; background: var(--canvas); opacity: 0.5; }
+.bar.open .wait { border-right: 1px dashed var(--hairline-strong); border-radius: var(--r1); }
+.bar-meta {
+  position: absolute; top: 50%; transform: translateY(-50%);
+  font: 400 var(--fs-micro)/1 var(--mono); color: var(--text-3); white-space: nowrap;
+}
+.quiet-tag {
+  display: inline-flex; align-items: center; gap: 3px;
+  height: 15px; padding: 0 5px; border-radius: var(--r1);
+  background: var(--st-stale-tint); color: var(--st-stale);
+  font: 500 var(--fs-micro)/1 var(--sans); white-space: nowrap;
+}
+.now-line { position: absolute; top: 0; bottom: 0; width: 1px; background: var(--st-running); opacity: 0.6; }
+.now-line span {
+  position: absolute; top: -15px; left: 3px; font: 500 var(--fs-micro)/1 var(--mono); color: var(--st-running);
+}
+
+/* ---- Structure / DAG (§2.4) -------------------------------------------- */
+.dag { padding: var(--s4); display: grid; gap: var(--s3); }
+.node { border: 1px solid var(--hairline); border-radius: var(--r2); background: var(--surface); }
+.node > .nhead {
+  display: flex; align-items: center; gap: var(--s2);
+  padding: 6px 10px; border-bottom: 1px solid var(--hairline);
+}
+.node > .nhead .kind {
+  font: 500 var(--fs-micro)/1 var(--mono); color: var(--text);
+}
+.node > .nhead .roll { margin-left: auto; display: flex; align-items: center; gap: var(--s3);
+                       font: 400 var(--fs-micro)/1 var(--mono); color: var(--text-3); }
+.node > .nbody { padding: 10px; display: grid; gap: 7px; }
+.fan { display: grid; gap: 7px; }
+.fan-row { display: grid; grid-template-columns: 54px 1fr; align-items: center; gap: var(--s2); }
+.fan-row .ilbl { font: 400 var(--fs-micro)/1 var(--mono); color: var(--text-3); }
+.pipe { display: grid; gap: 7px; }
+.pipe-head { display: grid; gap: var(--s2); grid-template-columns: 54px repeat(2, 1fr); }
+.pipe-row { display: grid; gap: var(--s2); grid-template-columns: 54px repeat(2, 1fr); align-items: center; }
+.pipe-row .ilbl { font: 400 var(--fs-micro)/1 var(--mono); color: var(--text-3); }
+.achip {
+  display: flex; align-items: center; gap: 6px; min-width: 0;
+  padding: 5px 8px; border-radius: var(--r1);
+  border: 1px solid var(--hairline-strong); background: var(--canvas);
+  transition: border-color var(--d-hover) var(--ease);
+}
+.achip:hover { border-color: var(--text-3); }
+.achip .nm { font-size: var(--fs-meta); font-weight: 500; }
+.achip .m { margin-left: auto; display: flex; align-items: center; gap: var(--s2);
+            font: 400 var(--fs-micro)/1 var(--mono); color: var(--text-3); }
+.achip.q { border-style: dashed; }
+.achip.q .nm { color: var(--text-2); }
+.achip.f { border-color: color-mix(in oklab, var(--st-failed) 40%, var(--canvas)); background: var(--st-failed-tint); }
+.achip.r { border-color: color-mix(in oklab, var(--st-running) 45%, var(--canvas)); }
+.arrow { display: grid; place-items: center; color: var(--text-3); }
+
+/* ---- Agents table (§2.4) ----------------------------------------------- */
+.at { overflow: hidden; }
+.at-row {
+  display: grid;
+  grid-template-columns:
+    26px minmax(0, 1.5fr) 128px 96px 108px 58px 66px 66px 66px 62px minmax(0, 0.9fr) 44px 44px;
+  align-items: center; gap: var(--s2);
+  height: var(--row-agent); padding: 0 var(--s4);
+  border-bottom: 1px solid var(--hairline);
+  border-left: 2px solid transparent;
+}
+.at-row.head { height: 26px; background: var(--surface); position: sticky; top: 0; }
+.at-row.head > * { color: var(--text-3); }
+.at-row.head .r { text-align: right; }
+.at-row.head button { display: inline-flex; align-items: center; gap: 3px; color: inherit; font: inherit; }
+.at-row.head .sorted { color: var(--text); }
+.at-row:not(.head):hover { background: var(--surface); }
+.at-row.sel { background: var(--surface-selected); border-left-color: var(--accent); }
+.at-row .idx { font: 400 var(--fs-micro)/1 var(--mono); color: var(--text-3); text-align: right; }
+.at-row .lab { display: flex; align-items: center; gap: 6px; min-width: 0; font-size: var(--fs-meta); }
+.at-row .lab .nm { font-weight: 500; }
+.at-row .mdl { display: flex; align-items: center; gap: 5px; min-width: 0;
+               font: 400 var(--fs-micro)/1 var(--mono); color: var(--text-2); }
+.at-row .n { font-size: var(--fs-micro); }
+.at-row .ph { font-size: var(--fs-micro); color: var(--text-2); }
+.at-row .errmsg { font: 400 var(--fs-micro)/1 var(--mono); color: var(--st-failed); }
+.at-row .tool { font: 400 var(--fs-micro)/1 var(--mono); color: var(--text-2); }
+.at-row .absent { color: var(--hairline-strong); }
+
+/* Phase tree (§2.4.1) */
+.ptree { padding: var(--s2) 0; }
+.phead {
+  display: grid; grid-template-columns: 16px 16px minmax(0, 1fr) auto auto;
+  align-items: center; gap: var(--s2);
+  height: 30px; padding: 0 var(--s4);
+  background: var(--surface); border-bottom: 1px solid var(--hairline);
+  border-top: 1px solid var(--hairline);
+  width: 100%; text-align: left;
+}
+.phead .pn { font: 500 var(--fs-meta)/1 var(--sans); }
+.phead .cnt { font: 400 var(--fs-micro)/1 var(--mono); color: var(--text-3); }
+.phead .chev { color: var(--text-3); transition: transform var(--d-disc) var(--ease); }
+.phead[aria-expanded="true"] .chev { transform: rotate(90deg); }
+.phead.pending .pn { color: var(--text-3); }
+.pbody .at-row { padding-left: 44px; }
+.ptoggled { display: inline-flex; align-items: center; gap: 3px;
+            font: 400 var(--fs-micro)/1 var(--mono); color: var(--accent); }
+
+/* ---- Log lane (§2.4) --------------------------------------------------- */
+.loglane { border-top: 1px solid var(--hairline); background: var(--surface); flex: none; }
+.log-rows { padding: 4px 0; }
+.log-row {
+  display: grid; grid-template-columns: 58px 76px 1fr; gap: var(--s2);
+  padding: 2px var(--s4); font: 400 var(--fs-micro)/1.5 var(--mono);
+}
+.log-row:hover { background: var(--surface-raised); }
+.log-row .t { color: var(--text-3); }
+/* The source lane label moved 9px → 11px with the rest of the scale (§3.1 has no 9px tier
+   outside §3.2's monogram), so the column it sits in widened to fit "WORKFLOW" at the
+   tracking it is set in. Nothing else in the row moved. */
+.log-row .s { font: 600 var(--fs-micro)/1.6 var(--sans); letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-3); }
+.log-row .s.engine { color: var(--st-cached); }
+.log-row.warn .m { color: var(--st-stale); }
+.log-row.err .m { color: var(--st-failed); }
+.log-row .aref { color: var(--accent); }
+
+/* ==========================================================================
+   Inbox rail (§2.4)
+   ========================================================================== */
+.inbox-group { border-bottom: 1px solid var(--hairline); }
+.qitem { padding: 10px var(--s3); border-bottom: 1px solid var(--hairline); }
+.qitem:last-child { border-bottom: 0; }
+.qitem .qh { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; }
+.qitem .qh .ago { margin-left: auto; font: 400 var(--fs-micro)/1 var(--mono); color: var(--text-3); }
+.qitem .qb { font-size: var(--fs-meta); line-height: 1.5; margin-bottom: 8px; }
+.qitem.answered { background: var(--surface); }
+.qitem.answered .qb { color: var(--text-2); }
+.qitem .ans {
+  display: flex; gap: 6px; align-items: baseline;
+  font: 400 var(--fs-micro)/1.5 var(--mono); color: var(--text);
+  background: var(--surface-raised); border: 1px solid var(--hairline);
+  border-left: 2px solid var(--st-done); border-radius: var(--r1); padding: 5px 7px;
+}
+.mitem { display: grid; gap: 5px; padding: 9px var(--s3); border-bottom: 1px solid var(--hairline); }
+.mitem .mh { display: flex; align-items: center; gap: 6px; }
+.mitem .mh .who { font: 500 var(--fs-micro)/1 var(--sans); }
+.mitem .mh .ago { margin-left: auto; font: 400 var(--fs-micro)/1 var(--mono); color: var(--text-3); }
+.mitem .mb { font-size: var(--fs-meta); line-height: 1.5; color: var(--text-2); }
+.mitem .mf { display: flex; align-items: center; gap: 6px; font: 400 var(--fs-micro)/1 var(--mono); color: var(--text-3); }
+.verdict {
+  display: inline-flex; align-items: center; height: 15px; padding: 0 5px; border-radius: var(--r1);
+  font: 500 var(--fs-micro)/1 var(--sans);
+}
+.verdict.live { background: var(--st-done-tint); color: var(--st-done); }
+.verdict.queued { background: var(--st-queued-tint); color: var(--st-queued); }
+.verdict.dropped { background: var(--st-failed-tint); color: var(--st-failed); }
+
+/* ==========================================================================
+   Transcript (§2.5)
+   ========================================================================== */
+.tp { display: flex; flex-direction: column; min-width: 0; }
+.tp-head { padding: var(--s3) var(--s3) 9px; border-bottom: 1px solid var(--hairline); flex: none; }
+.tp-head .r1 { display: flex; align-items: center; gap: var(--s2); margin-bottom: 7px; }
+.tp-head .r1 h2 { font: 500 var(--fs-title)/1.2 var(--sans); }
+.tp-head .r1 .aidx { font: 400 var(--fs-micro)/1 var(--mono); color: var(--text-3); }
+.tp-head .r1 .right { margin-left: auto; display: flex; align-items: center; gap: 4px; }
+.tp-facts { display: flex; align-items: center; gap: 0; flex-wrap: wrap;
+            font: 400 var(--fs-micro)/1 var(--mono); color: var(--text-2); }
+.tp-facts > span { padding: 0 9px; border-left: 1px solid var(--hairline); }
+.tp-facts > span:first-child { padding-left: 0; border-left: 0; }
+.tp-facts .k { color: var(--text-3); }
+.tp-facts .live { color: var(--st-running); }
+.attempt-bar {
+  display: flex; align-items: center; gap: var(--s2); margin-top: 9px;
+  padding: 5px 7px; border: 1px solid var(--hairline); border-radius: var(--r1);
+  background: var(--surface);
+}
+.attempt-bar .lt { font: 400 var(--fs-micro)/1 var(--mono); color: var(--text-3); }
+.attempt-bar .lt b { color: var(--text); font-weight: 500; }
+.attempt-steps { display: inline-flex; border: 1px solid var(--border); border-radius: var(--r1); overflow: hidden; }
+.attempt-steps button { padding: 2px 7px; font: 500 var(--fs-micro)/1.4 var(--mono); color: var(--text-2); }
+.attempt-steps button + button { border-left: 1px solid var(--border); }
+.attempt-steps button[aria-pressed="true"] { background: var(--surface-selected); color: var(--text); }
+
+.tp-body { flex: 1; min-height: 0; overflow: hidden; padding: var(--s3) 0 0; }
+.trow {
+  position: relative; display: grid;
+  grid-template-columns: 56px minmax(0, 1fr);
+  gap: var(--gutter-transcript);
+  padding: 0 var(--s3) 0 0;
+}
+.trow > .gut {
+  padding-top: 3px; text-align: right;
+  font: 400 var(--fs-micro)/1.5 var(--mono); color: var(--text-3);
+}
+.trow > .gut .abs { display: block; }
+.trow:hover > .gut .rel { color: var(--text-2); }
+.trow > .bd { min-width: 0; padding-bottom: var(--s3); max-width: 88ch; }
+.trow.breakout > .bd { max-width: none; }
+
+.prompt-block { border: 1px solid var(--hairline); border-radius: var(--r2); background: var(--surface); }
+.prompt-block .ph {
+  display: flex; align-items: center; gap: var(--s2);
+  padding: 6px 9px; border-bottom: 1px solid var(--hairline);
+}
+.prompt-block .ph .right { margin-left: auto; display: flex; align-items: center; gap: 4px; }
+.prompt-block .pb {
+  position: relative; max-height: 168px; overflow: hidden;
+  padding: 9px; font: 400 var(--fs-meta)/1.5 var(--mono); color: var(--text-2);
+  white-space: pre-wrap;
+}
+.prompt-block .pb::after {
+  content: ""; position: absolute; inset: auto 0 0 0; height: 40px;
+  background: linear-gradient(to top, var(--surface), transparent);
+}
+.prompt-block .pf {
+  display: flex; align-items: center; gap: var(--s2);
+  padding: 5px 9px; border-top: 1px solid var(--hairline);
+  font: 400 var(--fs-micro)/1 var(--mono); color: var(--text-3);
+}
+
+/* step groups (§9.6) */
+.step {
+  border: 1px solid var(--hairline); border-radius: var(--r2); background: var(--surface);
+  overflow: hidden;
+}
+.step-head {
+  display: flex; align-items: center; gap: 7px; width: 100%; text-align: left;
+  padding: 7px 9px;
+  font-size: var(--fs-meta); color: var(--text-2);
+}
+.step-head:hover { background: var(--surface-raised); }
+.step-head .chev { color: var(--text-3); transition: transform var(--d-disc) var(--ease); }
+.step-head[aria-expanded="true"] .chev { transform: rotate(90deg); }
+.step-head .sum { font-weight: 500; color: var(--text); }
+.step-head .right { margin-left: auto; display: flex; align-items: center; gap: var(--s2);
+                    font: 400 var(--fs-micro)/1 var(--mono); color: var(--text-3); }
+.step-body { border-top: 1px solid var(--hairline); padding: 9px; display: grid; gap: 9px;
+             background: var(--canvas); }
+
+/* tool + result cards (§2.5.1) */
+.tcard { border: 1px solid var(--hairline); border-radius: var(--r2); background: var(--surface); overflow: hidden; }
+.tcard-h {
+  display: flex; align-items: center; gap: 6px; padding: 6px 9px;
+  border-bottom: 1px solid var(--hairline);
+}
+.tcard-h .tn { font: 500 var(--fs-meta)/1 var(--mono); }
+.tcard-h .right { margin-left: auto; display: flex; align-items: center; gap: 6px;
+                  font: 400 var(--fs-micro)/1 var(--mono); color: var(--text-3); }
+.tcard-h .pairid {
+  border: 1px dotted var(--hairline-strong); border-radius: var(--r1); padding: 1px 4px;
+  color: var(--text-3);
+}
+.args { display: grid; gap: 3px; padding: 8px 9px; font: 400 var(--fs-micro)/1.55 var(--mono); }
+.args .a { display: grid; grid-template-columns: 92px 1fr; gap: var(--s2); min-width: 0; }
+.args .a .k { color: var(--text-3); }
+.args .a .v { color: var(--text); overflow-wrap: anywhere; }
+.args pre { margin: 0; white-space: pre-wrap; color: var(--text-2); }
+.tres { border-top: 1px solid var(--hairline); background: var(--canvas); }
+.tres-h {
+  display: flex; align-items: center; gap: 6px; padding: 5px 9px;
+  font: 400 var(--fs-micro)/1 var(--mono); color: var(--text-3);
+}
+.tres-b { padding: 0 9px 8px; font: 400 var(--fs-micro)/1.55 var(--mono); color: var(--text-2);
+          white-space: pre-wrap; }
+.tcard.err .tres { background: var(--st-failed-tint); }
+.tcard.err .tres-b { color: var(--text); }
+.clamp3 { position: relative; max-height: 62px; overflow: hidden; }
+.clamp3::after {
+  content: ""; position: absolute; inset: auto 0 0 0; height: 26px;
+  background: linear-gradient(to top, var(--surface), transparent);
+}
+.showmore {
+  display: inline-flex; align-items: center; gap: 3px; padding: 3px 9px 7px;
+  font: 500 var(--fs-micro)/1 var(--sans); color: var(--accent);
+}
+
+/* terminal well (§3.2 fixed dark in both themes) */
+.well {
+  background: var(--well); color: var(--well-text);
+  border: 1px solid color-mix(in oklab, var(--well) 70%, var(--text-3));
+  border-radius: var(--r2); overflow: hidden;
+}
+.well-h {
+  display: flex; align-items: center; gap: 6px; padding: 6px 9px;
+  border-bottom: 1px solid color-mix(in oklab, var(--well) 78%, var(--ansi-8));
+  color: var(--ansi-8);
+}
+.well-h .cmd {
+  font: 400 var(--fs-micro)/1.45 var(--mono); color: var(--well-text);
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+  min-width: 0;
+}
+.well-h .right { margin-left: auto; display: flex; align-items: center; gap: 6px; flex: none;
+                 font: 400 var(--fs-micro)/1 var(--mono); }
+.well-b { padding: 8px 9px; font: 400 var(--fs-micro)/1.55 var(--mono); white-space: pre-wrap; }
+.well-f {
+  display: flex; align-items: center; gap: 6px; padding: 5px 9px;
+  border-top: 1px solid color-mix(in oklab, var(--well) 78%, var(--ansi-8));
+  font: 400 var(--fs-micro)/1 var(--mono); color: var(--ansi-8);
+}
+.well-f .ec { color: var(--ansi-9); }
+.a0{color:var(--ansi-0)}.a1{color:var(--ansi-1)}.a2{color:var(--ansi-2)}.a3{color:var(--ansi-3)}
+.a4{color:var(--ansi-4)}.a5{color:var(--ansi-5)}.a6{color:var(--ansi-6)}.a7{color:var(--ansi-7)}
+.a8{color:var(--ansi-8)}.a9{color:var(--ansi-9)}.a10{color:var(--ansi-10)}.a11{color:var(--ansi-11)}
+.a12{color:var(--ansi-12)}.a13{color:var(--ansi-13)}.a14{color:var(--ansi-14)}.a15{color:var(--ansi-15)}
+.abold { font-weight: 600; }
+.abg {  /* SGR 48: fg forced to the higher-contrast well text token (§9.8 / N8) */
+  background: var(--ansi-1); color: var(--well); padding: 0 2px; border-radius: 1px;
+}
+
+/* file-change cards (§2.5.1 #79-#82) */
+.fcard { border: 1px solid var(--hairline); border-radius: var(--r2); background: var(--surface); overflow: hidden; }
+.frow {
+  display: grid; grid-template-columns: 16px minmax(0, 1fr) auto auto;
+  align-items: center; gap: var(--s2); padding: 6px 9px;
+}
+.frow + .frow, .fdiff + .frow { border-top: 1px solid var(--hairline); }
+.frow .verb { font: 500 var(--fs-micro)/1 var(--sans); color: var(--text-3); }
+.frow .path { font: 400 var(--fs-micro)/1 var(--mono); }
+.frow .path b { font-weight: 500; }
+.stat { display: inline-flex; align-items: center; gap: 5px; font: 400 var(--fs-micro)/1 var(--mono); }
+.stat .add { color: var(--st-done); }
+.stat .del { color: var(--st-failed); }
+.stat .barsq { display: inline-flex; gap: 1px; }
+.stat .barsq i { width: 4px; height: 8px; border-radius: 1px; background: var(--hairline-strong); }
+.stat .barsq i.a { background: var(--st-done); }
+.stat .barsq i.d { background: var(--st-failed); }
+.fdiff { border-top: 1px solid var(--hairline); background: var(--canvas);
+         font: 400 var(--fs-micro)/1.55 var(--mono); }
+.fdiff .dl { display: grid; grid-template-columns: 34px 34px 1fr; gap: var(--s2); padding: 0 9px; }
+.fdiff .dl .ln { color: var(--hairline-strong); text-align: right; }
+.fdiff .dl.add { background: var(--st-done-tint); }
+.fdiff .dl.add .tx { color: var(--st-done); }
+.fdiff .dl.del { background: var(--st-failed-tint); }
+.fdiff .dl.del .tx { color: var(--st-failed); }
+.fdiff .dl.hunk { color: var(--text-3); background: var(--surface); }
+.fdiff .dl .tx { white-space: pre-wrap; overflow-wrap: anywhere; }
+.nodiff { padding: 8px 9px; font-size: var(--fs-micro); color: var(--text-3); border-top: 1px solid var(--hairline); }
+
+/* reasoning (§2.5) */
+.reason {
+  border: 1px solid var(--hairline); border-left: 2px solid var(--hairline-strong);
+  border-radius: var(--r1); background: var(--surface);
+}
+.reason-h { display: flex; align-items: center; gap: 7px; width: 100%; text-align: left; padding: 6px 9px; }
+.reason-h .prev { font: 400 var(--fs-meta)/1.4 var(--sans); color: var(--text-3); min-width: 0; }
+.reason-h .chev { color: var(--text-3); margin-left: auto; flex: none; }
+.reason-h:hover { background: var(--surface-raised); }
+
+/* assistant markdown (§9.7) */
+.prose { font-size: var(--fs-prose); line-height: var(--lh-prose); }
+.prose > * + * { margin-top: 10px; }
+.prose h3 { font: 500 var(--fs-title)/1.35 var(--sans); }
+.prose strong { font-weight: 600; }
+.prose ul { display: grid; gap: 5px; }
+.prose ul li { position: relative; padding-left: 16px; }
+.prose ul li::before {
+  content: ""; position: absolute; left: 4px; top: 9px; width: 3px; height: 3px;
+  border-radius: 999px; background: var(--text-3);
+}
+.prose blockquote { border-left: 2px solid var(--hairline-strong); padding-left: 10px; color: var(--text-2); }
+.prose .fence { border: 1px solid var(--hairline); border-radius: var(--r2); background: var(--surface); }
+.prose .fence .fh {
+  display: flex; align-items: center; gap: var(--s2); padding: 4px 9px;
+  border-bottom: 1px solid var(--hairline);
+  font: 500 var(--fs-micro)/1 var(--mono); color: var(--text-3);
+}
+.prose .fence pre { margin: 0; padding: 8px 9px; font: 400 var(--fs-micro)/1.6 var(--mono);
+                    color: var(--text-2); white-space: pre-wrap; }
+
+/* steering markers / status / raw (§2.5) */
+.marker {
+  display: flex; align-items: center; gap: 7px; padding: 6px 9px;
+  border: 1px solid color-mix(in oklab, var(--st-steered) 30%, var(--canvas));
+  background: var(--st-steered-tint); border-radius: var(--r1);
+  font-size: var(--fs-meta);
+}
+.marker .ic { color: var(--st-steered); }
+.marker .right { margin-left: auto; display: flex; align-items: center; gap: 6px; }
+.sysline { display: flex; align-items: center; gap: 7px; font: 400 var(--fs-micro)/1.5 var(--mono);
+           color: var(--text-3); }
+.sysline::before { content: ""; flex: none; width: 14px; height: 1px; background: var(--hairline-strong); }
+.rawgrp {
+  display: flex; align-items: center; gap: 7px; padding: 5px 9px;
+  border: 1px dashed var(--hairline-strong); border-radius: var(--r1);
+  font: 400 var(--fs-micro)/1 var(--mono); color: var(--text-3);
+}
+.errcard {
+  border: 1px solid color-mix(in oklab, var(--st-failed) 38%, var(--canvas));
+  border-left: 2px solid var(--st-failed);
+  background: var(--st-failed-tint); border-radius: var(--r2); padding: 9px 11px;
+}
+.errcard .eh { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; }
+.errcard .eh .t { font: 500 var(--fs-meta)/1 var(--sans); color: var(--st-failed); }
+.errcard .em { font: 400 var(--fs-meta)/1.5 var(--mono); }
+
+/* footer composer (§2.5) */
+.tp-foot { border-top: 1px solid var(--hairline); padding: 9px var(--s3); flex: none; background: var(--canvas); }
+.working { display: flex; align-items: center; gap: 6px; margin-bottom: 8px;
+           font: 400 var(--fs-micro)/1 var(--mono); color: var(--st-running); }
+.composer { display: grid; grid-template-columns: 1fr auto auto; gap: 6px; align-items: center; }
+.composer .hint { grid-column: 1 / -1; display: flex; align-items: center; gap: var(--s3);
+                  font: 400 var(--fs-micro)/1 var(--mono); color: var(--text-3); }
+kbd {
+  font: 500 var(--fs-micro)/1 var(--mono); border: 1px solid var(--hairline-strong);
+  border-bottom-width: 2px; border-radius: var(--r1); padding: 2px 4px; color: var(--text-2);
+}
+
+/* compare panel stub (§2.5 two-panel) */
+.cmp-stub {
+  display: flex; flex-direction: column; align-items: center; gap: var(--s3);
+  padding: var(--s3) 0; background: var(--surface);
+}
+
+/* ==========================================================================
+   tokens.html specimen furniture
+   ========================================================================== */
+.doc { width: 1440px; margin: 0 auto; padding: var(--s6) var(--s6) var(--s8); }
+.doc section { margin-top: var(--s7); }
+.doc h2 {
+  font: 500 var(--fs-screen)/1.2 var(--sans);
+  padding-bottom: 7px; border-bottom: 1px solid var(--hairline-strong);
+  display: flex; align-items: baseline; gap: var(--s3);
+}
+.doc h2 .src { font: 400 var(--fs-micro)/1 var(--mono); color: var(--text-3); margin-left: auto; }
+.doc h3 { font: 500 var(--fs-title)/1.3 var(--sans); margin-top: var(--s5); }
+.doc p.lead { font-size: var(--fs-meta); line-height: 1.6; color: var(--text-2); max-width: 88ch; margin-top: 8px; }
+.duo { display: grid; grid-template-columns: 1fr 1fr; gap: 1px; background: var(--hairline-strong);
+       border: 1px solid var(--hairline-strong); border-radius: var(--r2); overflow: hidden; margin-top: var(--s3); }
+.duo > div { background: var(--canvas); padding: var(--s4); }
+.duo-tag { display: flex; align-items: center; gap: 6px; margin-bottom: var(--s3); }
+
+.swatches { display: grid; gap: 1px; background: var(--hairline); border: 1px solid var(--hairline);
+            border-radius: var(--r2); overflow: hidden; margin-top: var(--s3); }
+.sw {
+  display: grid; grid-template-columns: 40px minmax(0, 200px) 1fr 96px 96px;
+  align-items: center; gap: var(--s3); padding: 7px var(--s3); background: var(--canvas);
+}
+.sw.head { background: var(--surface); }
+.sw.head > * { color: var(--text-3); }
+.sw .box { width: 40px; height: 24px; border-radius: var(--r1); border: 1px solid var(--hairline-strong); }
+.sw .tk { font: 400 var(--fs-meta)/1 var(--mono); }
+.sw .val { font: 400 var(--fs-micro)/1 var(--mono); color: var(--text-3); }
+.sw .hexv { font: 400 var(--fs-micro)/1 var(--mono); color: var(--text-2); text-align: right; }
+
+.type-spec { display: grid; gap: 1px; background: var(--hairline); border: 1px solid var(--hairline);
+             border-radius: var(--r2); overflow: hidden; margin-top: var(--s3); }
+.ts { display: grid; grid-template-columns: 116px 1fr; gap: var(--s4); align-items: baseline;
+      padding: 10px var(--s3); background: var(--canvas); }
+.ts .k { font: 400 var(--fs-micro)/1.4 var(--mono); color: var(--text-3); }
+
+.space-scale { display: flex; align-items: flex-end; gap: var(--s3); margin-top: var(--s3); }
+.space-scale .u { display: grid; gap: 5px; justify-items: center; }
+.space-scale .u i { display: block; background: var(--accent); border-radius: 1px; height: 10px; }
+.space-scale .u span { font: 400 var(--fs-micro)/1 var(--mono); color: var(--text-3); }
+
+.ctable { width: 100%; border-collapse: collapse; margin-top: var(--s3); font-size: var(--fs-meta); }
+.ctable th, .ctable td { text-align: left; padding: 5px var(--s3); border-bottom: 1px solid var(--hairline); }
+.ctable thead th { background: var(--surface); font: 600 var(--fs-micro)/1 var(--sans); letter-spacing: 0.09em;
+                   text-transform: uppercase; color: var(--text-3); }
+.ctable tbody th { font: 400 var(--fs-micro)/1.4 var(--mono); font-weight: 400; color: var(--text); }
+.ctable td.num { font: 400 var(--fs-micro)/1 var(--mono); font-variant-numeric: tabular-nums; text-align: right; width: 74px; }
+.ctable td.req { width: 96px; font: 400 var(--fs-micro)/1 var(--mono); color: var(--text-3); }
+.ctable td.verdict { width: 76px; font: 500 var(--fs-micro)/1 var(--sans); letter-spacing: 0.04em; text-transform: uppercase; }
+.ctable td.verdict.ok { color: var(--st-done); }
+.ctable td.verdict.bad { color: var(--st-failed); }
+.ctable td.verdict.exempt { color: var(--text-3); }
+.ctable tbody tr:hover { background: var(--surface); }
+
+.motion-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: var(--s3); margin-top: var(--s3); }
+.mo { padding: var(--s3); border: 1px solid var(--hairline); border-radius: var(--r2); background: var(--surface); }
+.mo .d { font: 500 var(--fs-title)/1 var(--mono); }
+.mo .u2 { font-size: var(--fs-micro); color: var(--text-3); margin-top: 4px; }
+.mo .w { font-size: var(--fs-meta); color: var(--text-2); margin-top: 7px; line-height: 1.5; }
+.ease-curve { margin-top: var(--s2); }
+
+.glyph-grid { display: grid; grid-template-columns: repeat(8, 1fr); gap: 1px;
+              background: var(--hairline); border: 1px solid var(--hairline);
+              border-radius: var(--r2); overflow: hidden; margin-top: var(--s3); }
+.gl { display: grid; justify-items: center; gap: 7px; padding: var(--s3) 6px; background: var(--canvas); }
+.gl .nm { font: 400 var(--fs-micro)/1.3 var(--mono); color: var(--text-3); text-align: center; }
+
+.pulse-demo { animation: pulse 300ms var(--ease); }
+@keyframes pulse {
+  from { background: color-mix(in oklab, var(--accent) 8%, var(--canvas)); }
+  to { background: transparent; }
+}
+
+/* §3.4 / §3.6 reduced motion: kill every transition and the spinner. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important; animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+  .ic-spin { animation: none; }
+}
+/* §3.6 prefers-contrast: more bumps hairlines to ink 25%. */
+@media (prefers-contrast: more) {
+  [data-theme] { --hairline: color-mix(in oklab, var(--ink) 25%, var(--canvas)); }
+}
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+<symbol id="i-queued" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6" stroke-dasharray="2.2 2.3"/></symbol>
+<symbol id="i-running" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6" opacity=".28"/><path d="M14 8a6 6 0 0 0-6-6"/></symbol>
+<symbol id="i-done" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6"/><path d="m5.2 8.3 2 2 3.6-4.3"/></symbol>
+<symbol id="i-cached" viewBox="0 0 16 16"><path d="M13.9 8.4A5.9 5.9 0 1 1 12 3.6"/><path d="M14 2.3v3.4h-3.4"/></symbol>
+<symbol id="i-failed" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6"/><path d="m5.9 5.9 4.2 4.2m0-4.2-4.2 4.2"/></symbol>
+<symbol id="i-cancelled" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6"/><path d="M4.2 11.8 11.8 4.2"/></symbol>
+<symbol id="i-stale" viewBox="0 0 16 16"><path d="M8.9 2.6l5.5 9.6a1 1 0 0 1-.9 1.5H2.5a1 1 0 0 1-.9-1.5l5.5-9.6a1 1 0 0 1 1.8 0Z"/><path d="M8 6.4v3"/><path d="M8 11.5h.01"/></symbol>
+<symbol id="i-blocked" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6"/><path d="M6.2 6.2A1.8 1.8 0 1 1 8 8.4v.9"/><path d="M8 11.4h.01"/></symbol>
+<symbol id="i-steered" viewBox="0 0 16 16"><path d="M1.6 4h9v6.6h-9z"/><path d="m1.6 4.4 4.5 3.2L10.6 4.4"/><path d="m10.7 11.8 1.5 1.5 2.4-3.2"/></symbol>
+<symbol id="i-unknown" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6"/><path d="M8 7.2v3.6"/><path d="M8 4.9h.01"/></symbol>
+<symbol id="i-orphaned" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6" stroke-dasharray="1.4 2.2"/><path d="M8 5.2v3.4"/><path d="M8 10.9h.01"/></symbol>
+<symbol id="i-chevron" viewBox="0 0 16 16"><path d="m5.6 3.4 5 4.6-5 4.6"/></symbol>
+<symbol id="i-chevdown" viewBox="0 0 16 16"><path d="m3.4 5.6 4.6 5 4.6-5"/></symbol>
+<symbol id="i-copy" viewBox="0 0 16 16"><rect x="5.6" y="5.6" width="7.4" height="7.4" rx="1"/><path d="M10.4 5.6V4a1 1 0 0 0-1-1H4a1 1 0 0 0-1 1v5.4a1 1 0 0 0 1 1h1.6"/></symbol>
+<symbol id="i-check" viewBox="0 0 16 16"><path d="m3 8.6 3.4 3.4L13 4.6"/></symbol>
+<symbol id="i-close" viewBox="0 0 16 16"><path d="M4 4l8 8M12 4l-8 8"/></symbol>
+<symbol id="i-search" viewBox="0 0 16 16"><circle cx="7" cy="7" r="4.3"/><path d="m10.2 10.2 3.5 3.5"/></symbol>
+<symbol id="i-send" viewBox="0 0 16 16"><path d="M2.6 8h10.8"/><path d="m9.2 3.8 4.2 4.2-4.2 4.2"/></symbol>
+<symbol id="i-cancel" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6"/><path d="M5.6 8h4.8"/></symbol>
+<symbol id="i-resume" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6"/><path d="m6.5 5.3 4.2 2.7-4.2 2.7z"/></symbol>
+<symbol id="i-trash" viewBox="0 0 16 16"><path d="M3.2 5.2h9.6"/><path d="M6.2 5.2V3.8a.8.8 0 0 1 .8-.8h2a.8.8 0 0 1 .8.8v1.4"/><path d="m4.6 5.2.6 7.6a1 1 0 0 0 1 .9h3.6a1 1 0 0 0 1-.9l.6-7.6"/></symbol>
+<symbol id="i-external" viewBox="0 0 16 16"><path d="M9.6 3h3.4v3.4"/><path d="m13 3-5.2 5.2"/><path d="M11.4 9.6v2.6a1 1 0 0 1-1 1H3.8a1 1 0 0 1-1-1V5.6a1 1 0 0 1 1-1h2.6"/></symbol>
+<symbol id="i-mail" viewBox="0 0 16 16"><rect x="1.8" y="4" width="12.4" height="8" rx="1"/><path d="m1.9 4.6 6.1 4.2 6.1-4.2"/></symbol>
+<symbol id="i-filter" viewBox="0 0 16 16"><path d="M2.4 4.2h11.2"/><path d="M4.6 8h6.8"/><path d="M6.8 11.8h2.4"/></symbol>
+<symbol id="i-columns" viewBox="0 0 16 16"><rect x="2.6" y="3.2" width="10.8" height="9.6" rx="1"/><path d="M6.2 3.2v9.6M9.8 3.2v9.6"/></symbol>
+<symbol id="i-gantt" viewBox="0 0 16 16"><path d="M2.4 4.6h5.6M4.8 8h7.2M2.4 11.4h4.4"/></symbol>
+<symbol id="i-tree" viewBox="0 0 16 16"><path d="M2.8 3.2v8.4a1 1 0 0 0 1 1h1.8"/><path d="M2.8 7.6h2.8"/><rect x="6.4" y="2.2" width="7" height="2.6" rx=".6"/><rect x="6.4" y="6.3" width="7" height="2.6" rx=".6"/><rect x="6.4" y="10.4" width="7" height="2.6" rx=".6"/></symbol>
+<symbol id="i-table" viewBox="0 0 16 16"><rect x="2.6" y="3.4" width="10.8" height="9.2" rx="1"/><path d="M2.6 6.5h10.8M2.6 9.6h10.8M6.4 3.4v9.2"/></symbol>
+<symbol id="i-keyboard" viewBox="0 0 16 16"><rect x="1.6" y="4.4" width="12.8" height="7.2" rx="1.2"/><path d="M4.2 7h.01M6.4 7h.01M8.6 7h.01M10.8 7h.01M4.6 9.3h6.8"/></symbol>
+<symbol id="i-sun" viewBox="0 0 16 16"><circle cx="8" cy="8" r="3.1"/><path d="M8 1.4v1.7M8 12.9v1.7M1.4 8h1.7M12.9 8h1.7M3.4 3.4l1.2 1.2M11.4 11.4l1.2 1.2M12.6 3.4l-1.2 1.2M4.6 11.4l-1.2 1.2"/></symbol>
+<symbol id="i-moon" viewBox="0 0 16 16"><path d="M13.2 9.9A5.7 5.7 0 0 1 6.1 2.8a5.9 5.9 0 1 0 7.1 7.1Z"/></symbol>
+<symbol id="i-clock" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6"/><path d="M8 4.6V8l2.4 1.5"/></symbol>
+<symbol id="i-terminal" viewBox="0 0 16 16"><rect x="1.8" y="2.8" width="12.4" height="10.4" rx="1"/><path d="m4.6 6.4 2 1.8-2 1.8M8.6 10.4h3"/></symbol>
+<symbol id="i-tool" viewBox="0 0 16 16"><path d="M6 3.4 2.8 8 6 12.6M10 3.4 13.2 8 10 12.6"/></symbol>
+<symbol id="i-reasoning" viewBox="0 0 16 16"><circle cx="4.6" cy="8" r="1.1"/><circle cx="8" cy="8" r="1.1"/><circle cx="11.4" cy="8" r="1.1"/></symbol>
+<symbol id="i-filenew" viewBox="0 0 16 16"><path d="M4 2.4h4.4L11.8 5.8v7.2a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V3.4a1 1 0 0 1 1-1Z"/><path d="M8.2 2.6v3.4h3.4"/><path d="M6.6 10.2h3.2M8.2 8.6v3.2"/></symbol>
+<symbol id="i-fileedit" viewBox="0 0 16 16"><path d="M11.4 8.6v4.4a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V3.4a1 1 0 0 1 1-1h4"/><path d="m9.2 7.4 4-4 1.3 1.3-4 4-1.9.6z"/></symbol>
+<symbol id="i-filedel" viewBox="0 0 16 16"><path d="M4 2.4h4.4l3.4 3.4v7.2a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V3.4a1 1 0 0 1 1-1Z"/><path d="M8.2 2.6v3.4h3.4"/><path d="m6.6 9 3.2 3.2m0-3.2L6.6 12.2"/></symbol>
+<symbol id="i-filemove" viewBox="0 0 16 16"><path d="M4 2.4h4.4l3.4 3.4v7.2a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V3.4a1 1 0 0 1 1-1Z"/><path d="M8.2 2.6v3.4h3.4"/><path d="M6 10.6h4M8.4 9.2l1.4 1.4-1.4 1.4"/></symbol>
+<symbol id="i-plus" viewBox="0 0 16 16"><path d="M8 3.6v8.8M3.6 8h8.8"/></symbol>
+<symbol id="i-minus" viewBox="0 0 16 16"><path d="M3.6 8h8.8"/></symbol>
+<symbol id="i-drag" viewBox="0 0 16 16"><path d="M6.4 3.4v9.2M9.6 3.4v9.2"/></symbol>
+<symbol id="i-bolt" viewBox="0 0 16 16"><path d="M8.8 1.8 3.6 9.2h3.6l-.8 5 5.2-7.4H8l.8-5Z"/></symbol>
+</svg>
+<div class="chrome">
+  <b>home.html</b>
+  <span class="sep">│</span><span>reference comp · W8a design gate</span>
+  <span class="sep">│</span><span>DESIGN §2.3, §3.2, §3.7</span>
+  <span class="sep">│</span><span>1440 + 800</span>
+  <div class="chrome-right">
+    <span>attention strip + run table</span><span class="sep">│</span>
+    <div class="seg" role="group" aria-label="Theme">
+      <button class="on-l" onclick="document.documentElement.dataset.theme='light'"><svg class="ic ic-12" aria-hidden="true"><use href="#i-sun"/></svg>light</button>
+      <button class="on-d" onclick="document.documentElement.dataset.theme='dark'"><svg class="ic ic-12" aria-hidden="true"><use href="#i-moon"/></svg>dark</button>
+    </div>
+  </div>
+</div>
+<div class="frame-wrap">
+  <div class="frame-head"><h2>Home — attention-heavy</h2><span class="w">1440 × 880 · §2.3</span></div>
+  <div class="frame">
+    <div class="app" style="height:880px">
+  <div class="topbar">
+  <div class="brand"><span class="wm">flo<i>w</i>ition</span><span class="v">viewer 0.2.0</span></div>
+  <nav class="nav" aria-label="Primary">
+    <a href="#/" aria-current="page">Runs</a>
+    <a href="#/run/r_2f91c4a8" >Cockpit</a>
+  </nav>
+  <div class="topbar-right">
+    
+    <span class="ro-chip"><svg class="ic ic-12" aria-hidden="true"><use href="#i-cancel"/></svg>read-only</span>
+    <button class="btn ghost" aria-label="Command palette"><svg class="ic ic-12" aria-hidden="true"><use href="#i-search"/></svg><kbd>⌘K</kbd></button>
+    <button class="icb" aria-label="Keyboard shortcuts"><svg class="ic" aria-hidden="true"><use href="#i-keyboard"/></svg></button>
+  </div>
+</div>
+  <div class="home">
+    <div class="home-head">
+      <h1>Runs</h1>
+      <span class="sub">41 runs · 2 live · <span class="mono">~/projects/flowition</span></span>
+      <div style="margin-left:auto;display:flex;gap:6px">
+        <button class="btn"><svg class="ic ic-12" aria-hidden="true"><use href="#i-filter"/></svg>Stale only</button>
+        <button class="btn"><svg class="ic ic-12" aria-hidden="true"><use href="#i-trash"/></svg>Trash <span class="dim">3</span></button>
+      </div>
+    </div>
+    <div class="attn">
+  <div class="attn-head">
+    <span class="lbl">Needs you</span>
+    <span class="count">3</span>
+    <span class="dim micro" style="margin-left:4px">runs blocked on an answer, runs whose engine died, and what is burning money right now</span>
+  </div>
+  <div class="attn-grid">
+
+    <div class="acard ask">
+      <div class="acard-top">
+        <span class="g b"><svg class="ic" aria-hidden="true"><use href="#i-blocked"/></svg><span class="vh">blocked</span></span>
+        <span class="nm">migrate-callsites</span>
+        <span class="rid">r_a03d51e7</span>
+        <span class="right"><span class="chip b"><svg class="ic" aria-hidden="true"><use href="#i-blocked"/></svg>blocked 2m</span></span>
+      </div>
+      <div class="qtext">
+        <span class="who">agent 3 · rewrite:cli asked 2m ago · qid q_9d41</span>
+        Two call sites in <span class="mono">src/cli.js</span> pass a bare string where the new
+        adapter API expects <span class="mono">{path}</span>. Rewrite both, or keep a
+        compatibility shim for one release?
+      </div>
+      <form class="answer" onsubmit="return false">
+        <label class="vh" for="ans">Answer the question</label>
+        <input class="inp" id="ans" value="rewrite both — no shim" >
+        <button class="btn primary lg" type="submit"><svg class="ic ic-12" aria-hidden="true"><use href="#i-send"/></svg>Send</button>
+        <span class="hint">⌘↵ sends · answer here or press <b>a</b> · 2 clicks from Home to answered</span>
+      </form>
+    </div>
+
+    <div class="acard stale">
+      <div class="acard-top">
+        <span class="g s"><svg class="ic" aria-hidden="true"><use href="#i-stale"/></svg><span class="vh">stale</span></span>
+        <span class="nm">audit-viewer-security</span>
+        <span class="right"><span class="chip s"><svg class="ic" aria-hidden="true"><use href="#i-stale"/></svg>stale</span></span>
+      </div>
+      <div class="why">
+        Engine died. It wrote no terminal event, so there is no time of death to report — the
+        run started 1h10m ago. <code>run.lock</code> held by pid 48812 — not running.
+        5 of 9 agents finished; 4 render <b>orphaned</b>, not spinning.
+      </div>
+      <div class="acard-actions">
+        <button class="btn"><svg class="ic ic-12" aria-hidden="true"><use href="#i-resume"/></svg>Resume</button>
+        <button class="btn ghost"><svg class="ic ic-12" aria-hidden="true"><use href="#i-external"/></svg>run.log</button>
+        <span class="dim micro" style="margin-left:auto">$4.10</span>
+      </div>
+    </div>
+
+    <div class="acard live">
+      <div class="acard-top">
+        <span class="g r"><svg class="ic ic-spin" aria-hidden="true"><use href="#i-running"/></svg><span class="vh">running</span></span>
+        <span class="nm">judge-panel-auth-refactor</span>
+        <span class="right"><span class="badge warn"><svg class="ic ic-12" aria-hidden="true"><use href="#i-bolt"/></svg>over budget</span></span>
+      </div>
+      <dl class="ticker">
+        <dt>spend</dt><dd><b>$9.05</b> <span class="dim">· 375.1k out</span></dd>
+        <dt>budget</dt><dd><span style="color:var(--st-failed)">110.3%</span> <span class="dim">of the 340k soft ceiling</span></dd>
+        <dt>agents</dt><dd>4/10 <span class="dim">· 2 running · 1 failed</span></dd>
+      </dl>
+      <div class="gauge">
+        <div class="gauge-bar">
+          <div class="fill" style="width:90.6%"></div>
+          <div class="over" style="left:90.6%;right:0"></div>
+          <div class="ceiling" style="left:90.6%"></div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+    <div class="attn-head"><span class="lbl">All runs</span><span class="count">41</span></div>
+    <div class="rt">
+  <div class="rt-tools">
+    <span class="lbl">Filter</span>
+    <button class="fchip" aria-pressed="false"><svg class="ic ic-12" aria-hidden="true"><use href="#i-running"/></svg>running <span class="n">2</span></button>
+    <button class="fchip" aria-pressed="true"><svg class="ic ic-12" aria-hidden="true"><use href="#i-blocked"/></svg>blocked <span class="n">1</span></button>
+    <button class="fchip" aria-pressed="false"><svg class="ic ic-12" aria-hidden="true"><use href="#i-failed"/></svg>failed <span class="n">1</span></button>
+    <button class="fchip" aria-pressed="false"><svg class="ic ic-12" aria-hidden="true"><use href="#i-done"/></svg>completed <span class="n">3</span></button>
+    <button class="fchip" aria-pressed="false"><svg class="ic ic-12" aria-hidden="true"><use href="#i-stale"/></svg>stale <span class="n">1</span></button>
+    <div class="search">
+      <svg class="ic ic-14" aria-hidden="true"><use href="#i-search"/></svg>
+      <label class="vh" for="q">Filter by name or run id</label>
+      <input class="inp" id="q" placeholder="name or run id   /">
+    </div>
+    <button class="btn ghost" aria-label="Choose columns"><svg class="ic ic-12" aria-hidden="true"><use href="#i-columns"/></svg></button>
+  </div>
+  <div role="table" aria-label="Runs">
+    <div class="rt-row head" role="row">
+      <span></span>
+      <span class="lbl">run</span>
+      <span class="lbl col-ad">adapters</span>
+      <span class="lbl">agents</span>
+      <span class="lbl col-out" style="text-align:right">out</span>
+      <span class="lbl" style="text-align:right">cost</span>
+      <span class="lbl" style="text-align:right">duration</span>
+      <span class="lbl" style="text-align:right">started ↓</span>
+    </div>
+      <div class="rt-row sel" role="row" tabindex="-1">
+        <span class="g r"><svg class="ic ic-spin" aria-hidden="true"><use href="#i-running"/></svg><span class="vh">running</span></span>
+        <span class="rt-name">
+          <span class="nm trunc">judge-panel-auth-refactor</span>
+          <span class="rid">r_2f91c4a8</span>
+          <span class="rt-badges"><span class="badge"><svg class="ic ic-12" aria-hidden="true"><use href="#i-bolt"/></svg>budget</span><span class="badge"><svg class="ic ic-12" aria-hidden="true"><use href="#i-external"/></svg>detached log</span><span class="badge">resumed ×1</span></span>
+        </span>
+        <span class="col-ad"><span class="ad-cluster"><span class="ad ad-claude" title="claude">CL<span class="vh">adapter claude</span></span><span class="ad ad-codex" title="codex">CX<span class="vh">adapter codex</span></span><span class="ad ad-droid" title="droid">DR<span class="vh">adapter droid</span></span><span class="ad ad-amp" title="amp">AM<span class="vh">adapter amp</span></span><span class="more">+2</span></span></span>
+        <span><span class="progress-mini">
+    <span class="bar" aria-hidden="true"><i class="d" style="width:50%"></i></span>
+    <span>4/10<span class="dim"> +1c</span></span>
+  </span></span>
+        <span class="n col-out">375.1k</span>
+        <span class="n">$9.05</span>
+        <span class="n">14m02s</span>
+        <span class="when">started 14m ago</span>
+      </div>
+      <div class="rt-row" role="row" tabindex="-1">
+        <span class="g b"><svg class="ic" aria-hidden="true"><use href="#i-blocked"/></svg><span class="vh">blocked</span></span>
+        <span class="rt-name">
+          <span class="nm trunc">migrate-callsites</span>
+          <span class="rid">r_a03d51e7</span>
+          <span class="rt-badges"><span class="badge ask"><svg class="ic ic-12" aria-hidden="true"><use href="#i-blocked"/></svg>1 question</span></span>
+        </span>
+        <span class="col-ad"><span class="ad-cluster"><span class="ad ad-claude" title="claude">CL<span class="vh">adapter claude</span></span><span class="ad ad-codex" title="codex">CX<span class="vh">adapter codex</span></span></span></span>
+        <span><span class="progress-mini">
+    <span class="bar" aria-hidden="true"><i class="d" style="width:37.5%"></i></span>
+    <span>3/8</span>
+  </span></span>
+        <span class="n col-out">96.4k</span>
+        <span class="n">$1.87</span>
+        <span class="n">4m31s</span>
+        <span class="when">started 5m ago</span>
+      </div>
+      <div class="rt-row" role="row" tabindex="-1">
+        <span class="g s"><svg class="ic" aria-hidden="true"><use href="#i-stale"/></svg><span class="vh">stale</span></span>
+        <span class="rt-name">
+          <span class="nm trunc">audit-viewer-security</span>
+          <span class="rid">r_77c1be92</span>
+          <span class="rt-badges"><span class="badge">resumed ×1</span><span class="badge"><svg class="ic ic-12" aria-hidden="true"><use href="#i-external"/></svg>detached log</span></span>
+        </span>
+        <span class="col-ad"><span class="ad-cluster"><span class="ad ad-codex" title="codex">CX<span class="vh">adapter codex</span></span></span></span>
+        <span><span class="progress-mini">
+    <span class="bar" aria-hidden="true"><i class="d" style="width:55.55555555555556%"></i></span>
+    <span>5/9</span>
+  </span></span>
+        <span class="n col-out">233.1k</span>
+        <span class="n">$4.10</span>
+        <span class="n">21m18s</span>
+        <span class="when">started 47m ago</span>
+      </div>
+      <div class="rt-row" role="row" tabindex="-1">
+        <span class="g d"><svg class="ic" aria-hidden="true"><use href="#i-done"/></svg><span class="vh">completed</span></span>
+        <span class="rt-name">
+          <span class="nm trunc">review-changes</span>
+          <span class="rid">r_5e40aa16</span>
+          <span class="rt-badges"></span>
+        </span>
+        <span class="col-ad"><span class="ad-cluster"><span class="ad ad-claude" title="claude">CL<span class="vh">adapter claude</span></span><span class="ad ad-codex" title="codex">CX<span class="vh">adapter codex</span></span><span class="ad ad-opencode" title="opencode">OC<span class="vh">adapter opencode</span></span></span></span>
+        <span><span class="progress-mini">
+    <span class="bar" aria-hidden="true"><i class="d" style="width:100%"></i></span>
+    <span>12/12</span>
+  </span></span>
+        <span class="n col-out">588.0k</span>
+        <span class="n">$11.20</span>
+        <span class="n">8m42s</span>
+        <span class="when">2h ago</span>
+      </div>
+      <div class="rt-row" role="row" tabindex="-1">
+        <span class="g f"><svg class="ic" aria-hidden="true"><use href="#i-failed"/></svg><span class="vh">failed</span></span>
+        <span class="rt-name">
+          <span class="nm trunc">find-flaky-tests</span>
+          <span class="rid">r_be8207f4</span>
+          <span class="rt-badges"><span class="badge err">spawn_failed</span></span>
+        </span>
+        <span class="col-ad"><span class="ad-cluster"><span class="ad ad-droid" title="droid">DR<span class="vh">adapter droid</span></span><span class="ad ad-claude" title="claude">CL<span class="vh">adapter claude</span></span></span></span>
+        <span><span class="progress-mini">
+    <span class="bar" aria-hidden="true"><i class="d" style="width:77.77777777777779%"></i></span>
+    <span>7/9</span>
+  </span></span>
+        <span class="n col-out">141.7k</span>
+        <span class="n">$2.65</span>
+        <span class="n">3m18s</span>
+        <span class="when">5h ago</span>
+      </div>
+      <div class="rt-row" role="row" tabindex="-1">
+        <span class="g d"><svg class="ic" aria-hidden="true"><use href="#i-done"/></svg><span class="vh">completed</span></span>
+        <span class="rt-name">
+          <span class="nm trunc">pipeline-migrate-tests</span>
+          <span class="rid">r_0c9f31da</span>
+          <span class="rt-badges"><span class="badge">resumed ×2</span><span class="badge replay"><svg class="ic ic-12" aria-hidden="true"><use href="#i-cached"/></svg>6 cached</span></span>
+        </span>
+        <span class="col-ad"><span class="ad-cluster"><span class="ad ad-codex" title="codex">CX<span class="vh">adapter codex</span></span></span></span>
+        <span><span class="progress-mini">
+    <span class="bar" aria-hidden="true"><i class="d" style="width:100%"></i></span>
+    <span>3/9<span class="dim"> +6c</span></span>
+  </span></span>
+        <span class="n col-out">71.9k</span>
+        <span class="n">$0.938</span>
+        <span class="n">1m52s</span>
+        <span class="when">9h ago</span>
+      </div>
+      <div class="rt-row" role="row" tabindex="-1">
+        <span class="g d"><svg class="ic" aria-hidden="true"><use href="#i-done"/></svg><span class="vh">completed</span></span>
+        <span class="rt-name">
+          <span class="nm trunc">hello.workflow.js</span>
+          <span class="rid">r_hello_1</span>
+          <span class="rt-badges"></span>
+        </span>
+        <span class="col-ad"><span class="ad-cluster"><span class="ad ad-mock" title="mock">MK<span class="vh">adapter mock</span></span></span></span>
+        <span><span class="progress-mini">
+    <span class="bar" aria-hidden="true"><i class="d" style="width:100%"></i></span>
+    <span>1/1</span>
+  </span></span>
+        <span class="n col-out">1.2k</span>
+        <span class="n"><span class="absent" title="no cost in the journal for this run">&nbsp;</span></span>
+        <span class="n">820ms</span>
+        <span class="when">yesterday</span>
+      </div>
+      <div class="rt-row" role="row" tabindex="-1">
+        <span class="g x"><svg class="ic" aria-hidden="true"><use href="#i-cancelled"/></svg><span class="vh">interrupted</span></span>
+        <span class="rt-name">
+          <span class="nm trunc"><span class="mono dim">r_41ba7cc0</span></span>
+          
+          <span class="rt-badges"><span class="badge"><svg class="ic ic-12" aria-hidden="true"><use href="#i-unknown"/></svg>older engine</span></span>
+        </span>
+        <span class="col-ad"><span class="ad-cluster"><span class="ad ad-unknown" title="unknown">·<span class="vh">adapter unknown</span></span></span></span>
+        <span><span class="progress-mini">
+    <span class="bar" aria-hidden="true"><i class="d" style="width:50%"></i></span>
+    <span>2/4</span>
+  </span></span>
+        <span class="n col-out">18.3k</span>
+        <span class="n"><span class="absent" title="no cost in the journal for this run">&nbsp;</span></span>
+        <span class="n">46s</span>
+        <span class="when">yesterday</span>
+      </div>
+  </div>
+  <div class="rt-more"><button class="btn">Load more <span class="dim">· 41 runs total</span></button></div>
+</div>
+  </div>
+</div>
+    <span class="mk" style="top:114px;left:22px">1</span>
+    <span class="mk" style="top:186px;left:352px">2</span>
+    <span class="mk" style="top:114px;left:996px">3</span>
+    <span class="mk" style="top:352px;left:22px">4</span>
+    <span class="mk" style="top:474px;left:686px">5</span>
+    <span class="mk" style="top:518px;left:918px">6</span>
+    <span class="mk" style="top:672px;left:246px">7</span>
+    <span class="mk" style="top:186px;left:686px">11</span>
+  </div>
+</div>
+  <div class="frame-wrap">
+  <div class="frame-head"><h2>Home — 800px (§3.7's second required viewport)</h2><span class="w">800 × 1000 · §3.3 · parity #42</span></div>
+  <div class="frame w800">
+    <div class="app" style="height:1000px">
+  <div class="topbar">
+  <div class="brand"><span class="wm">flo<i>w</i>ition</span><span class="v">viewer 0.2.0</span></div>
+  <nav class="nav" aria-label="Primary">
+    <a href="#/" aria-current="page">Runs</a>
+    <a href="#/run/r_2f91c4a8" >Cockpit</a>
+  </nav>
+  <div class="topbar-right">
+    
+    <span class="ro-chip"><svg class="ic ic-12" aria-hidden="true"><use href="#i-cancel"/></svg>read-only</span>
+    <button class="btn ghost" aria-label="Command palette"><svg class="ic ic-12" aria-hidden="true"><use href="#i-search"/></svg><kbd>⌘K</kbd></button>
+    <button class="icb" aria-label="Keyboard shortcuts"><svg class="ic" aria-hidden="true"><use href="#i-keyboard"/></svg></button>
+  </div>
+</div>
+  <div style="display:flex;flex:1;min-height:0">
+    <div class="strip" style="width:44px;flex:none;border-right:1px solid var(--hairline)">
+      <button class="icb" aria-label="Expand run rail"><svg class="ic ic-14" aria-hidden="true"><use href="#i-chevron"/></svg></button>
+      <span class="dotn">41</span>
+      <span class="vlbl">runs</span>
+    </div>
+    <div style="flex:1;min-width:0;overflow:hidden">
+      <div class="home">
+        <div class="home-head">
+          <h1>Runs</h1>
+          <span class="sub">41 runs · 2 live</span>
+        </div>
+        <div class="attn">
+  <div class="attn-head">
+    <span class="lbl">Needs you</span>
+    <span class="count">3</span>
+    <span class="dim micro" style="margin-left:4px">runs blocked on an answer, runs whose engine died, and what is burning money right now</span>
+  </div>
+  <div class="attn-grid">
+
+    <div class="acard ask">
+      <div class="acard-top">
+        <span class="g b"><svg class="ic" aria-hidden="true"><use href="#i-blocked"/></svg><span class="vh">blocked</span></span>
+        <span class="nm">migrate-callsites</span>
+        <span class="rid">r_a03d51e7</span>
+        <span class="right"><span class="chip b"><svg class="ic" aria-hidden="true"><use href="#i-blocked"/></svg>blocked 2m</span></span>
+      </div>
+      <div class="qtext">
+        <span class="who">agent 3 · rewrite:cli asked 2m ago · qid q_9d41</span>
+        Two call sites in <span class="mono">src/cli.js</span> pass a bare string where the new
+        adapter API expects <span class="mono">{path}</span>. Rewrite both, or keep a
+        compatibility shim for one release?
+      </div>
+      <form class="answer" onsubmit="return false">
+        <label class="vh" for="ans">Answer the question</label>
+        <input class="inp" id="ans" value="rewrite both — no shim" >
+        <button class="btn primary lg" type="submit"><svg class="ic ic-12" aria-hidden="true"><use href="#i-send"/></svg>Send</button>
+        <span class="hint">⌘↵ sends · answer here or press <b>a</b> · 2 clicks from Home to answered</span>
+      </form>
+    </div>
+
+    <div class="acard stale">
+      <div class="acard-top">
+        <span class="g s"><svg class="ic" aria-hidden="true"><use href="#i-stale"/></svg><span class="vh">stale</span></span>
+        <span class="nm">audit-viewer-security</span>
+        <span class="right"><span class="chip s"><svg class="ic" aria-hidden="true"><use href="#i-stale"/></svg>stale</span></span>
+      </div>
+      <div class="why">
+        Engine died. It wrote no terminal event, so there is no time of death to report — the
+        run started 1h10m ago. <code>run.lock</code> held by pid 48812 — not running.
+        5 of 9 agents finished; 4 render <b>orphaned</b>, not spinning.
+      </div>
+      <div class="acard-actions">
+        <button class="btn"><svg class="ic ic-12" aria-hidden="true"><use href="#i-resume"/></svg>Resume</button>
+        <button class="btn ghost"><svg class="ic ic-12" aria-hidden="true"><use href="#i-external"/></svg>run.log</button>
+        <span class="dim micro" style="margin-left:auto">$4.10</span>
+      </div>
+    </div>
+
+    <div class="acard live">
+      <div class="acard-top">
+        <span class="g r"><svg class="ic ic-spin" aria-hidden="true"><use href="#i-running"/></svg><span class="vh">running</span></span>
+        <span class="nm">judge-panel-auth-refactor</span>
+        <span class="right"><span class="badge warn"><svg class="ic ic-12" aria-hidden="true"><use href="#i-bolt"/></svg>over budget</span></span>
+      </div>
+      <dl class="ticker">
+        <dt>spend</dt><dd><b>$9.05</b> <span class="dim">· 375.1k out</span></dd>
+        <dt>budget</dt><dd><span style="color:var(--st-failed)">110.3%</span> <span class="dim">of the 340k soft ceiling</span></dd>
+        <dt>agents</dt><dd>4/10 <span class="dim">· 2 running · 1 failed</span></dd>
+      </dl>
+      <div class="gauge">
+        <div class="gauge-bar">
+          <div class="fill" style="width:90.6%"></div>
+          <div class="over" style="left:90.6%;right:0"></div>
+          <div class="ceiling" style="left:90.6%"></div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+        <div class="attn-head"><span class="lbl">All runs</span><span class="count">41</span></div>
+        <div class="rt">
+  <div class="rt-tools">
+    <span class="lbl">Filter</span>
+    <button class="fchip" aria-pressed="false"><svg class="ic ic-12" aria-hidden="true"><use href="#i-running"/></svg>running <span class="n">2</span></button>
+    <button class="fchip" aria-pressed="true"><svg class="ic ic-12" aria-hidden="true"><use href="#i-blocked"/></svg>blocked <span class="n">1</span></button>
+    <button class="fchip" aria-pressed="false"><svg class="ic ic-12" aria-hidden="true"><use href="#i-failed"/></svg>failed <span class="n">1</span></button>
+    <button class="fchip" aria-pressed="false"><svg class="ic ic-12" aria-hidden="true"><use href="#i-done"/></svg>completed <span class="n">3</span></button>
+    <button class="fchip" aria-pressed="false"><svg class="ic ic-12" aria-hidden="true"><use href="#i-stale"/></svg>stale <span class="n">1</span></button>
+    <div class="search">
+      <svg class="ic ic-14" aria-hidden="true"><use href="#i-search"/></svg>
+      <label class="vh" for="q">Filter by name or run id</label>
+      <input class="inp" id="q" placeholder="name or run id   /">
+    </div>
+    <button class="btn ghost" aria-label="Choose columns"><svg class="ic ic-12" aria-hidden="true"><use href="#i-columns"/></svg></button>
+  </div>
+  <div role="table" aria-label="Runs">
+    <div class="rt-row head" role="row">
+      <span></span>
+      <span class="lbl">run</span>
+      <span class="lbl col-ad">adapters</span>
+      <span class="lbl">agents</span>
+      <span class="lbl col-out" style="text-align:right">out</span>
+      <span class="lbl" style="text-align:right">cost</span>
+      <span class="lbl" style="text-align:right">duration</span>
+      <span class="lbl" style="text-align:right">started ↓</span>
+    </div>
+      <div class="rt-row sel" role="row" tabindex="-1">
+        <span class="g r"><svg class="ic ic-spin" aria-hidden="true"><use href="#i-running"/></svg><span class="vh">running</span></span>
+        <span class="rt-name">
+          <span class="nm trunc">judge-panel-auth-refactor</span>
+          <span class="rid">r_2f91c4a8</span>
+          <span class="rt-badges"><span class="badge"><svg class="ic ic-12" aria-hidden="true"><use href="#i-bolt"/></svg>budget</span><span class="badge"><svg class="ic ic-12" aria-hidden="true"><use href="#i-external"/></svg>detached log</span><span class="badge">resumed ×1</span></span>
+        </span>
+        <span class="col-ad"><span class="ad-cluster"><span class="ad ad-claude" title="claude">CL<span class="vh">adapter claude</span></span><span class="ad ad-codex" title="codex">CX<span class="vh">adapter codex</span></span><span class="ad ad-droid" title="droid">DR<span class="vh">adapter droid</span></span><span class="ad ad-amp" title="amp">AM<span class="vh">adapter amp</span></span><span class="more">+2</span></span></span>
+        <span><span class="progress-mini">
+    <span class="bar" aria-hidden="true"><i class="d" style="width:50%"></i></span>
+    <span>4/10<span class="dim"> +1c</span></span>
+  </span></span>
+        <span class="n col-out">375.1k</span>
+        <span class="n">$9.05</span>
+        <span class="n">14m02s</span>
+        <span class="when">started 14m ago</span>
+      </div>
+      <div class="rt-row" role="row" tabindex="-1">
+        <span class="g b"><svg class="ic" aria-hidden="true"><use href="#i-blocked"/></svg><span class="vh">blocked</span></span>
+        <span class="rt-name">
+          <span class="nm trunc">migrate-callsites</span>
+          <span class="rid">r_a03d51e7</span>
+          <span class="rt-badges"><span class="badge ask"><svg class="ic ic-12" aria-hidden="true"><use href="#i-blocked"/></svg>1 question</span></span>
+        </span>
+        <span class="col-ad"><span class="ad-cluster"><span class="ad ad-claude" title="claude">CL<span class="vh">adapter claude</span></span><span class="ad ad-codex" title="codex">CX<span class="vh">adapter codex</span></span></span></span>
+        <span><span class="progress-mini">
+    <span class="bar" aria-hidden="true"><i class="d" style="width:37.5%"></i></span>
+    <span>3/8</span>
+  </span></span>
+        <span class="n col-out">96.4k</span>
+        <span class="n">$1.87</span>
+        <span class="n">4m31s</span>
+        <span class="when">started 5m ago</span>
+      </div>
+      <div class="rt-row" role="row" tabindex="-1">
+        <span class="g s"><svg class="ic" aria-hidden="true"><use href="#i-stale"/></svg><span class="vh">stale</span></span>
+        <span class="rt-name">
+          <span class="nm trunc">audit-viewer-security</span>
+          <span class="rid">r_77c1be92</span>
+          <span class="rt-badges"><span class="badge">resumed ×1</span><span class="badge"><svg class="ic ic-12" aria-hidden="true"><use href="#i-external"/></svg>detached log</span></span>
+        </span>
+        <span class="col-ad"><span class="ad-cluster"><span class="ad ad-codex" title="codex">CX<span class="vh">adapter codex</span></span></span></span>
+        <span><span class="progress-mini">
+    <span class="bar" aria-hidden="true"><i class="d" style="width:55.55555555555556%"></i></span>
+    <span>5/9</span>
+  </span></span>
+        <span class="n col-out">233.1k</span>
+        <span class="n">$4.10</span>
+        <span class="n">21m18s</span>
+        <span class="when">started 47m ago</span>
+      </div>
+      <div class="rt-row" role="row" tabindex="-1">
+        <span class="g d"><svg class="ic" aria-hidden="true"><use href="#i-done"/></svg><span class="vh">completed</span></span>
+        <span class="rt-name">
+          <span class="nm trunc">review-changes</span>
+          <span class="rid">r_5e40aa16</span>
+          <span class="rt-badges"></span>
+        </span>
+        <span class="col-ad"><span class="ad-cluster"><span class="ad ad-claude" title="claude">CL<span class="vh">adapter claude</span></span><span class="ad ad-codex" title="codex">CX<span class="vh">adapter codex</span></span><span class="ad ad-opencode" title="opencode">OC<span class="vh">adapter opencode</span></span></span></span>
+        <span><span class="progress-mini">
+    <span class="bar" aria-hidden="true"><i class="d" style="width:100%"></i></span>
+    <span>12/12</span>
+  </span></span>
+        <span class="n col-out">588.0k</span>
+        <span class="n">$11.20</span>
+        <span class="n">8m42s</span>
+        <span class="when">2h ago</span>
+      </div>
+      <div class="rt-row" role="row" tabindex="-1">
+        <span class="g f"><svg class="ic" aria-hidden="true"><use href="#i-failed"/></svg><span class="vh">failed</span></span>
+        <span class="rt-name">
+          <span class="nm trunc">find-flaky-tests</span>
+          <span class="rid">r_be8207f4</span>
+          <span class="rt-badges"><span class="badge err">spawn_failed</span></span>
+        </span>
+        <span class="col-ad"><span class="ad-cluster"><span class="ad ad-droid" title="droid">DR<span class="vh">adapter droid</span></span><span class="ad ad-claude" title="claude">CL<span class="vh">adapter claude</span></span></span></span>
+        <span><span class="progress-mini">
+    <span class="bar" aria-hidden="true"><i class="d" style="width:77.77777777777779%"></i></span>
+    <span>7/9</span>
+  </span></span>
+        <span class="n col-out">141.7k</span>
+        <span class="n">$2.65</span>
+        <span class="n">3m18s</span>
+        <span class="when">5h ago</span>
+      </div>
+      <div class="rt-row" role="row" tabindex="-1">
+        <span class="g d"><svg class="ic" aria-hidden="true"><use href="#i-done"/></svg><span class="vh">completed</span></span>
+        <span class="rt-name">
+          <span class="nm trunc">pipeline-migrate-tests</span>
+          <span class="rid">r_0c9f31da</span>
+          <span class="rt-badges"><span class="badge">resumed ×2</span><span class="badge replay"><svg class="ic ic-12" aria-hidden="true"><use href="#i-cached"/></svg>6 cached</span></span>
+        </span>
+        <span class="col-ad"><span class="ad-cluster"><span class="ad ad-codex" title="codex">CX<span class="vh">adapter codex</span></span></span></span>
+        <span><span class="progress-mini">
+    <span class="bar" aria-hidden="true"><i class="d" style="width:100%"></i></span>
+    <span>3/9<span class="dim"> +6c</span></span>
+  </span></span>
+        <span class="n col-out">71.9k</span>
+        <span class="n">$0.938</span>
+        <span class="n">1m52s</span>
+        <span class="when">9h ago</span>
+      </div>
+      <div class="rt-row" role="row" tabindex="-1">
+        <span class="g d"><svg class="ic" aria-hidden="true"><use href="#i-done"/></svg><span class="vh">completed</span></span>
+        <span class="rt-name">
+          <span class="nm trunc">hello.workflow.js</span>
+          <span class="rid">r_hello_1</span>
+          <span class="rt-badges"></span>
+        </span>
+        <span class="col-ad"><span class="ad-cluster"><span class="ad ad-mock" title="mock">MK<span class="vh">adapter mock</span></span></span></span>
+        <span><span class="progress-mini">
+    <span class="bar" aria-hidden="true"><i class="d" style="width:100%"></i></span>
+    <span>1/1</span>
+  </span></span>
+        <span class="n col-out">1.2k</span>
+        <span class="n"><span class="absent" title="no cost in the journal for this run">&nbsp;</span></span>
+        <span class="n">820ms</span>
+        <span class="when">yesterday</span>
+      </div>
+      <div class="rt-row" role="row" tabindex="-1">
+        <span class="g x"><svg class="ic" aria-hidden="true"><use href="#i-cancelled"/></svg><span class="vh">interrupted</span></span>
+        <span class="rt-name">
+          <span class="nm trunc"><span class="mono dim">r_41ba7cc0</span></span>
+          
+          <span class="rt-badges"><span class="badge"><svg class="ic ic-12" aria-hidden="true"><use href="#i-unknown"/></svg>older engine</span></span>
+        </span>
+        <span class="col-ad"><span class="ad-cluster"><span class="ad ad-unknown" title="unknown">·<span class="vh">adapter unknown</span></span></span></span>
+        <span><span class="progress-mini">
+    <span class="bar" aria-hidden="true"><i class="d" style="width:50%"></i></span>
+    <span>2/4</span>
+  </span></span>
+        <span class="n col-out">18.3k</span>
+        <span class="n"><span class="absent" title="no cost in the journal for this run">&nbsp;</span></span>
+        <span class="n">46s</span>
+        <span class="when">yesterday</span>
+      </div>
+  </div>
+  <div class="rt-more"><button class="btn">Load more <span class="dim">· 41 runs total</span></button></div>
+</div>
+      </div>
+    </div>
+  </div>
+</div>
+    <span class="mk" style="top:60px;left:8px">8</span>
+    <span class="mk" style="top:150px;left:60px">9</span>
+    <span class="mk" style="top:690px;left:400px">10</span>
+    <span class="mk" style="top:330px;left:8px">11</span>
+  </div>
+</div>
+  <div class="frame-wrap">
+  <div class="frame-head"><h2>Home — 480px (the floor of §3.3's single 900px breakpoint)</h2><span class="w">480 × 1000 · §3.3 · §2.3</span></div>
+  <div class="frame w800 w480">
+    <div class="app" style="height:1000px">
+  <div class="topbar">
+  <div class="brand"><span class="wm">flo<i>w</i>ition</span><span class="v">viewer 0.2.0</span></div>
+  <nav class="nav" aria-label="Primary">
+    <a href="#/" aria-current="page">Runs</a>
+    <a href="#/run/r_2f91c4a8" >Cockpit</a>
+  </nav>
+  <div class="topbar-right">
+    
+    <span class="ro-chip"><svg class="ic ic-12" aria-hidden="true"><use href="#i-cancel"/></svg>read-only</span>
+    <button class="btn ghost" aria-label="Command palette"><svg class="ic ic-12" aria-hidden="true"><use href="#i-search"/></svg><kbd>⌘K</kbd></button>
+    <button class="icb" aria-label="Keyboard shortcuts"><svg class="ic" aria-hidden="true"><use href="#i-keyboard"/></svg></button>
+  </div>
+</div>
+  <div style="display:flex;flex:1;min-height:0">
+    <div class="strip" style="width:44px;flex:none;border-right:1px solid var(--hairline)">
+      <button class="icb" aria-label="Expand run rail"><svg class="ic ic-14" aria-hidden="true"><use href="#i-chevron"/></svg></button>
+      <span class="dotn">41</span>
+      <span class="vlbl">runs</span>
+    </div>
+    <div style="flex:1;min-width:0;overflow:hidden">
+      <div class="home">
+        <div class="home-head">
+          <h1>Runs</h1>
+          <span class="sub">41 runs · 2 live</span>
+        </div>
+        <div class="attn">
+  <div class="attn-head">
+    <span class="lbl">Needs you</span>
+    <span class="count">3</span>
+    <span class="dim micro" style="margin-left:4px">runs blocked on an answer, runs whose engine died, and what is burning money right now</span>
+  </div>
+  <div class="attn-grid">
+
+    <div class="acard ask">
+      <div class="acard-top">
+        <span class="g b"><svg class="ic" aria-hidden="true"><use href="#i-blocked"/></svg><span class="vh">blocked</span></span>
+        <span class="nm">migrate-callsites</span>
+        <span class="rid">r_a03d51e7</span>
+        <span class="right"><span class="chip b"><svg class="ic" aria-hidden="true"><use href="#i-blocked"/></svg>blocked 2m</span></span>
+      </div>
+      <div class="qtext">
+        <span class="who">agent 3 · rewrite:cli asked 2m ago · qid q_9d41</span>
+        Two call sites in <span class="mono">src/cli.js</span> pass a bare string where the new
+        adapter API expects <span class="mono">{path}</span>. Rewrite both, or keep a
+        compatibility shim for one release?
+      </div>
+      <form class="answer" onsubmit="return false">
+        <label class="vh" for="ans">Answer the question</label>
+        <input class="inp" id="ans" value="rewrite both — no shim" >
+        <button class="btn primary lg" type="submit"><svg class="ic ic-12" aria-hidden="true"><use href="#i-send"/></svg>Send</button>
+        <span class="hint">⌘↵ sends · answer here or press <b>a</b> · 2 clicks from Home to answered</span>
+      </form>
+    </div>
+
+    <div class="acard stale">
+      <div class="acard-top">
+        <span class="g s"><svg class="ic" aria-hidden="true"><use href="#i-stale"/></svg><span class="vh">stale</span></span>
+        <span class="nm">audit-viewer-security</span>
+        <span class="right"><span class="chip s"><svg class="ic" aria-hidden="true"><use href="#i-stale"/></svg>stale</span></span>
+      </div>
+      <div class="why">
+        Engine died. It wrote no terminal event, so there is no time of death to report — the
+        run started 1h10m ago. <code>run.lock</code> held by pid 48812 — not running.
+        5 of 9 agents finished; 4 render <b>orphaned</b>, not spinning.
+      </div>
+      <div class="acard-actions">
+        <button class="btn"><svg class="ic ic-12" aria-hidden="true"><use href="#i-resume"/></svg>Resume</button>
+        <button class="btn ghost"><svg class="ic ic-12" aria-hidden="true"><use href="#i-external"/></svg>run.log</button>
+        <span class="dim micro" style="margin-left:auto">$4.10</span>
+      </div>
+    </div>
+
+    <div class="acard live">
+      <div class="acard-top">
+        <span class="g r"><svg class="ic ic-spin" aria-hidden="true"><use href="#i-running"/></svg><span class="vh">running</span></span>
+        <span class="nm">judge-panel-auth-refactor</span>
+        <span class="right"><span class="badge warn"><svg class="ic ic-12" aria-hidden="true"><use href="#i-bolt"/></svg>over budget</span></span>
+      </div>
+      <dl class="ticker">
+        <dt>spend</dt><dd><b>$9.05</b> <span class="dim">· 375.1k out</span></dd>
+        <dt>budget</dt><dd><span style="color:var(--st-failed)">110.3%</span> <span class="dim">of the 340k soft ceiling</span></dd>
+        <dt>agents</dt><dd>4/10 <span class="dim">· 2 running · 1 failed</span></dd>
+      </dl>
+      <div class="gauge">
+        <div class="gauge-bar">
+          <div class="fill" style="width:90.6%"></div>
+          <div class="over" style="left:90.6%;right:0"></div>
+          <div class="ceiling" style="left:90.6%"></div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+        <div class="attn-head"><span class="lbl">All runs</span><span class="count">41</span></div>
+        <div class="rt">
+  <div class="rt-tools">
+    <span class="lbl">Filter</span>
+    <button class="fchip" aria-pressed="false"><svg class="ic ic-12" aria-hidden="true"><use href="#i-running"/></svg>running <span class="n">2</span></button>
+    <button class="fchip" aria-pressed="true"><svg class="ic ic-12" aria-hidden="true"><use href="#i-blocked"/></svg>blocked <span class="n">1</span></button>
+    <button class="fchip" aria-pressed="false"><svg class="ic ic-12" aria-hidden="true"><use href="#i-failed"/></svg>failed <span class="n">1</span></button>
+    <button class="fchip" aria-pressed="false"><svg class="ic ic-12" aria-hidden="true"><use href="#i-done"/></svg>completed <span class="n">3</span></button>
+    <button class="fchip" aria-pressed="false"><svg class="ic ic-12" aria-hidden="true"><use href="#i-stale"/></svg>stale <span class="n">1</span></button>
+    <div class="search">
+      <svg class="ic ic-14" aria-hidden="true"><use href="#i-search"/></svg>
+      <label class="vh" for="q">Filter by name or run id</label>
+      <input class="inp" id="q" placeholder="name or run id   /">
+    </div>
+    <button class="btn ghost" aria-label="Choose columns"><svg class="ic ic-12" aria-hidden="true"><use href="#i-columns"/></svg></button>
+  </div>
+  <div role="table" aria-label="Runs">
+    <div class="rt-row head" role="row">
+      <span></span>
+      <span class="lbl">run</span>
+      <span class="lbl col-ad">adapters</span>
+      <span class="lbl">agents</span>
+      <span class="lbl col-out" style="text-align:right">out</span>
+      <span class="lbl" style="text-align:right">cost</span>
+      <span class="lbl" style="text-align:right">duration</span>
+      <span class="lbl" style="text-align:right">started ↓</span>
+    </div>
+      <div class="rt-row sel" role="row" tabindex="-1">
+        <span class="g r"><svg class="ic ic-spin" aria-hidden="true"><use href="#i-running"/></svg><span class="vh">running</span></span>
+        <span class="rt-name">
+          <span class="nm trunc">judge-panel-auth-refactor</span>
+          <span class="rid">r_2f91c4a8</span>
+          <span class="rt-badges"><span class="badge"><svg class="ic ic-12" aria-hidden="true"><use href="#i-bolt"/></svg>budget</span><span class="badge"><svg class="ic ic-12" aria-hidden="true"><use href="#i-external"/></svg>detached log</span><span class="badge">resumed ×1</span></span>
+        </span>
+        <span class="col-ad"><span class="ad-cluster"><span class="ad ad-claude" title="claude">CL<span class="vh">adapter claude</span></span><span class="ad ad-codex" title="codex">CX<span class="vh">adapter codex</span></span><span class="ad ad-droid" title="droid">DR<span class="vh">adapter droid</span></span><span class="ad ad-amp" title="amp">AM<span class="vh">adapter amp</span></span><span class="more">+2</span></span></span>
+        <span><span class="progress-mini">
+    <span class="bar" aria-hidden="true"><i class="d" style="width:50%"></i></span>
+    <span>4/10<span class="dim"> +1c</span></span>
+  </span></span>
+        <span class="n col-out">375.1k</span>
+        <span class="n">$9.05</span>
+        <span class="n">14m02s</span>
+        <span class="when">started 14m ago</span>
+      </div>
+      <div class="rt-row" role="row" tabindex="-1">
+        <span class="g b"><svg class="ic" aria-hidden="true"><use href="#i-blocked"/></svg><span class="vh">blocked</span></span>
+        <span class="rt-name">
+          <span class="nm trunc">migrate-callsites</span>
+          <span class="rid">r_a03d51e7</span>
+          <span class="rt-badges"><span class="badge ask"><svg class="ic ic-12" aria-hidden="true"><use href="#i-blocked"/></svg>1 question</span></span>
+        </span>
+        <span class="col-ad"><span class="ad-cluster"><span class="ad ad-claude" title="claude">CL<span class="vh">adapter claude</span></span><span class="ad ad-codex" title="codex">CX<span class="vh">adapter codex</span></span></span></span>
+        <span><span class="progress-mini">
+    <span class="bar" aria-hidden="true"><i class="d" style="width:37.5%"></i></span>
+    <span>3/8</span>
+  </span></span>
+        <span class="n col-out">96.4k</span>
+        <span class="n">$1.87</span>
+        <span class="n">4m31s</span>
+        <span class="when">started 5m ago</span>
+      </div>
+      <div class="rt-row" role="row" tabindex="-1">
+        <span class="g s"><svg class="ic" aria-hidden="true"><use href="#i-stale"/></svg><span class="vh">stale</span></span>
+        <span class="rt-name">
+          <span class="nm trunc">audit-viewer-security</span>
+          <span class="rid">r_77c1be92</span>
+          <span class="rt-badges"><span class="badge">resumed ×1</span><span class="badge"><svg class="ic ic-12" aria-hidden="true"><use href="#i-external"/></svg>detached log</span></span>
+        </span>
+        <span class="col-ad"><span class="ad-cluster"><span class="ad ad-codex" title="codex">CX<span class="vh">adapter codex</span></span></span></span>
+        <span><span class="progress-mini">
+    <span class="bar" aria-hidden="true"><i class="d" style="width:55.55555555555556%"></i></span>
+    <span>5/9</span>
+  </span></span>
+        <span class="n col-out">233.1k</span>
+        <span class="n">$4.10</span>
+        <span class="n">21m18s</span>
+        <span class="when">started 47m ago</span>
+      </div>
+      <div class="rt-row" role="row" tabindex="-1">
+        <span class="g d"><svg class="ic" aria-hidden="true"><use href="#i-done"/></svg><span class="vh">completed</span></span>
+        <span class="rt-name">
+          <span class="nm trunc">review-changes</span>
+          <span class="rid">r_5e40aa16</span>
+          <span class="rt-badges"></span>
+        </span>
+        <span class="col-ad"><span class="ad-cluster"><span class="ad ad-claude" title="claude">CL<span class="vh">adapter claude</span></span><span class="ad ad-codex" title="codex">CX<span class="vh">adapter codex</span></span><span class="ad ad-opencode" title="opencode">OC<span class="vh">adapter opencode</span></span></span></span>
+        <span><span class="progress-mini">
+    <span class="bar" aria-hidden="true"><i class="d" style="width:100%"></i></span>
+    <span>12/12</span>
+  </span></span>
+        <span class="n col-out">588.0k</span>
+        <span class="n">$11.20</span>
+        <span class="n">8m42s</span>
+        <span class="when">2h ago</span>
+      </div>
+      <div class="rt-row" role="row" tabindex="-1">
+        <span class="g f"><svg class="ic" aria-hidden="true"><use href="#i-failed"/></svg><span class="vh">failed</span></span>
+        <span class="rt-name">
+          <span class="nm trunc">find-flaky-tests</span>
+          <span class="rid">r_be8207f4</span>
+          <span class="rt-badges"><span class="badge err">spawn_failed</span></span>
+        </span>
+        <span class="col-ad"><span class="ad-cluster"><span class="ad ad-droid" title="droid">DR<span class="vh">adapter droid</span></span><span class="ad ad-claude" title="claude">CL<span class="vh">adapter claude</span></span></span></span>
+        <span><span class="progress-mini">
+    <span class="bar" aria-hidden="true"><i class="d" style="width:77.77777777777779%"></i></span>
+    <span>7/9</span>
+  </span></span>
+        <span class="n col-out">141.7k</span>
+        <span class="n">$2.65</span>
+        <span class="n">3m18s</span>
+        <span class="when">5h ago</span>
+      </div>
+      <div class="rt-row" role="row" tabindex="-1">
+        <span class="g d"><svg class="ic" aria-hidden="true"><use href="#i-done"/></svg><span class="vh">completed</span></span>
+        <span class="rt-name">
+          <span class="nm trunc">pipeline-migrate-tests</span>
+          <span class="rid">r_0c9f31da</span>
+          <span class="rt-badges"><span class="badge">resumed ×2</span><span class="badge replay"><svg class="ic ic-12" aria-hidden="true"><use href="#i-cached"/></svg>6 cached</span></span>
+        </span>
+        <span class="col-ad"><span class="ad-cluster"><span class="ad ad-codex" title="codex">CX<span class="vh">adapter codex</span></span></span></span>
+        <span><span class="progress-mini">
+    <span class="bar" aria-hidden="true"><i class="d" style="width:100%"></i></span>
+    <span>3/9<span class="dim"> +6c</span></span>
+  </span></span>
+        <span class="n col-out">71.9k</span>
+        <span class="n">$0.938</span>
+        <span class="n">1m52s</span>
+        <span class="when">9h ago</span>
+      </div>
+      <div class="rt-row" role="row" tabindex="-1">
+        <span class="g d"><svg class="ic" aria-hidden="true"><use href="#i-done"/></svg><span class="vh">completed</span></span>
+        <span class="rt-name">
+          <span class="nm trunc">hello.workflow.js</span>
+          <span class="rid">r_hello_1</span>
+          <span class="rt-badges"></span>
+        </span>
+        <span class="col-ad"><span class="ad-cluster"><span class="ad ad-mock" title="mock">MK<span class="vh">adapter mock</span></span></span></span>
+        <span><span class="progress-mini">
+    <span class="bar" aria-hidden="true"><i class="d" style="width:100%"></i></span>
+    <span>1/1</span>
+  </span></span>
+        <span class="n col-out">1.2k</span>
+        <span class="n"><span class="absent" title="no cost in the journal for this run">&nbsp;</span></span>
+        <span class="n">820ms</span>
+        <span class="when">yesterday</span>
+      </div>
+      <div class="rt-row" role="row" tabindex="-1">
+        <span class="g x"><svg class="ic" aria-hidden="true"><use href="#i-cancelled"/></svg><span class="vh">interrupted</span></span>
+        <span class="rt-name">
+          <span class="nm trunc"><span class="mono dim">r_41ba7cc0</span></span>
+          
+          <span class="rt-badges"><span class="badge"><svg class="ic ic-12" aria-hidden="true"><use href="#i-unknown"/></svg>older engine</span></span>
+        </span>
+        <span class="col-ad"><span class="ad-cluster"><span class="ad ad-unknown" title="unknown">·<span class="vh">adapter unknown</span></span></span></span>
+        <span><span class="progress-mini">
+    <span class="bar" aria-hidden="true"><i class="d" style="width:50%"></i></span>
+    <span>2/4</span>
+  </span></span>
+        <span class="n col-out">18.3k</span>
+        <span class="n"><span class="absent" title="no cost in the journal for this run">&nbsp;</span></span>
+        <span class="n">46s</span>
+        <span class="when">yesterday</span>
+      </div>
+  </div>
+  <div class="rt-more"><button class="btn">Load more <span class="dim">· 41 runs total</span></button></div>
+</div>
+      </div>
+    </div>
+  </div>
+</div>
+    <span class="mk" style="top:420px;left:8px">12</span>
+  </div>
+</div>
+  <div class="frame-wrap">
+  <div class="frame-head"><h2>Home — the three states that are not the happy path</h2>
+    <span class="w">§2.3 · parity #40 · zero-runs teaching card</span></div>
+  <div class="frame" style="padding:24px;display:grid;gap:20px">
+    <div>
+      <div class="lbl" style="margin-bottom:8px">loading — skeleton rows, no spinner, no layout shift</div>
+      <div class="rt">
+        <div class="rt-row head" role="row"><span></span><span class="lbl">run</span><span class="lbl">adapters</span>
+          <span class="lbl">agents</span><span class="lbl" style="text-align:right">out</span>
+          <span class="lbl" style="text-align:right">cost</span><span class="lbl" style="text-align:right">duration</span>
+          <span class="lbl" style="text-align:right">started</span></div>
+        <div class="rt-row"><span class="skel" style="width:12px;height:12px;border-radius:999px"></span>
+          <span class="rt-name"><span class="skel" style="width:62%"></span></span>
+          <span class="skel" style="width:52px"></span><span class="skel" style="width:44px"></span>
+          <span class="skel" style="width:40px;margin-left:auto"></span><span class="skel" style="width:36px;margin-left:auto"></span>
+          <span class="skel" style="width:38px;margin-left:auto"></span><span class="skel" style="width:56px;margin-left:auto"></span></div>
+        <div class="rt-row"><span class="skel" style="width:12px;height:12px;border-radius:999px"></span>
+          <span class="rt-name"><span class="skel" style="width:44%"></span></span>
+          <span class="skel" style="width:52px"></span><span class="skel" style="width:44px"></span>
+          <span class="skel" style="width:40px;margin-left:auto"></span><span class="skel" style="width:36px;margin-left:auto"></span>
+          <span class="skel" style="width:38px;margin-left:auto"></span><span class="skel" style="width:56px;margin-left:auto"></span></div>
+        <div class="rt-row"><span class="skel" style="width:12px;height:12px;border-radius:999px"></span>
+          <span class="rt-name"><span class="skel" style="width:54%"></span></span>
+          <span class="skel" style="width:52px"></span><span class="skel" style="width:44px"></span>
+          <span class="skel" style="width:40px;margin-left:auto"></span><span class="skel" style="width:36px;margin-left:auto"></span>
+          <span class="skel" style="width:38px;margin-left:auto"></span><span class="skel" style="width:56px;margin-left:auto"></span></div>
+      </div>
+    </div>
+    <div>
+      <div class="lbl" style="margin-bottom:8px">API unreachable — parity #40. Names the command, does not blame the network.</div>
+      <div class="banner">
+        <svg class="ic ic-14" aria-hidden="true"><use href="#i-failed"/></svg>
+        <span><b>API unreachable.</b> Is <code>flowition viewer</code> still running? The viewer
+        shuts down after 30 minutes idle.</span>
+        <button class="btn sm" style="margin-left:auto"><svg class="ic ic-12" aria-hidden="true"><use href="#i-resume"/></svg>Retry</button>
+      </div>
+    </div>
+    <div>
+      <div class="lbl" style="margin-bottom:8px">zero runs — the quick-start snippet, not a shrug</div>
+      <div class="card" style="padding:0">
+        <div class="empty">
+          <svg class="ic ic-20 dim" aria-hidden="true"><use href="#i-gantt"/></svg>
+          <h3>No runs yet</h3>
+          <p>flowition records every run under <span class="mono">.flowition/runs/</span>. Start
+          one and this page fills in — the viewer is already watching.</p>
+          <div class="snippet"><span class="p">$</span><span>flowition run hello.workflow.js</span>
+            <button class="icb" aria-label="Copy command"><svg class="ic ic-12" aria-hidden="true"><use href="#i-copy"/></svg></button></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+<div class="frame-wrap"><div class="notes">
+  <div class="lbl" style="margin-bottom:8px">Annotations — what to rule on</div>
+  <ol>
+    <li><b>The attention strip is the product thesis, not a banner.</b> §2.3 / Q1: three card
+       kinds — blocked on an answer, engine died, burning money — each with the one action that
+       resolves it. It renders only when non-empty, so a calm queue means a calm screen. Rule on
+       the three-column split: I gave the answer card 1.35fr because typing happens there.</li>
+    <li><b>Inline answering, and the only accent fill on the screen.</b> §3.7's action hierarchy
+       gives each region exactly one primary action; Home's is <i>Send</i>. Resume, Trash, Load
+       more and every filter are quiet outlines. That is why the eye lands on the answer box
+       first — the color budget was spent deliberately.</li>
+    <li><b>Live spend is a gauge, not a number.</b> The ticker plots <code>spend.output</code>
+       against <code>budgetTotal</code> — both output tokens (§2.4, critique M19). Input tokens
+       and dollars never enter the bar. This run is at 110.3%, so the hatched overshoot zone is
+       showing on Home too, and the badge reads "over budget" rather than "blocked" — the
+       budget is pre-admission advisory and the UI must never imply a hard cap.</li>
+    <li><b>Filters are chips with counts; sort is fixed to newest-first (§2.3).</b> Pressed state
+       is <code>--surface-selected</code> plus an accent-38% edge — no fill, because a filter is
+       not an action. <code>/</code> focuses the search field.</li>
+    <li><b>Empty ≠ zero.</b> Row 7 (<code>hello.workflow.js</code>) has no cost in its journal, so
+       the cost cell is <b>blank</b>. Parity #53/#114: never fabricate <code>$0.00</code> or a
+       placeholder dash for a number the engine never wrote. Row 8 has no name and shows its
+       run id in mono instead.</li>
+    <li><b>Old runs are labelled, not hidden.</b> Row 8 carries an "older engine" badge; its
+       cockpit will show the §6.5 degradation notes rather than blank panels. Caps come from the
+       run event's engine version (E3), never from field-presence sniffing (critique M2).</li>
+    <li><b>Density target: 44px rows, eight aligned columns, tnum everywhere.</b> Numbers are
+       right-aligned mono so magnitudes compare down the column at a glance; the status glyph is
+       16px in an 18px well so the leftmost column reads as a single scannable strip. The done
+       check is <i>kept</i> here (it is not a quiet list) but is the least saturated of the
+       state colors on purpose.</li>
+    <li><b>800px: the rail is a 44px icon strip, not a hidden feature.</b> §3.3 / parity #42 —
+       below 900px the rail becomes an overlay drawer, and Home is where it rests closed. The
+       strip keeps the run count visible, so "how many runs are there" never requires opening
+       anything. Tapping it opens the drawer over the page; Escape or a selection closes it and
+       returns focus to this button (§3.6).</li>
+    <li><b>800px: the queue stacks, and the answer composer gets the full width.</b> The attention
+       grid is one column below 1100px, so the card order becomes the priority order — blocked
+       first, then stale, then spend. This is the one place the narrow layout is <i>better</i>:
+       the composer is 720px wide instead of 380px.</li>
+    <li><b>800px: two columns are dropped, and they are the right two.</b> The adapter cluster and
+       the output-token count come out; status, name+badges, agents, cost, duration and started
+       stay. That returns ~190px to the name column, which is what is actually scanned. Both
+       dropped values are on the run's own cockpit, so nothing is reachable only at 1440.</li>
+    <li><b>The stale card does not date the death, and that is the composition.</b> An earlier
+       revision of this comp read "Engine died 26m ago" at both viewports. Nothing on disk
+       supports it: <code>endedAt</code> is written from a terminal <code>run</code> event and
+       from nothing else (§6.2, <code>src/viewer/summaries.js</code>), and a run is <i>stale</i>
+       precisely because the engine went away without writing one. Substituting
+       <code>startedAt</code> — or the <code>run.lock</code> mtime, which dates when the engine
+       ACQUIRED the run — turns the run's AGE into a claim about when it stopped, and makes the
+       runtime figure climb for as long as the tab is open. The card now states what it knows
+       (the run started then; the server's own lock verdict) and the elapsed figure is gone with
+       it. The BUILT Home in <code>built/home-built-*.png</code> already renders it this way, so
+       this is also what makes the §3.7 side-by-side compare rather than diverge. A
+       <code>lastSeenAt</code> on RunSummary is the only thing that would let this card carry a
+       death time, and that is a W6 change.</li>
+    <li><b>480px: the run table stops being a table.</b> There is still exactly one breakpoint —
+       §3.3's 900px — and the 480 frame runs the same rules; what changes is that fixed columns
+       stop fitting. Each row wraps into a two-line record: identity on line one (status glyph,
+       name, badges), the numbers on line two as a dot-separated meta strip. <b>The column header
+       row is dropped</b>, because every remaining value is self-describing (<code>4/10</code>
+       agents, <code>$9.05</code>, <code>14m02s</code>, <code>2m ago</code>) and a column label
+       with no column is furniture. Sort stays newest-first and the filter chips stay, so nothing
+       becomes unreachable — only re-shaped. The attention queue needs no change at all: it has
+       been one card per row since 1100px. <b>Rule on this:</b> the wrapped record versus keeping
+       three columns and truncating the name, which is the other way this could go.</li>
+  </ol>
+</div></div>
+</body>
+</html>

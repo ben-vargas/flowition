@@ -1,0 +1,64 @@
+# CI — the declared support floor is enforced, not just declared.
+#
+# Root package.json says `engines.node: ">=18.17"`. Node >= 22.7 masks whole classes of
+# module-scope and syntax problems (automatic CommonJS/ESM detection above all), so a
+# suite that is only ever run on current Node cannot see them. The `root` job therefore
+# runs the FULL suite on the floor as well as on current, and both must be green.
+#
+# viewer/ is a private build workspace, but viewer/dist is published by the root package.
+# Its toolchain is bound by the same floor (viewer/package.json `//engines`), so it is
+# exercised on both too. The clean-build comparison is deliberately explicit here: a
+# stale committed dist is exactly what globally-installed users would receive.
+
+name: CI
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  root:
+    name: root suite · node ${{ matrix.node }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # 18.17.x is the declared minimum; `lts/*` is what most users actually run.
+        node: ['18.17.1', 'lts/*']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+      # No `npm ci`: the root package has zero dependencies by design (§4.6) and the
+      # suite runs on the mock adapter, so it needs nothing installed.
+      - run: node scripts/test.mjs
+
+  viewer:
+    name: viewer suite · node ${{ matrix.node }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ['18.17.1', 'lts/*']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+          cache-dependency-path: viewer/package-lock.json
+      - run: npm ci
+        working-directory: viewer
+      - run: npm run typecheck
+        working-directory: viewer
+      - name: Rebuild viewer and verify committed dist + CSP inline policy
+        run: npm run check:dist
+        working-directory: viewer
+      - run: npm test
+        working-directory: viewer
+      - name: Verify the published package carries the viewer
+        run: npm run check:package
+        working-directory: viewer

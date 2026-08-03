@@ -1,0 +1,121 @@
+/* §2.6 Result view. Tokens only — every colour here is a §3.2 token that the §3.6 contrast
+   gate (`src/ui/tokens.ts` PAIRS) already covers, so this screen adds no new pair to check
+   and cannot introduce an unmeasured swatch. */
+
+.result-screen {
+  display: flex; flex-direction: column; gap: var(--s3);
+  padding: var(--s4); min-width: 0; max-width: 1040px;
+}
+
+.res-head {
+  display: flex; align-items: center; flex-wrap: wrap; gap: var(--s2); row-gap: 8px;
+  min-width: 0;
+}
+.res-head h1 { font: 500 var(--fs-title)/1.2 var(--sans); }
+/* `result.json`'s `status` is the file's field forwarded verbatim (§5.4.5), so the chip's
+   text is data. `displayStatus` bounds the TEXT to 32 characters; this bounds the BOX, so
+   even a status that long can neither push the run id and the Cockpit control out of the row
+   nor escape its own edge. The base `.chip` is `white-space: nowrap` with no shrink — the
+   exact shape of the unshrinkable-chip defect `.chipline` fixes elsewhere
+   (ui/chipline.test.ts) — so both halves of the cure are stated here. */
+.res-head .chip { flex: 0 1 auto; min-width: 0; max-width: 24ch; overflow: hidden; }
+.res-head h1:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.res-head .rid {
+  font: 400 var(--fs-micro)/1 var(--mono); color: var(--text-3);
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+/* §3.5: `chevron` points right; the back control points the other way. A transform rather
+   than a 44th glyph — this one is not a disclosure, so it inherits no transition. */
+.res-head .back { transform: scaleX(-1); }
+
+.res-skel { height: 96px; border-radius: var(--r2); }
+
+/* The framing sentence — §2.6's "the interrupted/failed framing". A left rule in the run's
+   own status colour, never a tint fill: §3.2 keeps elevation as border+shadow. */
+.res-frame {
+  border: 1px solid var(--hairline); border-left: 2px solid var(--hairline-strong);
+  border-radius: var(--r2); background: var(--surface); padding: var(--s3) var(--s4);
+}
+.res-frame.failed { border-left-color: var(--st-failed); }
+.res-frame.ok { border-left-color: var(--st-done); }
+.res-frame.pending { border-left-color: var(--st-queued); }
+/* §6.5: a cancelled run and a status this build does not recognize have earned neither the
+   success rule nor the failure one. The neutral rule is the base `--hairline-strong`, stated
+   explicitly so the class is a decision in the DOM rather than the absence of one — and so a
+   test can assert the frame is neither red nor green. No new (fg, bg) pair for §3.6's gate. */
+.res-frame.neutral { border-left-color: var(--hairline-strong); }
+/* `overflow-wrap: anywhere` because the prose interpolates the same file-supplied status
+   word: an unbroken 32-character token has no break opportunity, and without this the
+   paragraph would widen past its own 88ch column rather than wrap inside it. */
+.res-say {
+  font-size: var(--fs-meta); color: var(--text); line-height: 1.6; max-width: 88ch;
+  min-width: 0; overflow-wrap: anywhere;
+}
+.res-say + .res-say { margin-top: 6px; }
+.res-say.dim { color: var(--text-2); }
+.res-say code { font: 400 var(--fs-micro)/1 var(--mono); color: var(--text-2); }
+.res-say .chip { vertical-align: middle; }
+
+.res-actions { display: flex; align-items: center; gap: 6px; row-gap: 6px; }
+
+.res-value, .res-error {
+  border: 1px solid var(--hairline); border-radius: var(--r2);
+  background: var(--surface); padding: var(--s3); min-width: 0;
+}
+.res-error { border-left: 2px solid var(--st-failed); }
+.res-error .ic { color: var(--st-failed); }
+.res-value-bar {
+  display: flex; align-items: center; gap: var(--s2); margin-bottom: var(--s2); min-width: 0;
+}
+.res-value-bar .lbl { margin-right: auto; }
+.res-error-msg {
+  font: 400 var(--fs-meta)/1.55 var(--mono); color: var(--st-failed);
+  white-space: pre-wrap; overflow-wrap: anywhere; max-width: 88ch;
+}
+
+/* §3.3: the transcript's 88ch measure applies to prose here too; the raw pane may break out
+   to the panel's width because it is a terminal-ish card, not prose. */
+.res-value .prose { max-width: 88ch; }
+.res-raw {
+  font: 400 var(--fs-micro)/1.55 var(--mono); color: var(--text);
+  background: var(--canvas); border: 1px solid var(--hairline); border-radius: var(--r1);
+  padding: var(--s3); max-height: 60vh; overflow: auto; white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.res-note { margin-top: 2px; }
+
+/* ---- the JSON tree (§2.6) ---------------------------------------------------------- */
+/* Rows are FLAT siblings with an indent (see JsonTree.tsx) — 32 levels of nesting would put
+   the depth cap back into the layout path it exists to keep out of. */
+.jt { display: flex; flex-direction: column; max-height: 62vh; overflow: auto; }
+.jt-row {
+  display: flex; align-items: center; gap: 5px; min-width: 0;
+  height: 22px; font: 400 var(--fs-micro)/1 var(--mono);
+  border-radius: var(--r1);
+}
+.jt-row:hover { background: var(--surface-raised); }
+.jt-twist {
+  width: 16px; height: 16px; flex: none;
+  display: inline-grid; place-items: center;
+  color: var(--text-3); background: none; border: 0; border-radius: var(--r1); padding: 0;
+  cursor: pointer;
+}
+.jt-twist.spacer { cursor: default; }
+.jt-twist:hover { color: var(--text); }
+.jt-key { color: var(--text-2); flex: none; }
+.jt-key em { font-style: normal; color: var(--text-3); }
+.jt-sum { color: var(--text-3); flex: none; }
+.jt-v { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.jt-v.s { color: var(--st-done); }
+.jt-v.num { color: var(--st-running); }
+.jt-v.b { color: var(--st-blocked); }
+.jt-v.n { color: var(--text-3); }
+/* The copy affordance is quiet until the row is hovered or the button itself is focused —
+   §3.6 keeps it reachable by keyboard at all times, which `:focus-within` guarantees. */
+.jt-copy { opacity: 0; margin-left: auto; flex: none; }
+.jt-row:hover .jt-copy, .jt-copy:focus-visible { opacity: 1; }
+
+@media (max-width: 899px) {
+  .result-screen { padding: var(--s3); }
+}

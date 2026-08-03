@@ -1,0 +1,179 @@
+/* Home (DESIGN §2.3), ported from the approved W8a comp `docs/frontend/comps/home.html`.
+ *
+ * Density target from that comp's annotation 7: 44px rows, eight aligned columns, tnum
+ * everywhere. Numbers are right-aligned mono so magnitudes compare down the column at a
+ * glance; the status glyph sits in an 18px well so the leftmost column reads as one
+ * scannable strip.
+ */
+
+.home { padding: var(--s5) var(--s6) var(--s6); }
+.home-head { display: flex; align-items: flex-end; gap: var(--s3); margin-bottom: var(--s4); }
+.home-head h1 { font: 500 var(--fs-screen)/1.2 var(--sans); }
+.home-head .sub {
+  font-size: var(--fs-meta); color: var(--text-3); padding-bottom: 2px;
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.home-head .sub .mono { direction: rtl; unicode-bidi: plaintext; display: inline-block;
+  max-width: 46ch; overflow: hidden; text-overflow: ellipsis; vertical-align: bottom; }
+.home-head .right { margin-left: auto; display: flex; gap: 6px; }
+
+/* ---- attention strip — the operator's work queue, not a list (§2.3 / Q1) ---
+ * Renders ONLY when non-empty, so a calm queue is a calm screen — unless a scan behind it
+ * FAILED, in which case it stays and says so: "empty" is a claim, and it may only be made
+ * when the scans actually answered. The answer card gets 1.35fr because typing happens
+ * there (comp annotation 1).
+ */
+.attn { margin-bottom: var(--s5); }
+.attn-head { display: flex; align-items: center; gap: var(--s2); margin-bottom: var(--s2); }
+.attn-grid { display: grid; grid-template-columns: 1.35fr 1fr 1fr; gap: var(--s3); }
+/* The partial-data note sits between the heading and the cards, so the incompleteness is
+   read BEFORE the queue it qualifies rather than after it. */
+.attn-partial { margin-bottom: var(--s3); }
+@media (max-width: 1100px) { .attn-grid { grid-template-columns: 1fr; } }
+.acard {
+  position: relative; padding: var(--s3) var(--s3) var(--s3) var(--s4);
+  background: var(--surface); border: 1px solid var(--hairline); border-radius: var(--r2);
+}
+.acard::before {
+  content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 3px;
+  border-radius: var(--r2) 0 0 var(--r2);
+}
+.acard.ask::before   { background: var(--st-blocked); }
+.acard.stale::before { background: var(--st-stale); }
+.acard.live::before  { background: var(--st-running); }
+/* The overflow card is bookkeeping, not an incident: it carries its kind's edge at half
+   weight and no fill, so a real card never has to compete with it for the eye. */
+.acard.more { background: transparent; border-style: dashed; }
+.acard.more::before { opacity: 0.45; }
+.acard.more.blocked::before { background: var(--st-blocked); }
+.acard.more.running::before { background: var(--st-running); }
+.acard.more .why { color: var(--text-3); }
+.acard-top { display: flex; align-items: center; gap: var(--s2); margin-bottom: 7px; min-width: 0; }
+.acard-top .nm { font-size: var(--fs-meta); font-weight: 500; }
+.acard-top .rid { font: 400 var(--fs-micro)/1 var(--mono); color: var(--text-3); }
+.acard-top .right { margin-left: auto; display: flex; align-items: center; gap: 6px; }
+.qtext {
+  font-size: var(--fs-meta); line-height: 1.5; color: var(--text);
+  border-left: 2px solid var(--st-blocked-tint); padding-left: 9px; margin-bottom: 10px;
+}
+.qtext .who { display: block; font: 400 var(--fs-micro)/1 var(--mono); color: var(--text-3); margin-bottom: 4px; }
+/* The question could not be FETCHED. It reads as an incident on the card rather than as
+   the question itself: the rule takes §3.2's failure colour and the copy is muted, so a
+   card in this state is never mistaken for a card carrying something to answer. */
+.qtext.bad { border-left-color: var(--st-failed); color: var(--text-2); }
+.qtext.bad .who { color: var(--st-failed); }
+/* The answer is IN FLIGHT (§7.2): the question greys and stays put. Grey, not gone — the
+   same treatment the cockpit's inbox gives a pending answer (`.qitem.answered.pending`), so
+   "I have sent this" reads the same on both screens. Opacity only: nothing here claims an
+   outcome, and the question comes back at full weight if the send fails. */
+.qtext.sending { opacity: 0.6; border-left-color: var(--hairline-strong); }
+/* The attention card's answer composer. Named for the card that owns it: `.answer` was a
+   word three different components had picked (this composer, control's `.ctl-answer`, and
+   the transcript's rendered agent answer), and this rule's grid was silently laying out the
+   transcript's markdown two columns wide. */
+.acard-answer { display: grid; grid-template-columns: 1fr auto; gap: 6px; }
+.acard .hint { font: 400 var(--fs-micro)/1.4 var(--mono); color: var(--text-3); }
+.acard-answer .hint { grid-column: 1 / -1; }
+.acard .hint.bad { color: var(--st-failed); }
+.acard .why { font-size: var(--fs-meta); color: var(--text-2); line-height: 1.5; margin-bottom: 10px; }
+.acard .why code { font: 400 11px/1 var(--mono); color: var(--text); }
+.acard-actions { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.acard-actions + .hint { margin-top: 8px; }
+/* The armed treatment for this card's Resume lives in `ui/primitives.css` with the rest of
+   `.btn`: three features arm a button (here, the cockpit header's Resume/Replay, control's
+   per-agent Cancel), so it is a state of the shared primitive and not home chrome. It was
+   declared here first, and while it was, it reached both of the others — including the
+   destructive one, which it repainted stale-amber. */
+.ticker {
+  display: grid; grid-template-columns: auto 1fr; gap: 3px var(--s3); align-items: baseline;
+  margin-bottom: 10px;
+}
+.ticker dt {
+  font: 600 var(--fs-micro)/1.6 var(--sans); letter-spacing: 0.09em; text-transform: uppercase;
+  color: var(--text-3);
+}
+.ticker dd { margin: 0; font: 400 var(--fs-meta)/1.6 var(--mono); }
+.ticker dd b { font-weight: 500; }
+.ticker .over-l { color: var(--st-failed); }
+
+/* ---- run table (§2.3) -------------------------------------------------- */
+.rt {
+  border: 1px solid var(--hairline); border-radius: var(--r2); background: var(--canvas);
+  overflow: hidden;
+}
+.rt-tools {
+  display: flex; align-items: center; gap: var(--s2); padding: var(--s2) var(--s3);
+  border-bottom: 1px solid var(--hairline); flex-wrap: wrap;
+}
+.rt-tools .search { width: 220px; margin-left: auto; }
+.rt-row {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr) 96px 74px 72px 78px 82px 82px;
+  align-items: center; gap: var(--s3);
+  padding: 0 var(--s3);
+  height: var(--row-run);
+  border-top: 1px solid var(--hairline);
+  border-left: 2px solid transparent;
+  width: 100%; text-align: left;
+  transition: background var(--d-hover) var(--ease);
+}
+.rt-row.head {
+  height: 26px; border-top: 0; background: var(--surface);
+  border-bottom: 1px solid var(--hairline);
+}
+.rt-row.head > * { color: var(--text-3); }
+.rt-row:not(.head):hover { background: var(--surface); cursor: pointer; }
+.rt-row:not(.head):hover .nm { color: var(--accent); }
+.rt-row.sel, .rt-row[aria-current] {
+  background: var(--surface-selected); border-left-color: var(--accent);
+}
+.rt-name { display: flex; align-items: baseline; gap: var(--s2); min-width: 0; }
+.rt-name .nm { font-size: var(--fs-ui); font-weight: 500; }
+.rt-name .rid { font: 400 var(--fs-micro)/1 var(--mono); color: var(--text-3); }
+.rt-badges { display: flex; align-items: center; gap: 4px; margin-left: 2px; }
+.rt-row .n { font-size: var(--fs-meta); }
+.rt-row .when { font: 400 var(--fs-meta)/1 var(--mono); color: var(--text-3); text-align: right; }
+/* parity #53/#114: a value the engine never wrote renders BLANK — never $0.00, never a
+   placeholder dash that reads as a measurement. */
+.rt-row .absent { color: transparent; }
+.rt-more {
+  display: flex; justify-content: center; padding: var(--s3);
+  border-top: 1px solid var(--hairline);
+}
+/* The table scrolls within the viewport but never reserves empty rows: a three-run
+   Home is three rows tall, not a box with a hole in it. `relative` is load-bearing:
+   rows carry `.vh` screen-reader spans (position: absolute), which this overflow only
+   clips when the well is on their containing-block chain — unpositioned, hundreds of
+   below-the-fold spans escaped and stretched the document past the viewport. */
+.rt-scroll { position: relative; max-height: calc(100vh - 320px); overflow: auto; }
+
+/* ---- 800px (§3.7's second required viewport, §3.3's <900px rules) --------
+ * Home has no rails to collapse, so the reflow happens in the table: the two columns
+ * whose value is lowest per pixel — the adapter cluster and the output-token count —
+ * are dropped so the NAME keeps enough width to stay readable, which is the column the
+ * operator actually scans. Everything dropped here is on the run's cockpit; nothing is
+ * only ever visible at 1440. Cost stays: it is the number people come here for.
+ */
+@media (max-width: 900px) {
+  .home { padding: var(--s4) var(--s3) var(--s5); }
+  .rt-row { grid-template-columns: 18px minmax(0, 1fr) 74px 78px 82px 82px; gap: var(--s2); }
+  .rt-row > .col-ad, .rt-row > .col-out { display: none; }
+  /* The NAME outranks its own metadata: the run id (which is on the cockpit, and on the
+     row's hover title) yields first, and badges clip before the name truncates. */
+  .rt-name .rid { display: none; }
+  .rt-name .nm { flex: 1 1 auto; min-width: 108px; }
+  .rt-badges { flex: 0 1 auto; overflow: hidden; }
+  .rt-tools .search { width: 100%; margin-left: 0; }
+  .rt-scroll { max-height: calc(100vh - 260px); }
+}
+
+.progress-mini {
+  display: flex; align-items: center; gap: 6px; font: 400 var(--fs-meta)/1 var(--mono);
+}
+.progress-mini .bar {
+  width: 34px; height: 3px; border-radius: 2px; background: var(--hairline); overflow: hidden;
+}
+.progress-mini .bar i { display: block; height: 100%; background: var(--text-3); }
+.progress-mini .bar i.r { background: var(--st-running); }
+.progress-mini .bar i.d { background: var(--st-done); }
+.progress-mini .bar i.f { background: var(--st-failed); }

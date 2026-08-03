@@ -2,6 +2,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import crypto from 'node:crypto'
 import { controlRequest } from './control.js'
+import { runsDir, runDir } from './util.js'
 
 const STALE_MS = 15_000
 const CONTROL_TIMEOUT_MS = 300
@@ -192,4 +193,22 @@ export async function deriveRunState(runDirPath) {
   // with no journal (no attempt ever ran) stays unknown.
   try { if (fs.statSync(path.join(runDirPath, 'journal.jsonl')).isFile()) return { state: 'stale', ...detail } } catch { /* no journal */ }
   return { state: 'unknown', ...detail }
+}
+
+// Every run on disk, unfiltered (DESIGN §8 E14 / §5.4.2 step 1). The old
+// `startsWith('flo_')` filter hid every run started with an explicit `--run-id` —
+// a run you named yourself was invisible to `flowition runs`. The only test now is
+// "is it a directory whose name is a legal run id": a dir with no journal or events
+// yet is a REAL run in its startup window (`detachRun` creates it before the child's
+// first append) and lists with whatever state deriveRunState gives it (`unknown`).
+export function listRunIds() {
+  let ents = []
+  try { ents = fs.readdirSync(runsDir(), { withFileTypes: true }) } catch { return [] }
+  const out = []
+  for (const e of ents) {
+    if (!e.isDirectory()) continue
+    try { runDir(e.name) } catch { continue }
+    out.push(e.name)
+  }
+  return out
 }

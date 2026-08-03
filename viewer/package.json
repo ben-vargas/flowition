@@ -1,0 +1,61 @@
+{
+  "name": "flowition-viewer",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "description": "The flowition viewer SPA (DESIGN §9). Never published — only viewer/dist ships, via the root package's files list (§4.6).",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "check:dist": "node scripts/check-dist.mjs",
+    "check:package": "node scripts/check-package.mjs",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit",
+    "tokens": "node scripts/emit-tokens.mjs",
+    "test": "vitest run && npm run test:perf",
+    "test:watch": "vitest",
+    "test:e2e": "playwright test",
+    "test:perf": "FLO_PERF=1 vitest run --config vitest.perf.config.ts src/fold/bench.test.ts src/state/runStore.test.ts src/features/transcript/performance.test.tsx src/features/transcript/packageGraph.test.ts"
+  },
+  "//": "DESIGN §16.1 supersedes the old three-dependency count with curated SPA dependency policy. viewer/ is private and never published; only viewer/dist ships (§4.6), so the root Node server remains zero-dependency.",
+  "//deps": "react-markdown 10.1.0 is exact by §16.7. It replaces a security-sensitive home-grown markdown parser while W10 retains flowition-specific limits, AST bounds, link/image policy and GFM projection. Removal cost: reimplement and fuzz a CommonMark parser plus every §16.2 renderer invariant. @tanstack/react-virtual, React and React DOM predate W10.",
+  "//deps-react-aria": "§16.3 adopts hooks-level @react-aria primitives for the interactive surfaces, exact by §16.7. BEHAVIOR ONLY in the sense that matters — none of these render an element or ship a stylesheet, and packageGraph.test.ts fails if @adobe/react-spectrum or any component kit enters the resolved tree. CORRECTED (panel rounds 2 and 3): the earlier claim that they ship 'not a byte of CSS' was false, and round 2's replacement claim of ONE runtime style rule was also false. The `react-aria` monopackage these re-export from writes a <style> into document.head from exactly TWO places, and this list is closed — it is every createElement('style') and every head.prepend in react-aria/dist. (1) private/interactions/usePress.mjs:607,621 prepends `@layer { [data-react-aria-pressable] { touch-action: pan-x pan-y pinch-zoom } }` once per document, on every platform, the first time a pressable mounts. (2) private/overlays/usePreventScroll.mjs:102,111 prepends `@layer { * { overscroll-behavior: contain } }` per modal open and only on iOS (navigator.platform ~ /^iPhone|^iPad/), removing it on close; every ControlDialog calls that hook. Both were style-src-elem violations under the §7.1.4 policy — blocked, so neither rule ever applied on the devices they exist for. Site 1 is PREVENTED: src/ui/base.css ships that declaration and src/ui/pressableStyle.ts claims the element id usePress checks, so the injection never runs. Site 2 is HASH-ALLOWED by the single 'sha256-' source in §7.1.4's policy: usePreventScroll has no id guard, and its rule is modal-scoped, so hoisting it into base.css would change behavior (scroll chaining out of a pane is correct with no modal up). src/ui/preventScrollStyle.ts holds the rule text and digest, src/ui/preventScrollStyle.test.ts checks them against what a real modal injects on a forced-iPhone platform, and test/viewer-http.test.js checks the served policy against that digest. viewer/e2e/viewer.spec.ts asserts zero securitypolicyviolation events on every visited route AND runs an iOS-platform describe that opens the palette — site 2 hid behind the Desktop-Chrome-only suite through all of round 2, so platform coverage, not just route coverage, is what catches the next bump that injects something. dialog/focus/overlays: the modal contract in §3.6 (role+labelling, Tab containment, Escape and outside-press, page inertness for assistive tech). listbox+combobox (+ @react-stately/list, @react-stately/combobox, @react-stately/collections): §2.7's command palette — the combobox/listbox/option role triangle, aria-activedescendant virtual focus, arrow/Home/End/PageUp/PageDown, and the option-count live announcement. tabs (+ @react-stately/tabs): the cockpit's tab strip — roving tabindex, arrow navigation with wrap, and the tab↔tabpanel relationship. The @react-stately halves are not optional extras: the aria hooks are specified as hooks OVER a react-stately collection. Removal cost: hand-writing and testing the WCAG keyboard/ARIA behavior of a combobox, a listbox and a tablist — which is what W12 round 1 did and what review round 1 rejected under §16.3. Every scoped package here is a thin re-export of the single behavior-only `react-aria` / `react-stately` monopackage, so the six aria entries add one dependency to the tree, not six.",
+  "//engines": "The root invariant is Node >= 18.17, and it binds the TOOLCHAIN too: a viewer that cannot be built or tested on the minimum supported Node is not buildable at that version. @vitejs/plugin-react is therefore held at 4.x (5.x requires 20.19+) and jsdom at 26.x (27.x requires 20.19+). `src/toolchain.test.ts` walks package-lock.json and fails on any resolved package whose engines.node excludes 18.17.0, so the next `npm update` cannot quietly re-break it.",
+  "//devdeps-browser": "DESIGN §16.5 adopts @playwright/test 1.61.1 and @axe-core/playwright 4.12.1 for W13's real-browser keyboard, responsive, reconnect and WCAG A/AA gates. Both are exact-versioned by §16.7 and remain devDependencies of this private workspace; only viewer/dist ships. Playwright 1.61.1 is the newest reviewed release whose declared Node engine still includes the root floor (>=18); 1.62 requires Node >=20. Removal cost: losing browser-native Tab/focus/EventSource/layout coverage and the maintained axe ruleset, none of which jsdom can prove.",
+  "engines": {
+    "node": ">=18.17"
+  },
+  "overrides": {
+    "playwright-core": "1.61.1"
+  },
+  "dependencies": {
+    "@react-aria/combobox": "3.16.1",
+    "@react-aria/dialog": "3.6.1",
+    "@react-aria/focus": "3.22.1",
+    "@react-aria/listbox": "3.16.1",
+    "@react-aria/overlays": "3.32.1",
+    "@react-aria/tabs": "3.12.1",
+    "@react-stately/collections": "3.13.1",
+    "@react-stately/combobox": "3.14.1",
+    "@react-stately/list": "3.14.1",
+    "@react-stately/tabs": "3.9.1",
+    "@tanstack/react-virtual": "3.13.12",
+    "react": "19.2.0",
+    "react-dom": "19.2.0",
+    "react-markdown": "10.1.0"
+  },
+  "devDependencies": {
+    "@axe-core/playwright": "4.12.1",
+    "@playwright/test": "1.61.1",
+    "@testing-library/dom": "^10.4.1",
+    "@testing-library/react": "^16.3.0",
+    "@types/node": "^22.20.1",
+    "@types/react": "^19.2.2",
+    "@types/react-dom": "^19.2.2",
+    "@vitejs/plugin-react": "^4.7.0",
+    "jsdom": "^26.1.0",
+    "typescript": "^5.9.3",
+    "vite": "^6.3.6",
+    "vitest": "^3.2.4"
+  }
+}

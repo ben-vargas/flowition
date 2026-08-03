@@ -8,6 +8,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { execFile } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
+import { tmpEsmDir } from './tmpdir.js'
 
 // short prefix: run-dir control.sock paths must stay under the ~104-byte sun_path cap
 process.env.FLOWITION_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'flowition-'))
@@ -22,6 +23,32 @@ const fx = (name) => path.join(path.dirname(fileURLToPath(import.meta.url)), 'fi
 const binPath = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'bin', 'flowition.js')
 const sockOf = (runId) => path.join(runDir(runId), 'control.sock')
 const journalOf = (runId) => path.join(runDir(runId), 'journal.jsonl')
+
+/**
+ * Two lexer cases below are end-to-end: they RUN a workflow whose source uses a JS
+ * feature, then assert what the import lexer recorded about it. That only works on a
+ * runtime whose loader can parse the feature at all, and the floor is Node 18.17
+ * (root package.json `engines`), which has neither.
+ *
+ * These are capability probes, not version checks: the moment the floor's runtime grows
+ * the feature the cases run again, with no edit here. The lexer behaviour they cover is
+ * itself runtime-independent — a workflow using `import.source` cannot load on Node 18
+ * either, so there is nothing for the lexer to be wrong about there.
+ */
+const supports = async (source) => {
+  try {
+    await import(`data:text/javascript,${encodeURIComponent(source)}`)
+    return true
+  } catch { return false }
+}
+// Source-phase imports (`import.source(…)`) — Node 24+.
+const IMPORT_SOURCE = await supports("export const p = () => import.source('./none.wasm')")
+  ? false
+  : 'this Node cannot parse import.source() — source-phase imports land in Node 24'
+// `import.meta.resolve` unflagged — Node 18.19 / 20.6+.
+const IMPORT_META_RESOLVE = typeof import.meta.resolve === 'function'
+  ? false
+  : 'this Node has no unflagged import.meta.resolve (Node 18.19 / 20.6+)'
 
 async function until(fn, ms = 8000) {
   const t0 = Date.now()
@@ -90,7 +117,7 @@ test('resume: refuses a journal recorded under a different key version', async (
 })
 
 test('resume: refuses when an imported local module changed (graph hash)', async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'flowition-graph-'))
+  const dir = tmpEsmDir('flowition-graph-')
   fs.writeFileSync(path.join(dir, 'helper.js'), 'export const V = 1\n')
   fs.writeFileSync(path.join(dir, 'wf.workflow.js'),
     "import { V } from './helper.js'\nexport const meta = { name: 'g' }\nexport default async ({ agent }) => agent('ECHO v' + V)\n")
@@ -105,7 +132,7 @@ test('resume: refuses when an imported local module changed (graph hash)', async
 })
 
 test('resume: a symlinked entry hashes deps from the realpath — editing the real dep refuses', async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'flowition-symgraph-'))
+  const dir = tmpEsmDir('flowition-symgraph-')
   const A = path.join(dir, 'A')
   const B = path.join(dir, 'B')
   fs.mkdirSync(A)
@@ -128,7 +155,7 @@ test('resume: a symlinked entry hashes deps from the realpath — editing the re
 })
 
 test('resume: under --preserve-symlinks the graph hashes the lexical deps Node actually loads', async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'flowition-symlex-'))
+  const dir = tmpEsmDir('flowition-symlex-')
   const A = path.join(dir, 'A')
   const B = path.join(dir, 'B')
   fs.mkdirSync(A)
@@ -221,7 +248,7 @@ test('preserve-symlinks detection: boolean-flag spellings, --no- negation, NODE_
 })
 
 test('resume: NODE_OPTIONS="--preserve-symlinks=true" also selects lexical graph hashing', async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'flowition-symlexeq-'))
+  const dir = tmpEsmDir('flowition-symlexeq-')
   const A = path.join(dir, 'A')
   const B = path.join(dir, 'B')
   fs.mkdirSync(A)
@@ -250,7 +277,7 @@ test('resume: NODE_OPTIONS="--preserve-symlinks=true" also selects lexical graph
 })
 
 test('resume: .resuming marker survives a refused preflight and is cleared by a completed resume', async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'flowition-marker-'))
+  const dir = tmpEsmDir('flowition-marker-')
   const wf = path.join(dir, 'wf.workflow.js')
   const src = "export const meta = { name: 'marker' }\nexport default async ({ agent }) => agent('ECHO ok')\n"
   fs.writeFileSync(wf, src)
@@ -276,7 +303,7 @@ test('resume: .resuming marker survives a refused preflight and is cleared by a 
 })
 
 test('resume: engine re-stamps the .resuming marker mtime at socket bind — the 30s budget covers preflight', async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'flowition-marker-restamp-'))
+  const dir = tmpEsmDir('flowition-marker-restamp-')
   const wf = path.join(dir, 'wf.workflow.js')
   const src = "export const meta = { name: 'restamp' }\nexport default async ({ agent }) => agent('ECHO ok')\n"
   fs.writeFileSync(wf, src)
@@ -300,7 +327,7 @@ test('resume: engine re-stamps the .resuming marker mtime at socket bind — the
 })
 
 test('resume: computed dynamic imports refuse loudly; import-text in strings does not', async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'flowition-dyn-'))
+  const dir = tmpEsmDir('flowition-dyn-')
   fs.writeFileSync(path.join(dir, 'a.js'), 'export const which = () => 1\n')
   // quote-prefixed computed import — the shape that escaped the regex detector
   fs.writeFileSync(path.join(dir, 'dyn.workflow.js'),
@@ -332,7 +359,7 @@ test('resume: computed dynamic imports refuse loudly; import-text in strings doe
 })
 
 test('resume: percent-encoded relative specifiers hash the decoded path Node loads', async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'flowition-pct-'))
+  const dir = tmpEsmDir('flowition-pct-')
   fs.writeFileSync(path.join(dir, 'dep x.js'), 'export const V = 1\n')
   // Node URL-decodes relative ESM specifiers and loads 'dep x.js'; resolving
   // the encoded text hashed a nonexistent path as a stable 'unreadable' and
@@ -356,7 +383,7 @@ test('resume: percent-encoded relative specifiers hash the decoded path Node loa
 })
 
 test('resume: a malformed percent-sequence in a specifier flags dynamic — Node would fail it too', async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'flowition-pctbad-'))
+  const dir = tmpEsmDir('flowition-pctbad-')
   // guarded so it never executes (the fresh run completes); decodeURIComponent
   // throws on '%zz', and guessing at a path would hash a file Node could never
   // resolve — flag dynamic and refuse resume loudly instead
@@ -424,7 +451,7 @@ test('mail: accepted steering is journaled and marked done once delivered', asyn
 })
 
 test('mail: DELIVERED workflow mail is replay-suppressed on crash-resume, never sent twice', async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'flowition-mailreplay-'))
+  const dir = tmpEsmDir('flowition-mailreplay-')
   const wf = path.join(dir, 'wf.workflow.js')
   // the send lands mid-turn (agent sleeping) and is delivered via a follow-up
   // turn; the agent does not need to receive it again to finish, so the
@@ -460,7 +487,7 @@ test('mail: DELIVERED workflow mail is replay-suppressed on crash-resume, never 
 })
 
 test('mail: deliver-or-declare drops journal dropped:true and never count as deliveries', async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'flowition-maildrop-'))
+  const dir = tmpEsmDir('flowition-maildrop-')
   const journal = new Journal(dir)
   let startTurn, finishTurn
   const turnStarted = new Promise((r) => { startTurn = r })
@@ -500,7 +527,7 @@ test('mail: deliver-or-declare drops journal dropped:true and never count as del
 })
 
 test('mail: a crash window holding a DROPPED workflow mail does not suppress the resumed re-send', async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'flowition-maildropresume-'))
+  const dir = tmpEsmDir('flowition-maildropresume-')
   const wf = path.join(dir, 'wf.workflow.js')
   fs.writeFileSync(wf, [
     "export const meta = { name: 'maildropresume' }",
@@ -595,7 +622,7 @@ test('mail: sessionless delivery defers mail-done to the completed result; crash
 })
 
 test('mail: a sessionless crash window leaves workflow mail pending — restored copy delivers, re-send absorbed', { timeout: 30_000 }, async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'flowition-sessionless-resend-'))
+  const dir = tmpEsmDir('flowition-sessionless-resend-')
   const wf = path.join(dir, 'wf.workflow.js')
   // the worker sleeps before consuming mail: on resume the restored copy
   // already sits in its queue, and an instant WAIT_MAIL would let the job
@@ -633,7 +660,7 @@ test('mail: a sessionless crash window leaves workflow mail pending — restored
 })
 
 test('mail: Journal.load keeps origin on pendingMail; legacy records restore as operator', () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'flowition-mailorigin-'))
+  const dir = tmpEsmDir('flowition-mailorigin-')
   fs.writeFileSync(path.join(dir, 'journal.jsonl'), [
     { t: 1, type: 'started', key: 'k', index: 0 },
     { t: 2, type: 'mail', key: 'k', id: 'id-op', text: 'op-msg', origin: 'operator' },
@@ -675,7 +702,7 @@ test('mail: pending workflow mail restores on resume; the re-executed spawn send
 })
 
 test('mail: restored workflow mail delivers even when the resumed workflow fails to re-send (cached sender)', async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'flowition-restoredwf-'))
+  const dir = tmpEsmDir('flowition-restoredwf-')
   const wf = path.join(dir, 'wf.workflow.js')
   const flag = path.join(dir, 'first-run-done')
   // First run: the send lands while the worker is live. Resumed run: models a
@@ -801,7 +828,7 @@ test('mail: a failed turn requeues delivered mail in acceptance order, ahead of 
 })
 
 test('mail: sendTo() steering is journaled with workflow origin', async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'flowition-sendto-'))
+  const dir = tmpEsmDir('flowition-sendto-')
   const wf = path.join(dir, 'wf.workflow.js')
   fs.writeFileSync(wf, [
     "export const meta = { name: 'sendto-origin' }",
@@ -817,7 +844,7 @@ test('mail: sendTo() steering is journaled with workflow origin', async () => {
 })
 
 test('mail: a send racing final-turn completion is never stranded — acceptance closes with the turn', { timeout: 30_000 }, async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'flowition-mailwindow-'))
+  const dir = tmpEsmDir('flowition-mailwindow-')
   const wf = path.join(dir, 'wf.workflow.js')
   // The race: after the anchor send releases WAIT_MAIL, the turn's completion
   // runs as a chain of microtasks ending in the engine's finally (which sets
@@ -903,7 +930,7 @@ test('mail: a failed attempt does not settle — mail accepted between retries s
 })
 
 test('module-load failure still produces a terminal journal record and result.json', async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'flowition-badmod-'))
+  const dir = tmpEsmDir('flowition-badmod-')
   const bad = path.join(dir, 'bad.workflow.js')
   fs.writeFileSync(bad, 'export const meta = { name: "bad" }\nthis is a syntax error{{{\n')
   const runId = 'flo_badmod'
@@ -935,7 +962,7 @@ test('module-load: ESM parse failure under a CommonJS package scope names the of
 })
 
 test('readJsonlStrict: prefix-property tail rules', () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'flowition-jsonl-'))
+  const dir = tmpEsmDir('flowition-jsonl-')
   // newline-terminated unparseable record = corruption, even as the final line
   const corrupt = path.join(dir, 'corrupt.jsonl')
   fs.writeFileSync(corrupt, '{"a":1}\nBROKEN\n')
@@ -992,7 +1019,7 @@ test('invalid concurrency and budget are rejected before any work starts', async
 })
 
 test('lexer: a quote inside a regex literal cannot hide a same-line computed import', async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'flowition-lexrx-'))
+  const dir = tmpEsmDir('flowition-lexrx-')
   fs.writeFileSync(path.join(dir, 'a.js'), 'export const which = () => 1\n')
   fs.writeFileSync(path.join(dir, 'wf.workflow.js'), [
     "export const meta = { name: 'rx' }",
@@ -1013,7 +1040,7 @@ test('lexer: a quote inside a regex literal cannot hide a same-line computed imp
 })
 
 test('lexer: a quoted "}" inside a template interpolation cannot hide an import', async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'flowition-lextpl-'))
+  const dir = tmpEsmDir('flowition-lextpl-')
   fs.writeFileSync(path.join(dir, 'a.js'), 'export const which = () => 1\n')
   fs.writeFileSync(path.join(dir, 'wf.workflow.js'), [
     "export const meta = { name: 'tpl' }",
@@ -1033,7 +1060,7 @@ test('lexer: a quoted "}" inside a template interpolation cannot hide an import'
 })
 
 test('lexer: clean interpolation with quoted braces but no import still resumes', async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'flowition-lexok-'))
+  const dir = tmpEsmDir('flowition-lexok-')
   fs.writeFileSync(path.join(dir, 'wf.workflow.js'), [
     "export const meta = { name: 'ok' }",
     'const s = `a${ "}" + \'{\' }b`',
@@ -1049,7 +1076,7 @@ test('lexer: clean interpolation with quoted braces but no import still resumes'
 })
 
 test('lexer: paired quotes across two regex literals cannot swallow the import between them', async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'flowition-lexrxpair-'))
+  const dir = tmpEsmDir('flowition-lexrxpair-')
   fs.writeFileSync(path.join(dir, 'a.js'), 'export const which = () => 1\n')
   // the quote in the first regex pairs with the quote in the second — an
   // unmodeled regex would eat the import( between them as string text with no
@@ -1073,7 +1100,7 @@ test('lexer: paired quotes across two regex literals cannot swallow the import b
 })
 
 test('lexer: an unbalanced "}" inside an interpolation regex cannot hide an import', async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'flowition-lexrxtpl-'))
+  const dir = tmpEsmDir('flowition-lexrxtpl-')
   fs.writeFileSync(path.join(dir, 'a.js'), 'export const which = () => 1\n')
   // the } inside /}/ would pop the brace counter early, ending the
   // interpolation before the import is seen
@@ -1095,7 +1122,7 @@ test('lexer: an unbalanced "}" inside an interpolation regex cannot hide an impo
 })
 
 test('lexer: ordinary division is not flagged dynamic and resumes cleanly', async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'flowition-lexdiv-'))
+  const dir = tmpEsmDir('flowition-lexdiv-')
   fs.writeFileSync(path.join(dir, 'wf.workflow.js'), [
     "export const meta = { name: 'div' }",
     'const a = 6',
@@ -1113,7 +1140,7 @@ test('lexer: ordinary division is not flagged dynamic and resumes cleanly', asyn
 })
 
 test('lexer: division after postfix ++ cannot swallow a same-line import', async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'flowition-lexinc-'))
+  const dir = tmpEsmDir('flowition-lexinc-')
   fs.writeFileSync(path.join(dir, 'dep.js'), 'export const V = 1\n')
   fs.writeFileSync(path.join(dir, 'wf.workflow.js'), [
     "export const meta = { name: 'inc' }",
@@ -1136,7 +1163,7 @@ test('lexer: division after postfix ++ cannot swallow a same-line import', async
 })
 
 test('lexer: division after postfix -- cannot swallow a same-line import', async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'flowition-lexdec-'))
+  const dir = tmpEsmDir('flowition-lexdec-')
   fs.writeFileSync(path.join(dir, 'dep.js'), 'export const V = 1\n')
   fs.writeFileSync(path.join(dir, 'wf.workflow.js'), [
     "export const meta = { name: 'dec' }",
@@ -1157,7 +1184,7 @@ test('lexer: division after postfix -- cannot swallow a same-line import', async
 })
 
 test('lexer: prefix ++ before a quote-bearing regex cannot swallow a same-line import', async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'flowition-lexpreinc-'))
+  const dir = tmpEsmDir('flowition-lexpreinc-')
   fs.writeFileSync(path.join(dir, 'dep.js'), 'export const V = 1\n')
   // ++ here is PREFIX (the grammar lexes a regex after it) — treating it as
   // expression-ending judged the `/` division, the regex-body quote opened a
@@ -1180,7 +1207,7 @@ test('lexer: prefix ++ before a quote-bearing regex cannot swallow a same-line i
 })
 
 test('lexer: prefix -- before a quote-bearing regex cannot swallow a same-line import', async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'flowition-lexpredec-'))
+  const dir = tmpEsmDir('flowition-lexpredec-')
   fs.writeFileSync(path.join(dir, 'dep.js'), 'export const V = 1\n')
   fs.writeFileSync(path.join(dir, 'wf.workflow.js'), [
     "export const meta = { name: 'predec' }",
@@ -1198,7 +1225,7 @@ test('lexer: prefix -- before a quote-bearing regex cannot swallow a same-line i
 })
 
 test('lexer: ASI makes ++ after a newline PREFIX — its quote-bearing regex goes loud, never swallows the import', async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'flowition-lexasiinc-'))
+  const dir = tmpEsmDir('flowition-lexasiinc-')
   fs.writeFileSync(path.join(dir, 'dep.js'), 'export const V = 1\n')
   // [no LineTerminator here] forbids postfix across the break: ASI closes
   // `let n = a` and the ++ is PREFIX, so Node lexes /a"b/ as a regex. A
@@ -1225,7 +1252,7 @@ test('lexer: ASI makes ++ after a newline PREFIX — its quote-bearing regex goe
 })
 
 test('lexer: ASI makes -- after a newline PREFIX — same loud path as ++', async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'flowition-lexasidec-'))
+  const dir = tmpEsmDir('flowition-lexasidec-')
   fs.writeFileSync(path.join(dir, 'dep.js'), 'export const V = 1\n')
   fs.writeFileSync(path.join(dir, 'wf.workflow.js'), [
     "export const meta = { name: 'asidec' }",
@@ -1246,7 +1273,7 @@ test('lexer: ASI makes -- after a newline PREFIX — same loud path as ++', asyn
 })
 
 test('lexer: prefix ++ after a newline routes / into a clean regex — the same-line import stays hashed', async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'flowition-lexasiok-'))
+  const dir = tmpEsmDir('flowition-lexasiok-')
   fs.writeFileSync(path.join(dir, 'dep.js'), 'export const V = 1\n')
   // quote-free regex body: the guard stays quiet, the regex is consumed as a
   // regex, and the import after it is SEEN and hashed — proof the fix routes
@@ -1272,7 +1299,7 @@ test('lexer: prefix ++ after a newline routes / into a clean regex — the same-
 })
 
 test('lexer: raw U+2028/U+2029 inside strings are content, not EOL — stays non-dynamic and resumes', async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'flowition-lexlsps-'))
+  const dir = tmpEsmDir('flowition-lexlsps-')
   fs.writeFileSync(path.join(dir, 'dep.js'), 'export const V = 1\n')
   // legal since ES2019: a raw LS/PS inside a ' or " string (and inside a
   // quoted span within an interpolation) is CONTENT — treating it as
@@ -1301,7 +1328,7 @@ test('lexer: raw U+2028/U+2029 inside strings are content, not EOL — stays non
 })
 
 test('lexer: a CR-only file cannot hide an import behind a // comment', async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'flowition-lexcr-'))
+  const dir = tmpEsmDir('flowition-lexcr-')
   fs.writeFileSync(path.join(dir, 'dep.js'), 'export const V = 1\n')
   // \r is the ONLY line terminator: Node sees three lines, a \n-only comment
   // scan saw one — everything after the // vanished from the graph and a
@@ -1321,8 +1348,8 @@ test('lexer: a CR-only file cannot hide an import behind a // comment', async ()
   )
 })
 
-test('lexer: import.source with a literal specifier is hashed — editing the wasm refuses resume', async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'flowition-lexsrcphase-'))
+test('lexer: import.source with a literal specifier is hashed — editing the wasm refuses resume', { skip: IMPORT_SOURCE }, async () => {
+  const dir = tmpEsmDir('flowition-lexsrcphase-')
   // a real (minimal) Wasm module: magic + version, plus a custom section
   // (id 0, size 3, name-len 1, name 'c') whose content byte 0x81 is INVALID
   // UTF-8 — lossy decoding collapses it to U+FFFD, so a string-based hash
@@ -1355,8 +1382,8 @@ test('lexer: import.source with a literal specifier is hashed — editing the wa
   )
 })
 
-test('lexer: import.source with a computed argument flags dynamic', async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'flowition-lexsrcdyn-'))
+test('lexer: import.source with a computed argument flags dynamic', { skip: IMPORT_SOURCE }, async () => {
+  const dir = tmpEsmDir('flowition-lexsrcdyn-')
   fs.writeFileSync(path.join(dir, 'm.wasm'), Buffer.from([0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00]))
   fs.writeFileSync(path.join(dir, 'wf.workflow.js'), [
     "export const meta = { name: 'srcdyn' }",
@@ -1375,8 +1402,8 @@ test('lexer: import.source with a computed argument flags dynamic', async () => 
   )
 })
 
-test('lexer: import.meta stays inert — no phantom call handling, resumes cleanly', async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'flowition-lexmeta-'))
+test('lexer: import.meta stays inert — no phantom call handling, resumes cleanly', { skip: IMPORT_META_RESOLVE }, async () => {
+  const dir = tmpEsmDir('flowition-lexmeta-')
   // only a `(` after the RECOGNIZED source/defer property arms call handling:
   // import.meta.url is plain property access and import.meta.resolve('…') is
   // an ordinary call whose string is NOT a specifier
@@ -1396,7 +1423,7 @@ test('lexer: import.meta stays inert — no phantom call handling, resumes clean
 })
 
 test('lexer: object-literal division ("}" before "/") cannot silently hide a same-line import', async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'flowition-lexbrace-'))
+  const dir = tmpEsmDir('flowition-lexbrace-')
   fs.writeFileSync(path.join(dir, 'a.js'), 'export const V = 1\n')
   // grammar-undecidable without a parser: the lexer prefers regex here, so the
   // guard must turn the swallowed import into a loud refusal, never a silent resume
@@ -1417,7 +1444,7 @@ test('lexer: object-literal division ("}" before "/") cannot silently hide a sam
 })
 
 test('lexer: postfix division and a return-position regex stay non-dynamic and resume', async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'flowition-lexctrl-'))
+  const dir = tmpEsmDir('flowition-lexctrl-')
   // the control regex must be quote-free: a quote in ANY regex body now flags
   // dynamic by design (universal swallow guard) — that path has its own test
   fs.writeFileSync(path.join(dir, 'wf.workflow.js'), [
@@ -1437,7 +1464,7 @@ test('lexer: postfix division and a return-position regex stay non-dynamic and r
 })
 
 test('lexer: a regex after an if-condition ")" cannot swallow a same-line import', async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'flowition-lexif-'))
+  const dir = tmpEsmDir('flowition-lexif-')
   fs.mkdirSync(path.join(dir, 'a'))
   fs.writeFileSync(path.join(dir, 'a', 'b.js'), 'export const V = 1\n')
   // division-judged, the regex body's quote opens a phantom string that pairs
@@ -1462,7 +1489,7 @@ test('lexer: a regex after an if-condition ")" cannot swallow a same-line import
 })
 
 test('lexer: a regex after a while-condition ")" cannot swallow a same-line import', async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'flowition-lexwhile-'))
+  const dir = tmpEsmDir('flowition-lexwhile-')
   fs.mkdirSync(path.join(dir, 'a'))
   fs.writeFileSync(path.join(dir, 'a', 'b.js'), 'export const V = 1\n')
   fs.writeFileSync(path.join(dir, 'wf.workflow.js'), [
@@ -1485,7 +1512,7 @@ test('lexer: a regex after a while-condition ")" cannot swallow a same-line impo
 })
 
 test('lexer: statement-head paren tracking keeps division and clean condition regexes non-dynamic', async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'flowition-lexstmt-'))
+  const dir = tmpEsmDir('flowition-lexstmt-')
   fs.writeFileSync(path.join(dir, 'wf.workflow.js'), [
     "export const meta = { name: 'stmtctl' }",
     'const a = 6, b = 2',
@@ -1506,7 +1533,7 @@ test('lexer: statement-head paren tracking keeps division and clean condition re
 })
 
 test('lexer: an interpolation regex after an if-condition ")" cannot hide an import', async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'flowition-lexiftpl-'))
+  const dir = tmpEsmDir('flowition-lexiftpl-')
   fs.writeFileSync(path.join(dir, 'a.js'), 'export const which = () => 1\n')
   fs.writeFileSync(path.join(dir, 'wf.workflow.js'), [
     "export const meta = { name: 'iftpl' }",
@@ -1527,7 +1554,7 @@ test('lexer: an interpolation regex after an if-condition ")" cannot hide an imp
 })
 
 test('lexer: a regex after a for-await-condition ")" cannot swallow a same-line import', async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'flowition-lexforawait-'))
+  const dir = tmpEsmDir('flowition-lexforawait-')
   fs.mkdirSync(path.join(dir, 'a'))
   fs.writeFileSync(path.join(dir, 'a', 'b.js'), 'export const V = 1\n')
   // at the `(` the previous word is `await`, not `for` — one-word lookbehind
@@ -1552,7 +1579,7 @@ test('lexer: a regex after a for-await-condition ")" cannot swallow a same-line 
 })
 
 test('lexer: division after a keyword-named property cannot swallow a same-line import', async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'flowition-lexprop-'))
+  const dir = tmpEsmDir('flowition-lexprop-')
   fs.writeFileSync(path.join(dir, 'dep.js'), 'export const V = 1\n')
   // after `.` the word `return` is a property name, not a keyword — the `/` is
   // division, never a regex opener that could eat the import
@@ -1575,7 +1602,7 @@ test('lexer: division after a keyword-named property cannot swallow a same-line 
 })
 
 test('lexer: keyword-named property division with no import stays non-dynamic and resumes', async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'flowition-lexpropctl-'))
+  const dir = tmpEsmDir('flowition-lexpropctl-')
   fs.writeFileSync(path.join(dir, 'wf.workflow.js'), [
     "export const meta = { name: 'propctl' }",
     'const obj = { return: 4 }',
@@ -1592,7 +1619,7 @@ test('lexer: keyword-named property division with no import stays non-dynamic an
 })
 
 test('lexer: universal guard — a genuine quote-bearing regex flags dynamic (loud, not silent)', async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'flowition-lexquoterx-'))
+  const dir = tmpEsmDir('flowition-lexquoterx-')
   // documented trade: ANY regex body holding a quote or the `import` token
   // flags the module dynamic, so no mis-judged position can ever swallow an
   // import silently — the fresh run still completes, only resume refuses
@@ -1613,7 +1640,7 @@ test('lexer: universal guard — a genuine quote-bearing regex flags dynamic (lo
 })
 
 test('lexer: export-default regex cannot swallow a same-line import in a dependency', async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'flowition-lexdflt-'))
+  const dir = tmpEsmDir('flowition-lexdflt-')
   fs.mkdirSync(path.join(dir, 'h'))
   fs.writeFileSync(path.join(dir, 'h', 'x.js'), 'export default 1\n')
   // round-11 confirmed silent repro: `default` was absent from the enumerated
@@ -1639,7 +1666,7 @@ test('lexer: export-default regex cannot swallow a same-line import in a depende
 })
 
 test('lexer: a regex after debugger cannot swallow a same-line import', async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'flowition-lexdbg-'))
+  const dir = tmpEsmDir('flowition-lexdbg-')
   fs.mkdirSync(path.join(dir, 'h'))
   fs.writeFileSync(path.join(dir, 'h', 'x.js'), 'export default 1\n')
   // same phantom-string swallow shape at another word the old blocklist missed
@@ -1665,7 +1692,7 @@ test('lexer: a regex after debugger cannot swallow a same-line import', async ()
 })
 
 test('lexer: export default of a plain value with ordinary division stays non-dynamic and resumes', async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'flowition-lexdfltctl-'))
+  const dir = tmpEsmDir('flowition-lexdfltctl-')
   // the identifier between `default` and `/` ends the expression — division,
   // exactly as before the NONEXPR inversion
   fs.writeFileSync(path.join(dir, 'dep.js'), 'const n = 8\nexport default n / 2\n')
@@ -1684,7 +1711,7 @@ test('lexer: export default of a plain value with ordinary division stays non-dy
 })
 
 test('lexer: division after a property named default keeps a same-line import hashed', async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'flowition-lexdfltprop-'))
+  const dir = tmpEsmDir('flowition-lexdfltprop-')
   fs.writeFileSync(path.join(dir, 'dep.js'), 'export const V = 1\n')
   // after `.` the word `default` is a property name, not a keyword — the dot
   // rule bypasses NONEXPR entirely and the `/` is division
@@ -1708,7 +1735,7 @@ test('lexer: division after a property named default keeps a same-line import ha
 })
 
 test('lexer: a contextual word used as an identifier before division goes loud, never silent', async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'flowition-lexofdiv-'))
+  const dir = tmpEsmDir('flowition-lexofdiv-')
   fs.writeFileSync(path.join(dir, 'dep.js'), 'export const V = 1\n')
   // deliberate trade of the closed NONEXPR surface: a variable literally named
   // `of` before `/` enters a regex scan, which trips the universal guard on
@@ -1745,7 +1772,7 @@ test('run lock: a live pid that started after the lock was written is pid reuse,
 })
 
 test('scratch: crash-left scratch files are swept even when resume preflight refuses', async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'flowition-scratch-'))
+  const dir = tmpEsmDir('flowition-scratch-')
   const wf = path.join(dir, 'wf.workflow.js')
   fs.writeFileSync(wf, "export const meta = { name: 'sc' }\nexport default async ({ agent }) => agent('ECHO ok')\n")
   const out = await runWorkflow({ file: wf, defaults: { adapter: 'mock' }, quiet: true })
@@ -1763,7 +1790,7 @@ test('scratch: crash-left scratch files are swept even when resume preflight ref
 })
 
 test('spawn: send() on a cache-replayed agent reports dropped, not pending forever', async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'flowition-spawnlate-'))
+  const dir = tmpEsmDir('flowition-spawnlate-')
   const wf = path.join(dir, 'wf.workflow.js')
   fs.writeFileSync(wf, [
     "export const meta = { name: 'spawnlate' }",
@@ -1782,7 +1809,7 @@ test('spawn: send() on a cache-replayed agent reports dropped, not pending forev
 })
 
 test('spawn: mail queued before a cache replay settles is loudly logged as dropped', async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'flowition-spawndrop-'))
+  const dir = tmpEsmDir('flowition-spawndrop-')
   const wf = path.join(dir, 'wf.workflow.js')
   fs.writeFileSync(wf, [
     "export const meta = { name: 'spawndrop' }",
@@ -1822,7 +1849,7 @@ test('fresh run with an unbindable control socket still records a failed result'
 })
 
 test('lexer: eval( and new Function( are runtime code construction — flagged dynamic, resume refuses', async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'flowition-lexeval-'))
+  const dir = tmpEsmDir('flowition-lexeval-')
   // eval("import('./dep.mjs')") executes an import the scanner cannot see —
   // string contents are DELIBERATELY inert (the design's core property), so
   // the whole class goes LOUD instead: eval( in code position flags dynamic
@@ -1872,7 +1899,7 @@ test('lexer: eval( and new Function( are runtime code construction — flagged d
 })
 
 test('lexer: property-access eval and the word eval inside strings stay clean and resume', async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'flowition-lexevalok-'))
+  const dir = tmpEsmDir('flowition-lexevalok-')
   const note = 'agents may call eval(x) or new Function(y) in prompts'
   // obj.eval(x) is property access (the dot rule clears the keyword) and the
   // WORD eval inside a string is inert content — neither may poison resume
@@ -1895,7 +1922,7 @@ test('lexer: property-access eval and the word eval inside strings stay clean an
 })
 
 test('lexer: bare Function( — no `new` — is the same constructor, flagged dynamic; obj.Function stays clean', async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'flowition-lexbarefn-'))
+  const dir = tmpEsmDir('flowition-lexbarefn-')
   // Function('...') without `new` constructs the identical function (ES
   // 20.2.1.1) — a detector requiring the `new` would let it escape the
   // runtime-code-construction flag
@@ -1945,7 +1972,7 @@ test('lexer: bare Function( — no `new` — is the same constructor, flagged dy
 })
 
 test('mail: a same-callsite re-send stays a true replay even when recovery adds sends before it (identity = key+sender+callsite+text+ordinal)', { timeout: 30_000 }, async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'flowition-mailseq-'))
+  const dir = tmpEsmDir('flowition-mailseq-')
   const wf = path.join(dir, 'wf.workflow.js')
   const flag = path.join(dir, 'first-run-done')
   // First run: 'go' is delivered from its sendTo line. Resumed run: control
@@ -1996,7 +2023,7 @@ test('mail: a same-callsite re-send stays a true replay even when recovery adds 
 })
 
 test('mail: legacy seq-less journal records keep text-only replay matching', () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'flowition-mailseqlegacy-'))
+  const dir = tmpEsmDir('flowition-mailseqlegacy-')
   fs.writeFileSync(path.join(dir, 'journal.jsonl'), [
     { t: 1, type: 'started', key: 'k', index: 0 },
     // pre-seq record: journaled by an older engine, delivered before the crash
@@ -2021,7 +2048,7 @@ test('mail: legacy seq-less journal records keep text-only replay matching', () 
 })
 
 test('mail: same-text same-ordinal sends from different branches are never cross-absorbed (sender identity)', { timeout: 30_000 }, async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'flowition-mailsender-'))
+  const dir = tmpEsmDir('flowition-mailsender-')
   const wf = path.join(dir, 'wf.workflow.js')
   const flag = path.join(dir, 'first-run-done')
   // First run: parallel item 0 sends 'go' — the first send from ITS branch.
@@ -2084,7 +2111,7 @@ test('mail: same-text same-ordinal sends from different branches are never cross
 })
 
 test('mail: sequential call sites in one branch never cross-absorb — an else-arm send is not the if-arm send (callsite identity)', { timeout: 30_000 }, async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'flowition-mailcallsite-'))
+  const dir = tmpEsmDir('flowition-mailcallsite-')
   const wf = path.join(dir, 'wf.workflow.js')
   const flag = path.join(dir, 'first-run-done')
   // First run: the if-arm's 'go' is accepted and delivered but never became
@@ -2148,7 +2175,7 @@ test('mail: sequential call sites in one branch never cross-absorb — an else-a
 })
 
 test('budget: completed usage still counts when resumed control flow skips the completed key', async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'flowition-budgetskip-'))
+  const dir = tmpEsmDir('flowition-budgetskip-')
   const wf = path.join(dir, 'wf.workflow.js')
   const flag = path.join(dir, 'first-run-done')
   fs.writeFileSync(wf, [
@@ -2176,7 +2203,7 @@ test('budget: completed usage still counts when resumed control flow skips the c
 })
 
 test('budget: cache-hit replay does not double-count the pre-seeded completed usage', async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'flowition-budgetseed-'))
+  const dir = tmpEsmDir('flowition-budgetseed-')
   const wf = path.join(dir, 'wf.workflow.js')
   const flag = path.join(dir, 'first-run-done')
   fs.writeFileSync(wf, [
@@ -2204,7 +2231,7 @@ test('budget: cache-hit replay does not double-count the pre-seeded completed us
 })
 
 test('usage: a crash after a usage event but before the result record still charges the window for a per-event adapter', async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'flowition-cumwindow-'))
+  const dir = tmpEsmDir('flowition-cumwindow-')
   const wf = path.join(dir, 'wf.workflow.js')
   fs.writeFileSync(wf, [
     "export const meta = { name: 'cumwindow' }",
@@ -2240,7 +2267,7 @@ test('usage: a crash after a usage event but before the result record still char
 
 test('sealed outcome: a post-completion telemetry error cannot rewrite a completed agent as failed', async () => {
   const { EventSink } = await import('../src/events.js')
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'flowition-sealed-'))
+  const dir = tmpEsmDir('flowition-sealed-')
   const wf = path.join(dir, 'wf.workflow.js')
   fs.writeFileSync(wf, [
     "export const meta = { name: 'sealed' }",
@@ -2273,8 +2300,14 @@ test('sealed outcome: a post-completion telemetry error cannot rewrite a complet
     const st = Journal.load(runDir(out.runId))
     assert.equal(st.completedUsage.output, 10)
     assert.equal(st.failedUsage.output, 0, 'usage charged once, as completed spend')
-    assert.ok(readJsonl(path.join(runDir(out.runId), 'events.jsonl')).some((e) => e.type === 'log' && /post-completion telemetry error/.test(e.message)),
-      'the swallowed error surfaces as a best-effort log event')
+    const telemetryLog = readJsonl(path.join(runDir(out.runId), 'events.jsonl'))
+      .find((e) => e.type === 'log' && /post-completion telemetry error/.test(e.message))
+    assert.ok(telemetryLog, 'the swallowed error surfaces as a best-effort log event')
+    // E12 (DESIGN §8): a swallowed error is the one log a reader MUST be able to lane
+    // and rank — engine source, error level, and the agent it belongs to.
+    assert.equal(telemetryLog.source, 'engine')
+    assert.equal(telemetryLog.level, 'error')
+    assert.equal(telemetryLog.index, 0, 'the first agent is the one whose done event exploded')
     // resume replays both agents from cache — no new attempt, no new records
     const again = await runWorkflow({ file: wf, defaults: { adapter: 'mock' }, resumeId: out.runId, quiet: true })
     assert.equal(again.status, 'completed')
@@ -2306,7 +2339,7 @@ test('per-agent cancel journals status cancelled with usage, and emits state can
 })
 
 test('lexer: a local CommonJS require chain is hashed — editing the nested dep refuses resume', async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'flowition-cjs-'))
+  const dir = tmpEsmDir('flowition-cjs-')
   fs.writeFileSync(path.join(dir, 'dep.cjs'), 'module.exports = { v: 1 }\n')
   // the workflow imports helper.cjs (hashed); helper's require('./dep.cjs')
   // used to escape the module graph entirely
@@ -2327,7 +2360,7 @@ test('lexer: a local CommonJS require chain is hashed — editing the nested dep
 })
 
 test('lexer: computed require flags dynamic; obj.require and require-in-strings stay clean', async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'flowition-cjsdyn-'))
+  const dir = tmpEsmDir('flowition-cjsdyn-')
   fs.writeFileSync(path.join(dir, 'dep.cjs'), 'module.exports = { v: 1 }\n')
   // computed require in a hashed CJS dep — cannot be followed statically
   fs.writeFileSync(path.join(dir, 'computed.cjs'), "const name = './de' + 'p.cjs'\nconst dep = require(name)\nmodule.exports = { v: dep.v }\n")
@@ -2370,7 +2403,7 @@ test('run dir is created 0o700 — artifacts unreachable by other local users', 
 })
 
 test('parallel() and pipeline() refuse promises where thunks/stages are expected', async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'flowition-thunk-'))
+  const dir = tmpEsmDir('flowition-thunk-')
   fs.writeFileSync(path.join(dir, 'par.workflow.js'),
     "export const meta = { name: 'par-promise' }\nexport default async ({ agent, parallel }) => parallel([agent('ECHO a')])\n")
   const p = await runWorkflow({ file: path.join(dir, 'par.workflow.js'), defaults: { adapter: 'mock' }, quiet: true })

@@ -13,11 +13,15 @@ function seedState(branchKey, runSeed) {
   return parseInt(sha256(branchKey + '\0' + runSeed).slice(0, 8), 16) >>> 0
 }
 
-export function makeCtx(branchKey, runSeed) {
-  return { branch: branchKey, runSeed, agentIndex: 0, fanoutIndex: 0, questionIndex: 0, rngState: seedState(branchKey, runSeed), nowCount: 0 }
+// `path` (DESIGN §8 E2) and `phase` (E1) are OBSERVATIONAL ONLY: makeCtx receives no
+// parent context, so both are handed in / copied at the fan-out construction sites in
+// the engine. Neither is an input to agentKey/deriveBranch — resume keys must stay
+// byte-identical (pinned by test/engine-events.test.js).
+export function makeCtx(branchKey, runSeed, path = []) {
+  return { branch: branchKey, runSeed, agentIndex: 0, fanoutIndex: 0, questionIndex: 0, rngState: seedState(branchKey, runSeed), nowCount: 0, path, phase: null }
 }
 
-export const rootCtx = (runSeed) => makeCtx(sha256(KEY_VERSION + '\0root'), runSeed)
+export const rootCtx = (runSeed) => makeCtx(sha256(KEY_VERSION + '\0root'), runSeed, [])
 export const currentCtx = () => als.getStore()
 export const withCtx = (ctx, fn) => als.run(ctx, fn)
 

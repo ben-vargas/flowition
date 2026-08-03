@@ -1,0 +1,722 @@
+/* The run cockpit (DESIGN §2.4), ported from the approved comps
+ * (docs/frontend/comps/lib/css.mjs, frames "Run cockpit — …").
+ *
+ * Two deliberate translations from the comp stylesheet:
+ *
+ *  1. The comps' `.w800 X` / `.w480 X` rules become ONE `@media (max-width: 900px)` block.
+ *     §3.3 names a single 900px breakpoint and the operator's §3.7 ruling restates it, so
+ *     the comps' 480px frame is drawn under the SAME rules — what changes at 480 is only
+ *     what fits, which is expressed here as intrinsic behavior (wrapping metrics, a
+ *     scrolling tab row, a horizontally scrolling plot) rather than as a second threshold.
+ *
+ *  2. The Gantt's geometry is percentage-based (see gantt.ts). The comps compute pixel
+ *     offsets against a per-viewport track; the product cannot, because the ruler, the
+ *     saturation strip and the lanes must stay on ONE axis under a shared scroller. So a
+ *     single grid template — `var(--lane-label) var(--track)` — is set once on `.tl-plot`
+ *     and inherited by all three, and zoom moves `--track` alone.
+ */
+
+/* ==========================================================================
+   Layout (§3.7 cockpit grid)
+   ========================================================================== */
+/* §3.7 verbatim at 1440: run rail 280 (the shell's) │ main 840 (min 640) │ inbox 320.
+   `capture-built.mjs` measures all three in a real browser and `test/comps-captures.test.js`
+   asserts the numbers, so the grid cannot drift back to a two-column screen quietly. */
+.cockpit {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(640px, 1fr) var(--rail-inbox-w);
+  height: 100%;
+  min-height: 0;
+}
+/* Collapsed, the third column is the same 44px handle the comps draw beside the transcript
+   (`page-cockpit.mjs`'s `inboxStrip`) — the rail keeps its place in the grid rather than
+   disappearing, so reopening it does not reflow the Gantt's axis. */
+.cockpit[data-inbox="collapsed"] { grid-template-columns: minmax(640px, 1fr) 44px; }
+.cockpit > .col { min-width: 0; min-height: 0; display: flex; flex-direction: column; }
+.cockpit > .col + .col { border-left: 1px solid var(--hairline); }
+.cockpit .scroller { overflow: auto; flex: 1; min-height: 0; }
+
+/* ==========================================================================
+   Header (§2.4)
+   ========================================================================== */
+.rhead { padding: var(--s3) var(--s4) 10px; border-bottom: 1px solid var(--hairline); flex: none; }
+/* Wrapping (W15): the lifecycle actions take a whole line of their own when they no longer
+   fit beside the run's name, rather than squeezing the name to nothing — or, as shipped,
+   leaving the column entirely. */
+.rhead-top { display: flex; align-items: center; flex-wrap: wrap; gap: var(--s2); row-gap: 8px; margin-bottom: 10px; min-width: 0; }
+.rhead-top h1 { font: 500 var(--fs-title)/1.2 var(--sans); min-width: 0; }
+.rhead-top .rid {
+  display: inline-flex; align-items: center; gap: 4px;
+  font: 400 var(--fs-micro)/1 var(--mono); color: var(--text-3);
+  border: 1px solid transparent; border-radius: var(--r1); padding: 2px 4px;
+  transition: background var(--d-hover) var(--ease);
+}
+.rhead-top .rid:hover { background: var(--surface-raised); border-color: var(--hairline); color: var(--text-2); }
+/* `.chipline.wrap` (primitives.css) supplies `flex: 0 1 auto`, `min-width: 0` and the
+   wrapping. It replaces the `flex: none` this row used to carry: three lock chips on a
+   read-only viewer made the row 791px wide inside a 924px header it started 509px into, so
+   the row left the cockpit column and painted `Delete` — a DESTRUCTIVE control — on top of
+   the inbox rail at 1280px (both rails open). It now wraps to a second line instead. */
+.rhead-actions { margin-left: auto; display: flex; align-items: center; gap: 6px; row-gap: 6px; justify-content: flex-end; }
+/* §7.2's lock chip carries its flag as visible text now (round 6, B1) — short enough to sit
+   in the action row, and the row wraps rather than clipping it if the header runs out. */
+.rhead-actions .lock-chip { flex: none; }
+.rhead-sub { display: flex; align-items: center; gap: var(--s2); margin-bottom: 8px; min-width: 0; }
+
+.live-detail {
+  display: inline-flex; align-items: center; gap: 5px; min-width: 0;
+  font: 400 var(--fs-micro)/1 var(--mono); color: var(--text-3);
+}
+.live-detail::before {
+  content: ""; width: 4px; height: 4px; border-radius: 999px; flex: none;
+  background: var(--st-running);
+}
+.live-detail.dead::before { background: var(--st-stale); }
+
+.rhead-metrics {
+  display: flex; align-items: stretch; gap: 0; margin-bottom: 10px;
+  border: 1px solid var(--hairline); border-radius: var(--r2); background: var(--surface);
+  overflow: hidden;
+}
+.metric { padding: 7px var(--s3); min-width: 0; }
+.metric + .metric { border-left: 1px solid var(--hairline); }
+.metric .lbl { display: block; margin-bottom: 4px; }
+.metric .v { font: 400 var(--fs-ui)/1.15 var(--mono); font-variant-numeric: tabular-nums; }
+.metric .v b { font-weight: 500; }
+.metric .v .u { color: var(--text-3); }
+.metric.gauge-cell { flex: 1; }
+/* The absent-value rule at header scale: a figure nothing on disk supports is stated as
+   unknown, in words, and never substituted from a neighbouring timestamp. */
+.metric .absent { color: var(--text-3); border-bottom: 1px dotted var(--hairline-strong); }
+
+/* §13 Q4's "show args" disclosure. Closed, it is one small control and one line of prose —
+   the header's density is §2.4's whole point, and args are a question the operator asks
+   rather than a figure they scan. Open, the panel is a bounded scroller so a large args
+   object cannot push the Gantt off the screen. */
+.rhead-args {
+  display: flex; align-items: center; gap: var(--s2); flex-wrap: wrap;
+  margin-bottom: 8px; min-width: 0;
+}
+.rhead-args > .cap {
+  font: 400 var(--fs-micro)/1.3 var(--sans); color: var(--text-3); min-width: 0;
+}
+.rhead-args .args-panel {
+  flex: 1 0 100%; margin-top: 2px; padding: 8px 10px;
+  border: 1px solid var(--hairline); border-radius: var(--r2); background: var(--surface);
+  max-height: 220px; overflow: auto;
+  font: 400 var(--fs-micro)/1.45 var(--mono); color: var(--text-2);
+}
+.rhead-args .args-panel .err { color: var(--st-failed); }
+.rhead-args .args-json { white-space: pre-wrap; word-break: break-word; }
+
+/* Resume lineage strip (§2.4) */
+.lineage-row { display: flex; align-items: center; gap: var(--s3); min-width: 0; }
+.lineage { display: flex; align-items: center; gap: 5px; flex: 1; min-width: 0; }
+.lineage .seg-l {
+  position: relative; height: 5px; border-radius: 1px; background: var(--text-3);
+  border: 0; padding: 0; min-width: 3px;
+}
+.lineage .seg-l.completed { --seg: var(--st-done); background: var(--seg); }
+.lineage .seg-l.interrupted, .lineage .seg-l.cancelled { --seg: var(--st-cancelled); background: var(--seg); }
+.lineage .seg-l.failed { --seg: var(--st-failed); background: var(--seg); }
+.lineage .seg-l.running, .lineage .seg-l.started, .lineage .seg-l.resumed {
+  --seg: var(--st-running); background: var(--seg);
+}
+.lineage .seg-l.stale { --seg: var(--st-stale); background: var(--seg); }
+.lineage .seg-l.stub { background: repeating-linear-gradient(90deg, var(--st-failed) 0 2px, transparent 2px 4px); }
+/* An attempt with an UNKNOWN end (B1): the fate colour, hatched, at a fixed width. Hatching
+   is the same visual grammar the queue-wait segment and the budget overshoot zone already
+   use for "this region is not a measured quantity" — it must not read as a duration, because
+   nothing on disk supports one. The width is pinned inline in RunHeader.tsx as well, so a
+   missing stylesheet still cannot make it grow. */
+.lineage .seg-l.unknown-end {
+  flex: 0 0 44px;
+  background: repeating-linear-gradient(90deg, var(--seg, var(--st-stale)) 0 3px, transparent 3px 6px);
+}
+/* The strip is also §6.4 step 1a's scope selector: each segment is a radio. Selection is a
+   ring around the segment, not a colour change — the colour is the attempt's FATE. */
+.lineage button.seg-l { cursor: pointer; height: 7px; }
+.lineage button.seg-l:hover { outline: 1px solid var(--text-3); outline-offset: 1px; }
+.lineage .seg-l.picked { outline: 2px solid var(--accent); outline-offset: 1px; }
+.lineage-row .cap {
+  font: 400 var(--fs-micro)/1 var(--mono); color: var(--text-3); white-space: nowrap;
+  display: inline-flex; align-items: center; gap: 5px;
+}
+.lineage-row .cap .scoped { color: var(--accent); }
+
+/* Last log line (parity #59) */
+.lastlog {
+  display: flex; align-items: center; gap: 7px; min-width: 0;
+  padding: 5px var(--s4); border-bottom: 1px solid var(--hairline);
+  background: var(--surface); flex: none;
+  font: 400 var(--fs-micro)/1.35 var(--mono); color: var(--text-2);
+}
+.lastlog .src {
+  font: 600 var(--fs-micro)/1 var(--sans); letter-spacing: 0.06em; text-transform: uppercase;
+  color: var(--text-3); border: 1px solid var(--hairline-strong); border-radius: var(--r1);
+  padding: 2px 4px; flex: none;
+}
+.lastlog .warn { color: var(--st-stale); }
+.lastlog .err { color: var(--st-failed); }
+
+/* The stale run's one decision, promoted (§2.4, comps "failed / stale at 800px"). */
+.resume-card {
+  margin: 0 var(--s4) var(--s3); padding: var(--s3); flex: none;
+  border: 1px solid var(--hairline-strong); border-left: 2px solid var(--st-stale);
+  border-radius: var(--r2); background: var(--surface-raised);
+}
+.resume-card .rc-top { display: flex; align-items: center; gap: 7px; margin-bottom: 6px; font-size: var(--fs-ui); }
+.resume-card p { font-size: var(--fs-meta); color: var(--text-2); line-height: 1.5; margin-bottom: 10px; }
+.resume-card .rc-actions { display: flex; align-items: center; gap: 6px; }
+
+/* ==========================================================================
+   Tabs (§2.4)
+   ========================================================================== */
+.tabs {
+  display: flex; align-items: stretch; height: 34px; flex: none;
+  border-bottom: 1px solid var(--hairline); padding: 0 var(--s3); gap: 2px;
+  overflow-x: auto; scrollbar-width: none;
+}
+.tabs::-webkit-scrollbar { display: none; }
+.tabs button {
+  display: inline-flex; align-items: center; gap: 6px; padding: 0 10px; white-space: nowrap;
+  font: 500 var(--fs-meta)/1 var(--sans); color: var(--text-3);
+  border-bottom: 2px solid transparent; margin-bottom: -1px;
+  transition: color var(--d-hover) var(--ease);
+}
+.tabs button:hover { color: var(--text); }
+.tabs button[aria-selected="true"] { color: var(--text); border-bottom-color: var(--accent); }
+.tabs .kb { margin-left: auto; display: flex; align-items: center; gap: var(--s2); }
+
+/* `.seg` itself is a shared primitive and lives in ui/primitives.css — the result screen
+   renders the same segmented control, so cockpit.css is not entitled to define it. */
+
+/* A degradation / debug note. Never a blank panel (§6.5). */
+.rawgrp {
+  display: flex; align-items: flex-start; gap: 7px; padding: 5px 9px;
+  border: 1px dashed var(--hairline-strong); border-radius: var(--r1);
+  font: 400 var(--fs-micro)/1.5 var(--mono); color: var(--text-3);
+}
+.rawgrp .ic { margin-top: 2px; flex: none; }
+.rawgrp b { color: var(--text-2); font-weight: 500; }
+
+/* ==========================================================================
+   Timeline / Gantt (§2.4)
+   ========================================================================== */
+.tl { padding: var(--s3) var(--s4) var(--s4); }
+.tl-head { display: flex; align-items: center; gap: var(--s3); margin-bottom: 10px; flex-wrap: wrap; row-gap: 4px; }
+.tl-head .zoom { margin-left: auto; display: flex; align-items: center; gap: 4px; }
+.tl-note {
+  font-size: var(--fs-micro); color: var(--text-3); font-family: var(--mono);
+  min-width: 0; overflow-wrap: anywhere;
+}
+.tl-note b { color: var(--text-2); font-weight: 500; }
+
+/* The one horizontal scroller: ruler + saturation + lanes ride it together, so the three
+   can never come off a common axis (§3.7 operator ruling). */
+.tl-scrollx { overflow-x: auto; overflow-y: hidden; }
+.tl-plot {
+  --lane-label: 168px;
+  --track: minmax(350px, 1fr);
+  min-width: min-content;
+}
+.tl-plot.fixed { --track: var(--track-px); width: max-content; }
+
+/* Saturation: TWO separated series, never stacked. */
+.sat { margin-bottom: 12px; }
+.sat-wrap { display: grid; grid-template-columns: var(--lane-label) var(--track); }
+.sat-axes { display: grid; grid-template-rows: 40px 13px; padding-right: var(--s3); }
+.sat-axes > span { align-self: center; text-align: right; }
+/* THE AXIS RULE (§3.7's operator ruling; review round 1, B2).
+   Every time-coordinate box — `.rule-track`, `.sat-plot`, `.lane-track` — must resolve to
+   the SAME width and the same left edge, because every mark inside them is a percentage of
+   the run's span. A real border is layout-affecting under `box-sizing: border-box`: it eats
+   the content box the percentages are measured against. A 1px frame here and a 2px
+   selection edge on `.lane` put the three boxes 2px apart, which is a per-viewport time
+   offset nothing in the model can see. So NO box on the axis carries a border: the frame is
+   an inset shadow and the selection edge is an inset shadow, both of which paint over the
+   box instead of shrinking it. */
+.sat-body {
+  position: relative;
+  box-shadow: inset 0 0 0 1px var(--hairline); border-radius: var(--r1);
+  background: var(--surface); overflow: hidden;
+}
+.sat-plot { position: relative; height: 38px; }
+.sat-plot .step {
+  position: absolute; bottom: 0;
+  background: color-mix(in oklab, var(--accent) 42%, var(--surface));
+  border-top: 1px solid color-mix(in oklab, var(--accent) 70%, var(--surface));
+}
+.sat-plot .step.pinned {
+  background: color-mix(in oklab, var(--accent) 78%, var(--surface));
+  border-top-color: var(--accent);
+}
+.sat-plot .ceil {
+  position: absolute; left: 0; right: 0; height: 0;
+  border-top: 1px dashed var(--text-2);
+}
+/* The label sits BELOW its rule, not above it. A run whose concurrency ceiling is also its
+   observed maximum puts the rule at the very top of the plot, and a label above that line
+   is clipped by `.sat-body`'s overflow — which is every run that never saturated. */
+.sat-plot .ceil span {
+  position: absolute; right: 4px; top: 2px;
+  font: 500 var(--fs-micro)/1 var(--mono); color: var(--text-2);
+  background: var(--surface); padding: 1px 3px;
+}
+.sat-plot .pin-band {
+  position: absolute; top: 0; bottom: 0;
+  background: color-mix(in oklab, var(--accent) 6%, transparent);
+  border-left: 1px dotted color-mix(in oklab, var(--accent) 50%, var(--surface));
+  border-right: 1px dotted color-mix(in oklab, var(--accent) 50%, var(--surface));
+}
+.sat-plot .pin-band span {
+  position: absolute; top: 1px; left: 5px;
+  font: 500 var(--fs-micro)/1 var(--mono); color: var(--accent);
+}
+.sat-rail {
+  position: relative; height: 16px;
+  border-top: 1px solid var(--hairline); background: var(--canvas);
+}
+.sat-rail .qd {
+  position: absolute; top: 1px;
+  background: repeating-linear-gradient(135deg, var(--text-3) 0 1px, transparent 1px 4px);
+}
+.sat-rail .qn {
+  position: absolute; top: 2px; font: 500 var(--fs-micro)/12px var(--mono); color: var(--text-2);
+  margin-left: 5px; padding: 0 4px; background: var(--canvas); border-radius: var(--r1);
+}
+.sat-legend {
+  display: grid; grid-template-columns: var(--lane-label) var(--track);
+  font: 400 var(--fs-micro)/1 var(--mono); color: var(--text-3);
+}
+.sat-legend .keys { grid-column: 2; display: flex; align-items: center; gap: var(--s3);
+                    flex-wrap: wrap; row-gap: 4px; margin-top: 6px; }
+.sat-legend i {
+  display: inline-block; width: 12px; height: 7px; border-radius: 1px; margin-right: 5px;
+  vertical-align: -1px; border: 1px solid var(--hairline-strong);
+}
+.sat-legend .k-pinned { background: color-mix(in oklab, var(--accent) 78%, var(--surface));
+                        border-top: 1px solid var(--accent); }
+.sat-legend .k-active { background: color-mix(in oklab, var(--accent) 42%, var(--surface)); }
+.sat-legend .k-queued { background: repeating-linear-gradient(135deg, var(--text-3) 0 1px, transparent 1px 4px); }
+.sat-legend .advice { margin-left: auto; }
+
+.ruler {
+  display: grid; grid-template-columns: var(--lane-label) var(--track);
+  height: 16px; border-bottom: 1px solid var(--hairline);
+}
+.ruler .rule-track { position: relative; grid-column: 2; }
+.ruler .tk { position: absolute; top: 0; bottom: 0; border-left: 1px solid var(--hairline); }
+.ruler .tk span {
+  position: absolute; left: 4px; top: 2px;
+  font: 400 var(--fs-micro)/1 var(--mono); color: var(--text-3);
+}
+
+.lanes { position: relative; }
+.lanes .gridlines { position: absolute; inset: 0; pointer-events: none;
+                    display: grid; grid-template-columns: var(--lane-label) var(--track); }
+.lanes .gridlines .gl-track { position: relative; grid-column: 2; }
+.lanes .gridlines .gl { position: absolute; top: 0; bottom: 0; border-left: 1px solid var(--hairline); opacity: 0.6; }
+
+.lane {
+  position: relative; display: grid; grid-template-columns: var(--lane-label) var(--track);
+  align-items: center; height: var(--row-agent); width: 100%; text-align: left;
+  border-bottom: 1px solid var(--hairline);
+  transition: background var(--d-hover) var(--ease);
+}
+.lane:hover { background: var(--surface); }
+/* See THE AXIS RULE above: the selection edge is an inset shadow, so a selected lane's
+   track is byte-for-byte the same box as an unselected one's and as the ruler's. */
+.lane.sel { background: var(--surface-selected); box-shadow: inset 2px 0 0 var(--accent); }
+.lane-label { display: flex; align-items: center; gap: 6px; padding-right: var(--s3); padding-left: 6px; min-width: 0; }
+.lane-label .idx { font: 400 var(--fs-micro)/1 var(--mono); color: var(--text-3); width: 14px; text-align: right; flex: none; }
+.lane-label .nm { font-size: var(--fs-meta); }
+.lane-track { position: relative; height: 100%; }
+
+/* SCOPED ON `.lane-track` ON PURPOSE (J1). `bar` is a generic word and Home's run table
+   uses it too (`home.css`'s `.progress-mini .bar`, RunTable.tsx:185). Declared bare, this
+   block's `position: absolute; transform: translateY(-50%)` reached that 34px mini bar as
+   well — it left its flex row and painted through the "14/14" digits, so a completed run
+   read as struck through. There is no build-time scoping in plain CSS, so the anchor is
+   the scope: every Gantt bar is a child of `.lane-track` (Timeline.tsx:183), which is a
+   name only this stylesheet uses. `src/ui/css-scope.test.ts` keeps it that way. */
+.lane-track .bar {
+  position: absolute; top: 50%; transform: translateY(-50%);
+  height: 14px; border-radius: var(--r1); display: flex; align-items: stretch; overflow: hidden;
+  min-width: 3px;
+}
+.lane-track .bar .wait {
+  background:
+    repeating-linear-gradient(135deg, var(--text-3) 0 1px, transparent 1px 4px),
+    var(--surface-raised);
+  border: 1px solid var(--hairline-strong); border-right: 0;
+  border-radius: var(--r1) 0 0 var(--r1);
+  min-width: 3px;
+}
+.lane-track .bar .exec { border-radius: 0 var(--r1) var(--r1) 0; position: relative; min-width: 3px; }
+.lane-track .bar.nowait .exec { border-radius: var(--r1); }
+.lane-track .bar .exec.d { background: var(--st-done); }
+.lane-track .bar .exec.r { background: var(--st-running); }
+.lane-track .bar .exec.f { background: var(--st-failed); }
+.lane-track .bar .exec.c { background: var(--st-cached); }
+.lane-track .bar .exec.x { background: var(--st-cancelled); }
+.lane-track .bar .exec.q { background: var(--st-queued); }
+.lane-track .bar .exec.orphan { opacity: 0.45; }
+.lane-track .bar .exec .notch { position: absolute; top: 3px; bottom: 3px; width: 1px; background: var(--canvas); opacity: 0.6; }
+/* An open-ended wait: the agent has not started, so the hatch has no closing edge. */
+.lane-track .bar.open .wait { border-right: 1px dashed var(--hairline-strong); border-radius: var(--r1); }
+/* A zero-width mark on the window's right edge — see `atEnd` in Timeline.tsx. */
+.lane-track .bar.at-end { transform: translate(-100%, -50%); }
+/* A cached agent never took a slot — a mark at its position, not a duration. */
+.lane-track .bar.tick { width: 9px; }
+/* A queue wait NOTHING CLOSED (round 12, B1). The agent never started and no terminal event
+   was written, so the segment has no right edge — and the chart may not borrow one from the
+   window, which ends at whichever OTHER agent last did something. The stub is a fixed 9px
+   mark on the `queued` event that fades out instead of stopping: a fade cannot be read off
+   the ruler as a time, which is the whole difference between this and a 38-second hatch that
+   happens to end where an unrelated agent finished. */
+.lane-track .bar.qorphan { width: 9px; }
+.lane-track .bar.qorphan .wait {
+  border-right: 0; border-radius: var(--r1);
+  -webkit-mask-image: linear-gradient(90deg, #000 0 30%, transparent 100%);
+  mask-image: linear-gradient(90deg, #000 0 30%, transparent 100%);
+}
+
+.bar-meta {
+  position: absolute; top: 50%; transform: translateY(-50%);
+  display: flex; align-items: center; gap: 5px;
+  font: 400 var(--fs-micro)/1 var(--mono); color: var(--text-3); white-space: nowrap;
+  padding-left: 8px;
+}
+.quiet-tag {
+  display: inline-flex; align-items: center; gap: 3px;
+  height: 15px; padding: 0 5px; border-radius: var(--r1);
+  background: var(--st-stale-tint); color: var(--st-stale);
+  font: 500 var(--fs-micro)/1 var(--sans); white-space: nowrap;
+}
+.now-line { position: absolute; top: 0; bottom: 0; width: 1px; background: var(--st-running); }
+.now-line span {
+  position: absolute; top: -15px; left: 3px;
+  font: 500 var(--fs-micro)/1 var(--mono); color: var(--text-2);
+}
+
+/* ==========================================================================
+   Structure / DAG (§2.4)
+   ========================================================================== */
+.dag { padding: var(--s4); display: grid; gap: var(--s3); align-content: start; }
+.node { border: 1px solid var(--hairline); border-radius: var(--r2); background: var(--surface); }
+.node > .nhead {
+  display: flex; align-items: center; gap: var(--s2); flex-wrap: wrap; row-gap: 4px;
+  padding: 6px 10px; border-bottom: 1px solid var(--hairline);
+}
+.node > .nhead .kind { font: 500 var(--fs-micro)/1 var(--mono); color: var(--text); }
+.node > .nhead .roll {
+  margin-left: auto; display: flex; align-items: center; gap: var(--s3);
+  font: 400 var(--fs-micro)/1 var(--mono); color: var(--text-3);
+}
+.node > .nbody { padding: 10px; display: grid; gap: 7px; }
+.node.pending { opacity: 0.62; border-style: dashed; }
+.node.pending > .nhead { border-bottom: 0; }
+.fan { display: grid; gap: 7px; }
+.fan-row { display: grid; grid-template-columns: 54px minmax(0, 1fr); align-items: center; gap: var(--s2); }
+.ilbl { font: 400 var(--fs-micro)/1.35 var(--mono); color: var(--text-3); }
+.ilbl .dim { display: block; }
+.pipe { display: grid; gap: 7px; overflow-x: auto; }
+.pipe-head, .pipe-row {
+  display: grid; gap: var(--s2);
+  grid-template-columns: 54px repeat(var(--stages, 2), minmax(148px, 1fr));
+}
+.pipe-row { align-items: stretch; }
+.pipe-head { align-items: center; }
+/* ONE element per grid cell, whatever the cell holds — two agents, or a whole nested
+   container. Without it a two-agent cell pushes its row's later cells into the next column
+   and the grid stops describing the pipeline. */
+.cell { display: grid; gap: 6px; align-content: start; min-width: 0; }
+.fan-row .cell { align-content: center; }
+
+/* A container declared INSIDE a cell (a parallel() inside a pipeline stage). It keeps the
+   card idiom so the shape reads the same at every depth, one shade closer to the canvas so
+   the nesting is visible without an indent rail. */
+.node.nested { background: var(--canvas); border-color: var(--hairline-strong); }
+.node.nested > .nhead { padding: 4px 8px; }
+.node.nested > .nhead .kind { font-size: var(--fs-micro); }
+.node.nested > .nbody { padding: 7px; }
+
+.achip {
+  display: flex; align-items: center; gap: 6px; min-width: 0; width: 100%; text-align: left;
+  padding: 5px 8px; border-radius: var(--r1);
+  border: 1px solid var(--hairline-strong); background: var(--canvas);
+  transition: border-color var(--d-hover) var(--ease);
+}
+.achip:hover { border-color: var(--text-3); }
+.achip .nm { font-size: var(--fs-meta); font-weight: 500; }
+.achip .m {
+  margin-left: auto; display: flex; align-items: center; gap: var(--s2);
+  font: 400 var(--fs-micro)/1 var(--mono); color: var(--text-3);
+}
+.achip.q { border-style: dashed; }
+.achip.q .nm { color: var(--text-2); }
+.achip.f { border-color: color-mix(in oklab, var(--st-failed) 40%, var(--canvas)); background: var(--st-failed-tint); }
+.achip.r { border-color: color-mix(in oklab, var(--st-running) 45%, var(--canvas)); }
+.achip.empty { border-style: dotted; background: transparent; }
+.achip.empty .nm { font-weight: 400; color: var(--text-3); }
+
+/* ==========================================================================
+   Agents table (§2.4) + phase tree (§2.4.1)
+   ========================================================================== */
+.at { display: flex; flex-direction: column; min-height: 0; }
+.at-tools { display: flex; align-items: center; gap: var(--s3); padding: 12px var(--s4) 8px; flex: none; }
+.at-tools .seg { margin-left: auto; }
+.at-scroll { overflow: auto; flex: 1; min-height: 0; }
+.at-row {
+  display: grid;
+  grid-template-columns:
+    26px minmax(24px, 1.4fr) 122px 92px minmax(96px, 1.1fr) 54px 62px 62px 62px 60px
+    minmax(24px, 0.8fr) 40px 40px;
+  align-items: center; gap: var(--s2);
+  height: var(--row-agent); padding: 0 var(--s4); width: 100%; text-align: left;
+  border-bottom: 1px solid var(--hairline);
+  border-left: 2px solid transparent;
+}
+.at-row.head { height: 26px; background: var(--surface); position: sticky; top: 0; z-index: 1; }
+.at-row.head > * { color: var(--text-3); }
+.at-row.head button {
+  display: inline-flex; align-items: center; gap: 3px; color: inherit; font: inherit;
+  width: 100%; min-width: 0; min-height: 24px; padding: 0 4px;
+  overflow: hidden; white-space: nowrap;
+}
+.at-row.head button.sorted { color: var(--text); }
+.at-row.head .r { justify-content: flex-end; text-align: right; }
+.at-row.head .r button { justify-content: flex-end; }
+.at-row:not(.head):hover { background: var(--surface); }
+.at-row.sel { background: var(--surface-selected); border-left-color: var(--accent); }
+.at-row .idx { font: 400 var(--fs-micro)/1 var(--mono); color: var(--text-3); text-align: right; }
+.at-row .lab { display: flex; align-items: center; gap: 6px; min-width: 0; font-size: var(--fs-meta); }
+.at-row .lab .nm { font-weight: 500; }
+.at-row .mdl {
+  display: flex; align-items: center; gap: 5px; min-width: 0;
+  font: 400 var(--fs-micro)/1 var(--mono); color: var(--text-2);
+}
+.at-row .n { font: 400 var(--fs-micro)/1 var(--mono); font-variant-numeric: tabular-nums; text-align: right; }
+.at-row .ph { font-size: var(--fs-micro); color: var(--text-2); }
+/* The state cell holds three things on a failed agent — chip, error code, message — and the
+   message is the one that yields: it clamps to the row and keeps its full text in the
+   tooltip (parity #54).
+ *
+ * W15: it now yields INSIDE the cell. `.chip, .badge { flex: none }` plus a cell whose
+ * overflow computed to `visible` meant a real `spawn_failed` badge measured x699.45–793.30
+ * while this cell ended at x736 — 57px painted straight over the `wait` column's value, at
+ * 1280px with the run rail open, i.e. the default layout on a common laptop. The comment
+ * above claimed a clamp this cell did not have. `.chipline` clips it; the ordering below is
+ * the priority the comment always meant:
+ *   • the state chip never yields — it is the cell's subject and is ~54px;
+ *   • the error CODE ellipsizes before it does, carrying the whole code in its `title` and
+ *     in the row's `aria-label` (which `rowLabel` already composes in full);
+ *   • the message goes first — `flex-shrink: 100` is that priority, stated as a number.
+ * At 1280 with both rails open this cell is at its 96px template floor, so a long code IS
+ * visibly truncated. That is a legible clamp with the full value one hover (or one screen
+ * reader row) away, which is the rule the rest of this table already follows — it is not
+ * the same defect as painting it over the neighbouring number. */
+.at-row .st-cell { display: flex; align-items: center; gap: 5px; }
+.at-row .st-cell .chip { flex: none; }
+.at-row .errmsg {
+  font: 400 var(--fs-micro)/1 var(--mono); color: var(--st-failed);
+  min-width: 0; flex: 0 100 auto;
+}
+.at-row .tool { font: 400 var(--fs-micro)/1 var(--mono); color: var(--text-2); }
+/* Parity #53: a field the engine never wrote is BLANK. The rule renders as an empty cell
+   with a title, not as a dash — a dash is a character an operator reads as a value. */
+.at-row .absent { color: var(--hairline-strong); }
+.at-row .live-dot { color: var(--st-running); }
+
+/* §2.1 Q4's per-agent token bar. It underlines the `out` figure inside that figure's own
+   cell rather than taking a fourteenth grid column, so the thirteen-column template the
+   §3.7 gate approved is untouched: the cell is `position: relative` and the bar is out of
+   flow, which means it cannot change the row's height or the number's baseline either.
+   The fill is --accent at FULL strength (round 5, B3). It was --accent at `opacity: 0.55`,
+   which is not a token: opacity composites in gamma-encoded sRGB, and the painted result
+   over the --hairline track was 2.14:1 light / 2.83:1 dark — below §3.6's 3:1 for non-text
+   UI, and invisible to a gate that only ever sees whole tokens. It is now the same fill the
+   budget gauge uses (--accent on --hairline, 4.27 / 6.03), and `tokens.ts` gates that pair
+   under this feature's own name. 1.5px carries the "magnitude, not a state" reading instead
+   — accent is not a status colour, so the hue was never claiming one. */
+.at-row .c-output { position: relative; }
+.at-row .tokbar {
+  /* The cell is sized to its text (the row centres it), so the bar hangs BELOW that box
+     — inside the 32px row, clear of the digits, never across them. */
+  position: absolute; left: 0; right: 0; bottom: -5px; height: 1.5px;
+  background: var(--hairline); border-radius: 1px; overflow: hidden;
+  pointer-events: none;
+  /* Right-anchored, because the column is: the fill grows leftward FROM the number it
+     measures, so the bars line up with the tabular digits above and below them. */
+  display: flex; justify-content: flex-end;
+}
+/* No `opacity` here, ever — see above, and `cockpit.css` is read by the §3.6 gate's
+   companion assertion in `contrast.test.ts`, which fails if this rule reintroduces one. */
+.at-row .tokbar .fill {
+  display: block; height: 100%; background: var(--accent);
+  border-radius: inherit;
+}
+
+.phead {
+  display: grid; grid-template-columns: 16px 16px minmax(0, 1fr) auto auto;
+  align-items: center; gap: var(--s2);
+  height: 30px; padding: 0 var(--s4); width: 100%; text-align: left;
+  background: var(--surface); border-bottom: 1px solid var(--hairline);
+  border-top: 1px solid var(--hairline);
+}
+.phead .pn { font: 500 var(--fs-meta)/1 var(--sans); }
+.phead .cnt { font: 400 var(--fs-micro)/1 var(--mono); color: var(--text-3); }
+.phead .chev { color: var(--text-3); transition: transform var(--d-disc) var(--ease); }
+.phead[aria-expanded="true"] .chev { transform: rotate(90deg); }
+.phead.pending .pn { color: var(--text-3); }
+.pbody .at-row { padding-left: 44px; }
+.ptoggled {
+  display: inline-flex; align-items: center; gap: 3px;
+  font: 400 var(--fs-micro)/1 var(--mono); color: var(--accent);
+}
+
+/* ==========================================================================
+   Log lane (§2.4) — the WHOLE stream, not logs.at(-1)
+   ========================================================================== */
+.loglane {
+  border-top: 1px solid var(--hairline); background: var(--surface); flex: none;
+  display: flex; flex-direction: column; max-height: 50vh;
+}
+.loglane .sect, .inbox .sect {
+  display: flex; align-items: center; gap: var(--s2);
+  height: 28px; padding: 0 var(--s4); flex: none;
+  border-bottom: 1px solid var(--hairline);
+}
+.loglane .sect-right, .inbox .sect-right { margin-left: auto; display: flex; align-items: center; gap: var(--s1); }
+/* The lane's focus target on open (§3.6). It is a heading, not a control, so the ring is
+   the only thing that says "you are here". */
+.lane-heading:focus { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: var(--r1); }
+.log-rows { padding: 4px 0; overflow: auto; flex: 1; min-height: 0; height: 240px; }
+.log-row {
+  display: grid; grid-template-columns: 58px 76px minmax(0, 1fr); gap: var(--s2);
+  padding: 2px var(--s4); font: 400 var(--fs-micro)/1.5 var(--mono);
+}
+.log-row:hover { background: var(--surface-raised); }
+.log-row .t { color: var(--text-3); }
+.log-row .s {
+  font: 600 var(--fs-micro)/1.6 var(--sans); letter-spacing: 0.06em; text-transform: uppercase;
+  color: var(--text-3);
+}
+.log-row .s.engine { color: var(--st-cached); }
+.log-row.warn .m { color: var(--st-stale); }
+.log-row.err .m { color: var(--st-failed); }
+.log-row .aref { color: var(--accent); }
+.log-more { padding: 4px var(--s4) 8px; display: flex; align-items: center; gap: var(--s2); }
+
+/* ==========================================================================
+   Inbox rail (§2.4) — §3.7's third column, and a 44px handle below 900px
+   ========================================================================== */
+.inbox { background: var(--canvas); }
+.inbox .inbox-group + .inbox-group { border-top: 1px solid var(--hairline); }
+.inbox .inbox-group > .sect { background: var(--surface); }
+.inbox .ib-empty {
+  padding: 10px var(--s4); font: 400 var(--fs-micro)/1.5 var(--mono); color: var(--text-3);
+}
+
+.qitem { padding: 10px var(--s4); border-bottom: 1px solid var(--hairline); }
+.qitem:last-child { border-bottom: 0; }
+.qitem.answered { opacity: 0.78; }
+.qh { display: flex; align-items: center; gap: 6px; margin-bottom: 5px; }
+.qh .ago { margin-left: auto; font: 400 var(--fs-micro)/1 var(--mono); color: var(--text-3); }
+.qb { font-size: var(--fs-meta); line-height: 1.5; color: var(--text); }
+.qf { display: flex; flex-direction: column; gap: 2px; margin-top: 6px; }
+.qitem .ans {
+  display: flex; align-items: baseline; gap: 6px; margin-top: 6px;
+  font-size: var(--fs-micro); color: var(--text-2);
+}
+
+.mitem { padding: 9px var(--s4); border-bottom: 1px solid var(--hairline); }
+.mitem:last-child { border-bottom: 0; }
+.mh { display: flex; align-items: center; gap: 6px; margin-bottom: 4px; min-width: 0; }
+.mh .who { font: 500 var(--fs-micro)/1 var(--sans); color: var(--text-2); }
+.mh a.who { color: var(--accent); }
+.mh .ago { margin-left: auto; font: 400 var(--fs-micro)/1 var(--mono); color: var(--text-3); }
+.mb { font-size: var(--fs-meta); line-height: 1.5; color: var(--text); }
+.mf {
+  display: flex; align-items: center; gap: var(--s2); margin-top: 5px;
+  font: 400 var(--fs-micro)/1 var(--mono); color: var(--text-3);
+}
+.mf .verdict { color: var(--text-2); }
+.mf .verdict.live { color: var(--st-done); }
+.mf .verdict.queued { color: var(--st-queued); }
+.mf .verdict.dropped { color: var(--st-failed); }
+
+/* The 44px handle and its overlay drawer (parity #42; comps annotations 20–22). */
+.cockpit > .col.strip {
+  width: 44px; flex: none;
+  display: flex; flex-direction: column; align-items: center; gap: var(--s3);
+  padding: var(--s3) 0; background: var(--canvas);
+}
+.cockpit > .col.strip .vlbl {
+  writing-mode: vertical-rl; text-orientation: mixed;
+  font: 600 var(--fs-micro)/1 var(--sans); letter-spacing: 0.12em; text-transform: uppercase;
+  color: var(--text-3);
+}
+.cockpit > .col.strip .dotn {
+  display: grid; place-items: center; min-width: 16px; height: 16px; padding: 0 3px;
+  border-radius: var(--r1); background: var(--st-blocked-tint); color: var(--st-blocked);
+  font: 600 var(--fs-micro)/1 var(--mono);
+}
+.inbox-scrim {
+  position: absolute; inset: 0; z-index: 20;
+  background: color-mix(in oklab, var(--ink) 28%, transparent);
+}
+.cockpit > .col.inbox.drawer {
+  position: absolute; top: 0; bottom: 0; right: 0; z-index: 30; width: 320px; max-width: 90%;
+  box-shadow: var(--shadow-raised); border-left: 1px solid var(--hairline);
+}
+
+/* ==========================================================================
+   Skeletons (parity #61) and empties (#60)
+   ========================================================================== */
+.ck-skel { padding: var(--s4); display: grid; gap: 10px; }
+.ck-skel .row { display: grid; grid-template-columns: 168px minmax(0, 1fr); gap: var(--s3); align-items: center; }
+
+/* ==========================================================================
+   §3.3's single breakpoint. Below 900px the rails are drawers (the shell owns that);
+   the header wraps and the gauge takes a row of its own, because it carries a SHAPE
+   rather than a number and a 200px gauge cannot show a hatched overshoot zone.
+   ========================================================================== */
+@media (max-width: 899px) {
+  /* Both rails become 44px drawer handles (the comps' `cockpit-live-800` annotation 14, and
+     the operator's ruling on it). The main column takes the rest; nothing is hidden. */
+  /* Both selectors, because `[data-inbox]` outranks a bare class and the narrow rule must
+     win at every inbox state. */
+  .cockpit, .cockpit[data-inbox="collapsed"] { grid-template-columns: minmax(0, 1fr) 44px; }
+  .rhead { padding-bottom: var(--s2); }
+  .rhead-top { margin-bottom: 4px; flex-wrap: wrap; row-gap: 6px; }
+  /* The actions take a row of their own so the run NAME never truncates: an operator
+     reading a narrow cockpit is identifying the run, and four buttons are not worth
+     the title. */
+  .rhead-actions { flex-basis: 100%; margin-left: 0; justify-content: flex-end; }
+  .rhead-metrics { margin-bottom: 8px; flex-wrap: wrap; }
+  .rhead-metrics .metric { min-width: 50%; }
+  .metric.gauge-cell {
+    display: block; padding: 8px var(--s3); margin-bottom: 8px; flex-basis: 100%;
+    border: 1px solid var(--hairline); border-radius: var(--r2); background: var(--surface);
+  }
+  .rhead-metrics .metric.gauge-cell { border-left: 0; }
+  .tabs .kb { display: none; }
+  .tl { padding: var(--s3) 14px var(--s4); }
+  .resume-card { margin: 0 var(--s3) var(--s3); }
+  .at-row {
+    grid-template-columns: 26px minmax(0, 1.4fr) 96px 84px 58px 62px minmax(0, 0.9fr);
+  }
+  .at-row > .c-adapter, .at-row > .c-wait, .at-row > .c-input,
+  .at-row > .c-attempts, .at-row > .c-steers { display: none; }
+  .log-row { grid-template-columns: 58px minmax(0, 1fr); }
+  .log-row .s { display: none; }
+}
+
+/* W12 round 2: the tab panel exists for ARIA (`aria-controls`/`aria-labelledby` from
+   React Aria's tab hooks, §16.3) and must not become a box in the cockpit's column —
+   `display: contents` gives the three panels exactly the layout they had before the role
+   was added. */
+.tabpanel { display: contents; }

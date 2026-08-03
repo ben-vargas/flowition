@@ -1,0 +1,133 @@
+/* The app shell and the run rail (DESIGN §2.2, §3.7 cockpit grid), ported from the
+ * approved W8a comps. */
+
+.app { display: flex; flex-direction: column; height: 100%; background: var(--canvas); }
+
+/* ---- top bar ----------------------------------------------------------- */
+.topbar {
+  display: flex; align-items: center; gap: var(--s4);
+  height: 44px; padding: 0 var(--s4); flex: none;
+  border-bottom: 1px solid var(--hairline);
+  background: var(--canvas);
+}
+.brand { display: flex; align-items: baseline; gap: 7px; }
+.brand .wm { font: 600 var(--fs-meta)/1 var(--sans); letter-spacing: 0.02em; }
+.brand .wm i { font-style: normal; color: var(--accent); }
+.brand .v { font: 400 var(--fs-micro)/1 var(--mono); color: var(--text-3); }
+.topbar .nav { display: flex; gap: 2px; margin-left: var(--s3); }
+.topbar .nav a {
+  padding: 4px 8px; border-radius: var(--r1);
+  font: 500 var(--fs-meta)/1.2 var(--sans); color: var(--text-3); text-decoration: none;
+}
+.topbar .nav a:hover { color: var(--text); text-decoration: none; }
+.topbar .nav a[aria-current] { color: var(--text); background: var(--surface-raised); }
+.topbar-right { margin-left: auto; display: flex; align-items: center; gap: var(--s2); }
+.ro-chip {
+  display: inline-flex; align-items: center; gap: 5px; height: 20px; padding: 0 7px;
+  border: 1px dashed var(--hairline-strong); border-radius: var(--r1);
+  font: 500 var(--fs-micro)/1 var(--sans); letter-spacing: 0.04em; text-transform: uppercase;
+  color: var(--text-3);
+}
+
+/* ---- body: run rail | content ----------------------------------------- */
+.shell-body { display: flex; flex: 1; min-height: 0; }
+/* Outermost wells terminate every overscroll chain with `none`: chaining upward ends at
+ * a clipped viewport anyway, and anything short of `none` (including `contain`) leaves
+ * macOS elastic overscroll bouncing the pane the wheel gesture ends in. Nested wells
+ * keep `auto` so their remainder hands off to the pane instead of dead-stopping. */
+.shell-main { flex: 1; min-width: 0; min-height: 0; overflow: auto; overscroll-behavior: none; }
+
+.rail {
+  position: relative; flex: none; display: flex; flex-direction: column;
+  min-height: 0; background: var(--canvas);
+  border-right: 1px solid var(--hairline);
+}
+.rail.collapsed { width: 44px; }
+.rail-head {
+  display: flex; align-items: center; gap: var(--s2);
+  height: 28px; padding: 0 var(--s3) 0 10px; flex: none;
+  border-bottom: 1px solid var(--hairline);
+}
+.rail-head .lbl { white-space: nowrap; }
+.rail-head .right { margin-left: auto; display: flex; align-items: center; gap: 2px; }
+/* `relative` is load-bearing: each rail row carries a `.vh` screen-reader span
+ * (position: absolute), and an overflow container only clips absolutely-positioned
+ * descendants when it is on their containing-block chain. Unpositioned, this well let
+ * every below-the-fold row's span escape to `.rail` and stretch the document. */
+.rail-scroll { position: relative; overflow: auto; overscroll-behavior: none; flex: 1; min-height: 0; }
+
+.rrow {
+  display: grid; grid-template-columns: 16px minmax(0, 1fr) auto; align-items: center;
+  gap: var(--s2); padding: 7px var(--s3) 7px 10px; width: 100%; text-align: left;
+  border-left: 2px solid transparent; cursor: pointer;
+  transition: background var(--d-hover) var(--ease);
+}
+.rrow:hover { background: var(--surface); }
+.rrow[aria-current] { background: var(--surface-selected); border-left-color: var(--accent); }
+.rrow .nm { font-size: var(--fs-meta); font-weight: 500; }
+.rrow .sub { font: 400 var(--fs-micro)/1.3 var(--mono); color: var(--text-3); margin-top: 2px; }
+.rrow .when { font: 400 var(--fs-micro)/1 var(--mono); color: var(--text-3); align-self: start; padding-top: 2px; }
+
+/* The open run, lifted out of a page the rail has not pulled (#39). It is the one row not
+   in keyset position, so a rule separates it from the listing that follows. */
+.rail-scroll li.pinned { border-bottom: 1px solid var(--hairline); margin-bottom: 2px; }
+
+/* Collapsed rail -> icon strip (#41).
+   SCOPED ON `.rail` ON PURPOSE (J1): `strip` is a generic word and the cockpit's collapsed
+   inbox rail uses it too (`<div className="col strip inbox-strip">`, cockpit/InboxRail.tsx:205
+   and control/InboxRail.tsx:292). Declared bare, this rule matched that element as well and
+   was pushing `flex: 1` at a 44px column that asks for `flex: none`; only the higher
+   specificity of `.cockpit > .col.strip` kept it off the screen. `src/ui/css-scope.test.ts`
+   keeps the anchor in place. */
+.rail .strip {
+  display: flex; flex-direction: column; align-items: center; gap: var(--s3);
+  padding: var(--s3) 0; background: var(--canvas); flex: 1; min-height: 0;
+}
+.rail .strip .vlbl {
+  writing-mode: vertical-rl; text-orientation: mixed;
+  font: 600 var(--fs-micro)/1 var(--sans); letter-spacing: 0.12em; text-transform: uppercase;
+  color: var(--text-3); margin-top: var(--s2);
+}
+.rail .strip .dotn {
+  display: grid; place-items: center; min-width: 16px; height: 16px; padding: 0 3px;
+  border-radius: var(--r1); background: var(--st-blocked-tint); color: var(--st-blocked);
+  font: 600 var(--fs-micro)/1 var(--mono);
+}
+
+/* Drag handle (#43): 200–480px, persisted. */
+.rail-grip {
+  position: absolute; top: 0; bottom: 0; right: -3px; width: 7px; z-index: 5;
+  cursor: col-resize; display: grid; place-items: center; color: transparent;
+  transition: color var(--d-hover) var(--ease);
+}
+.rail-grip:hover, .rail-grip:focus-visible { color: var(--text-3); }
+.rail-error { padding: var(--s3); }
+/* §5.4.2 paging in the rail: the next page, and an honest "n of total" beside it. */
+.rail-more {
+  display: flex; align-items: center; gap: var(--s2);
+  padding: var(--s2) var(--s3) var(--s3) 10px;
+}
+.ic.flip { transform: rotate(180deg); }
+
+/* Below 900px the rail is an overlay drawer that closes on selection (#42). */
+.rail.drawer {
+  position: absolute; top: 44px; bottom: 0; left: 0; z-index: 30;
+  box-shadow: var(--shadow-raised);
+}
+.rail-scrim {
+  position: absolute; inset: 44px 0 0 0; z-index: 20;
+  background: color-mix(in oklab, var(--ink) 28%, transparent);
+}
+
+/* ---- the paste-token screen (§7.1.2) ---------------------------------- */
+.gate { display: grid; place-items: center; height: 100%; padding: var(--s6); }
+.gate-card { width: 520px; max-width: 100%; padding: var(--s6); }
+.gate-card h1 { font: 500 var(--fs-screen)/1.2 var(--sans); margin-bottom: var(--s2); }
+.gate-card p { font-size: var(--fs-meta); line-height: 1.6; color: var(--text-2); }
+.gate-card form { display: grid; grid-template-columns: 1fr auto; gap: 6px; margin-top: var(--s4); }
+.gate-card .snippet { margin-top: var(--s3); }
+.gate-card .err { margin-top: var(--s3); }
+
+/* ---- routes this unit does not own yet -------------------------------- */
+.pending-screen { display: grid; place-items: center; height: 100%; padding: var(--s6); }
+.pending-screen .empty p code { font-family: var(--mono); }

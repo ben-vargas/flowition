@@ -1,14 +1,51 @@
 // Stateful parsers that normalize each CLI's JSONL stream into flowition events:
 //   {k:'session', id, model?}       provider session/thread id
 //   {k:'text'|'reasoning', text}
-//   {k:'tool', name, input?} {k:'tool-result', name?, output?, isError?}
+//   {k:'tool', name, input?, id?} {k:'tool-result', name?, output?, isError?, toolUseId?}
 //   {k:'usage', input, output, cost?, cumulative?}
 //   {k:'result', text, structured?, isError?}            (one per completed turn)
 //   {k:'error', message}
 // push(obj) is called per parsed JSON line; finish() when the process closes.
+//
+// Tool ids (DESIGN §8 E11): `tool.id` and `tool-result.toolUseId` join a call to its
+// result WITHOUT relying on emission order — the only correct pairing when a provider
+// runs tools in parallel. Ids are OPAQUE and ADAPTER-SCOPED: claude/amp, codex and
+// opencode carry the protocol's own id; droid and pi have no id in their wire format,
+// so the parser synthesizes one and pairs the halves FIFO (the only information those
+// protocols give). Synthesized ids are prefixed with the caller's `idSeed` (the turn
+// ordinal — a parser instance lives for exactly one turn) so a multi-turn transcript
+// never reuses an id across attempts.
 
 const isRecord = (v) => v !== null && typeof v === 'object' && !Array.isArray(v)
 const tokens = (v) => typeof v === 'number' && Number.isFinite(v) ? v : 0
+// A protocol-supplied id: strings only — a number or object id would collide with the
+// synthesized namespace and is not worth guessing at.
+const wireId = (...vals) => vals.find((v) => typeof v === 'string' && v !== '')
+
+// Mixin state for protocols that must synthesize ids (droid, pi). Explicit wire ids
+// always win; the FIFO fallback is positional by necessity, not by preference.
+class ToolIds {
+  constructor(idSeed) { this.prefix = idSeed ? String(idSeed) + '-' : ''; this.n = 0; this.outstanding = [] }
+  // an opening tool call: record the id (given or synthesized) as outstanding
+  begin(id, name) {
+    const tid = id ?? `${this.prefix}tool${++this.n}`
+    this.outstanding.push({ id: tid, name })
+    return tid
+  }
+  // a closing tool result: an explicit id needs no matching; otherwise prefer the
+  // oldest outstanding call of the SAME name, falling back to the oldest of any name
+  end(id, name) {
+    if (id != null) {
+      const i = this.outstanding.findIndex((o) => o.id === id)
+      if (i !== -1) this.outstanding.splice(i, 1)
+      return id
+    }
+    let i = name != null ? this.outstanding.findIndex((o) => o.name === name) : -1
+    if (i === -1) i = this.outstanding.length ? 0 : -1
+    if (i === -1) return undefined
+    return this.outstanding.splice(i, 1)[0].id
+  }
+}
 
 // Every parser exposes:
 //   sawTerminal      — the protocol's own completion event was observed
@@ -33,7 +70,7 @@ class ClaudeStreamParser {
         if (!isRecord(b)) continue
         if (b.type === 'text' && typeof b.text === 'string') { this.lastText = b.text; out.push({ k: 'text', text: b.text }) }
         else if (b.type === 'thinking' && typeof b.thinking === 'string') out.push({ k: 'reasoning', text: b.thinking })
-        else if (b.type === 'tool_use' && typeof b.name === 'string') out.push({ k: 'tool', name: b.name, input: JSON.stringify(b.input ?? {}) })
+        else if (b.type === 'tool_use' && typeof b.name === 'string') out.push({ k: 'tool', name: b.name, input: JSON.stringify(b.input ?? {}), ...(wireId(b.id) !== undefined ? { id: b.id } : {}) })
       }
       if (typeof m.session_id === 'string') out.unshift({ k: 'session', id: m.session_id })
       if (this.turnEnd && m.message.stop_reason === 'end_turn' && !m.parent_tool_use_id) {
@@ -49,7 +86,7 @@ class ClaudeStreamParser {
           const text = Array.isArray(b.content)
             ? b.content.filter(isRecord).map((c) => typeof c.text === 'string' ? c.text : '').join('')
             : typeof b.content === 'string' ? b.content : ''
-          out.push({ k: 'tool-result', output: text, isError: !!b.is_error })
+          out.push({ k: 'tool-result', output: text, isError: !!b.is_error, ...(wireId(b.tool_use_id) !== undefined ? { toolUseId: b.tool_use_id } : {}) })
         }
       }
       return out
@@ -88,9 +125,15 @@ class CodexJsonlParser {
       if (it.type === 'agent_message' && typeof it.text === 'string') { this.lastMsg = it.text; out.push({ k: 'text', text: this.lastMsg }) }
       else if (it.type === 'reasoning' && typeof it.text === 'string') out.push({ k: 'reasoning', text: it.text })
       else if (it.type === 'command_execution' && typeof it.command === 'string') {
-        out.push({ k: 'tool', name: 'shell', input: it.command })
-        out.push({ k: 'tool-result', name: 'shell', output: it.aggregated_output ?? '', isError: it.status === 'failed' })
-      } else if (typeof it.type === 'string') out.push({ k: 'tool', name: it.type, input: JSON.stringify(it).slice(0, 2000) })
+        // codex reports a completed tool as ONE item — both halves are synthesized
+        // from its id, so the pair joins even though it never streamed separately
+        const id = wireId(it.id)
+        out.push({ k: 'tool', name: 'shell', input: it.command, ...(id !== undefined ? { id } : {}) })
+        out.push({ k: 'tool-result', name: 'shell', output: it.aggregated_output ?? '', isError: it.status === 'failed', ...(id !== undefined ? { toolUseId: id } : {}) })
+      } else if (typeof it.type === 'string') {
+        const id = wireId(it.id)
+        out.push({ k: 'tool', name: it.type, input: JSON.stringify(it).slice(0, 2000), ...(id !== undefined ? { id } : {}) })
+      }
       return out
     }
     if (m.type === 'turn.completed') {
@@ -147,8 +190,9 @@ class OpencodeJsonlParser {
     } else if (type === 'tool' || type === 'tool_use') {
       const st = isRecord(part.state) ? part.state : isRecord(m.state) ? m.state : null
       if (st?.status === 'completed' || st?.status === 'error') {
-        out.push({ k: 'tool', name: typeof (part.tool ?? m.tool) === 'string' ? part.tool ?? m.tool : 'tool', input: JSON.stringify(st.input ?? {}).slice(0, 2000) })
-        out.push({ k: 'tool-result', output: typeof st.output === 'string' ? st.output : JSON.stringify(st.output ?? ''), isError: st.status === 'error' })
+        const id = wireId(part.id, m.id)
+        out.push({ k: 'tool', name: typeof (part.tool ?? m.tool) === 'string' ? part.tool ?? m.tool : 'tool', input: JSON.stringify(st.input ?? {}).slice(0, 2000), ...(id !== undefined ? { id } : {}) })
+        out.push({ k: 'tool-result', output: typeof st.output === 'string' ? st.output : JSON.stringify(st.output ?? ''), isError: st.status === 'error', ...(id !== undefined ? { toolUseId: id } : {}) })
       }
     } else if (type === 'step_finish' || type === 'step-finish') {
       const tok = isRecord(part.tokens) ? part.tokens : isRecord(m.tokens) ? m.tokens : {}
@@ -174,7 +218,7 @@ class OpencodeJsonlParser {
 
 class PiJsonlParser {
   // pi --mode json
-  constructor() { this.final = null; this.cur = ''; this.err = null; this.aborted = false; this.sawTerminal = false; this.terminalRequired = true }
+  constructor(opts = {}) { this.final = null; this.cur = ''; this.err = null; this.aborted = false; this.sawTerminal = false; this.terminalRequired = true; this.ids = new ToolIds(opts.idSeed) }
   push(m) {
     const out = []
     if (!isRecord(m)) return out
@@ -210,8 +254,14 @@ class PiJsonlParser {
       if (msg.stopReason === 'aborted') this.aborted = true
       return out
     }
-    if (m.type === 'tool_execution_start') return [{ k: 'tool', name: m.toolName ?? 'tool', input: JSON.stringify(m.args ?? {}).slice(0, 2000) }]
-    if (m.type === 'tool_execution_end') return [{ k: 'tool-result', name: m.toolName, output: typeof m.result === 'string' ? m.result : JSON.stringify(m.result ?? '').slice(0, 4000), isError: !!m.isError }]
+    if (m.type === 'tool_execution_start') {
+      const name = m.toolName ?? 'tool'
+      return [{ k: 'tool', name, input: JSON.stringify(m.args ?? {}).slice(0, 2000), id: this.ids.begin(wireId(m.toolCallId, m.toolUseId, m.id), name) }]
+    }
+    if (m.type === 'tool_execution_end') {
+      const id = this.ids.end(wireId(m.toolCallId, m.toolUseId, m.id), m.toolName)
+      return [{ k: 'tool-result', name: m.toolName, output: typeof m.result === 'string' ? m.result : JSON.stringify(m.result ?? '').slice(0, 4000), isError: !!m.isError, ...(id !== undefined ? { toolUseId: id } : {}) }]
+    }
     return out
   }
   finish() {
@@ -223,7 +273,7 @@ class PiJsonlParser {
 
 class DroidJsonlParser {
   // droid exec -o stream-json: system.init / message / tool events / completion
-  constructor() { this.lastText = null; this.err = null; this.final = null; this.sawTerminal = false; this.terminalRequired = true }
+  constructor(opts = {}) { this.lastText = null; this.err = null; this.final = null; this.sawTerminal = false; this.terminalRequired = true; this.ids = new ToolIds(opts.idSeed) }
   push(m) {
     const out = []
     if (!isRecord(m)) return out
@@ -234,10 +284,13 @@ class DroidJsonlParser {
     }
     if (m.type === 'reasoning' && typeof m.text === 'string' && m.text) return [{ k: 'reasoning', text: m.text }]
     if (m.type === 'tool_use' || m.type === 'tool_call') {
-      return [{ k: 'tool', name: m.name ?? m.toolName ?? 'tool', input: JSON.stringify(m.input ?? m.parameters ?? {}).slice(0, 2000) }]
+      const name = m.name ?? m.toolName ?? 'tool'
+      return [{ k: 'tool', name, input: JSON.stringify(m.input ?? m.parameters ?? {}).slice(0, 2000), id: this.ids.begin(wireId(m.id, m.tool_use_id, m.toolCallId), name) }]
     }
     if (m.type === 'tool_result') {
-      return [{ k: 'tool-result', output: typeof m.output === 'string' ? m.output : JSON.stringify(m.output ?? m.result ?? '').slice(0, 4000), isError: !!m.is_error }]
+      // droid's tool_result carries no name, so a nameless FIFO match is all there is
+      const id = this.ids.end(wireId(m.tool_use_id, m.id, m.toolCallId), m.name ?? m.toolName)
+      return [{ k: 'tool-result', output: typeof m.output === 'string' ? m.output : JSON.stringify(m.output ?? m.result ?? '').slice(0, 4000), isError: !!m.is_error, ...(id !== undefined ? { toolUseId: id } : {}) }]
     }
     if (m.type === 'completion') {
       this.sawTerminal = true
@@ -260,14 +313,16 @@ class DroidJsonlParser {
   }
 }
 
-export function makeParser(protocol) {
+// opts.idSeed — namespace for ids this parser has to synthesize (droid/pi). The
+// caller passes the turn ordinal; protocols with their own ids ignore it.
+export function makeParser(protocol, opts = {}) {
   switch (protocol) {
-    case 'claude-stream': return new ClaudeStreamParser()
-    case 'claude-stream-eof': return new ClaudeStreamParser({ turnEnd: true })
-    case 'codex-jsonl': return new CodexJsonlParser()
-    case 'droid-jsonl': return new DroidJsonlParser()
-    case 'opencode-jsonl': return new OpencodeJsonlParser()
-    case 'pi-jsonl': return new PiJsonlParser()
+    case 'claude-stream': return new ClaudeStreamParser(opts)
+    case 'claude-stream-eof': return new ClaudeStreamParser({ ...opts, turnEnd: true })
+    case 'codex-jsonl': return new CodexJsonlParser(opts)
+    case 'droid-jsonl': return new DroidJsonlParser(opts)
+    case 'opencode-jsonl': return new OpencodeJsonlParser(opts)
+    case 'pi-jsonl': return new PiJsonlParser(opts)
     default: throw new Error(`unknown protocol: ${protocol}`)
   }
 }

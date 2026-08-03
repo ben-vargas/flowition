@@ -4,17 +4,17 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import crypto from 'node:crypto'
-import { spawnSync } from 'node:child_process'
 import { pathToFileURL, fileURLToPath } from 'node:url'
+import { acquireRunLock as acquireLock, RunLockError } from './run-lock.js'
 import { Journal } from './journal.js'
 import { EventSink } from './events.js'
 import { Semaphore } from './semaphore.js'
 import { Transcript } from './transcript.js'
-import { AgentJob, AgentError } from './agent-proc.js'
+import { AgentJob, AgentError, DEFAULT_STALL_MS } from './agent-proc.js'
 import { serveControl } from './control.js'
 import { getAdapter } from './adapters/index.js'
 import * as K from './keys.js'
-import { sha256, canonical, ensureDir, runDir, shortId } from './util.js'
+import { sha256, canonical, ensureDir, runDir, shortId, truncate } from './util.js'
 
 export class WorkflowError extends Error {}
 // Per-item degradable failure — parallel()/pipeline() turn these into null.
@@ -22,86 +22,35 @@ export class AgentFailed extends Error {
   constructor(message, code) { super(message); this.code = code }
 }
 
-const pidAlive = (pid) => {
-  try { process.kill(pid, 0); return true } catch (err) { return err.code === 'EPERM' }
-}
+// Stamped on the run-start event (DESIGN §8 E3) so readers can decide which event
+// fields a run's engine was capable of writing (§6.2 Caps) instead of guessing from
+// field presence. Read once, best-effort — a missing package.json is not fatal.
+const ENGINE_VERSION = (() => {
+  try { return JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version ?? null } catch { return null }
+})()
 
-// pid liveness alone cannot distinguish a lock's writer from an unrelated
-// process that inherited its pid after a crash (OS pid reuse): a process that
-// STARTED after the lock was written cannot be the writer. 2s skew because the
-// lock write is not atomic with process birth. Unverifiable start times (ps
-// missing/failed, unparseable date) stay conservative — holder treated live.
-const pidStartedAfter = (pid, lockStartedAt) => {
+// Per-agent progress ceiling (E6). The agreed volume ceiling for events.jsonl:
+// worst case ~24 lines/min/agent, and no other high-frequency event may be added.
+const PROGRESS_MS = 2500
+
+// The exclusive per-run lock lives in src/run-lock.js: it is the SAME protocol the
+// launchers and retention use (DESIGN §7.3), and one shared implementation is the only
+// way "exactly one side owns the run" can be true across processes. Refusals arrive as
+// RunLockError and are re-thrown as WorkflowError with the same messages as before.
+function acquireRunLock(dir, { resuming = false, runId = null } = {}) {
   try {
-    const ps = spawnSync('ps', ['-o', 'lstart=', '-p', String(pid)], { encoding: 'utf8' })
-    if (ps.status !== 0) return false
-    const born = Date.parse(ps.stdout.trim())
-    return Number.isFinite(born) && born > lockStartedAt + 2000
-  } catch { return false }
-}
-
-// Exclusive per-run lock: two engines on one run dir would interleave journal
-// writes and duplicate provider side effects. Stale locks (dead pid) are reclaimed
-// via rename, which is atomic — exactly one contender wins the claim; losers loop
-// and find the winner's fresh lock. (unlink-then-create would let two processes
-// that both observed the dead holder each remove the other's new lock.)
-function acquireRunLock(dir) {
-  const lockPath = path.join(dir, 'run.lock')
-  for (let attempt = 0; attempt < 10; attempt++) {
-    try {
-      fs.writeFileSync(lockPath, JSON.stringify({ pid: process.pid, startedAt: Date.now() }), { flag: 'wx' })
-      return () => {
-        try {
-          const cur = JSON.parse(fs.readFileSync(lockPath, 'utf8'))
-          if (cur.pid === process.pid) fs.unlinkSync(lockPath)
-        } catch { /* already gone */ }
-      }
-    } catch (err) {
-      if (err.code !== 'EEXIST') throw err
-      let holder = null
-      try { holder = JSON.parse(fs.readFileSync(lockPath, 'utf8')) } catch { /* torn or vanished */ }
-      if (holder?.pid != null && pidAlive(holder.pid)) {
-        const reused = typeof holder.startedAt === 'number' && pidStartedAfter(holder.pid, holder.startedAt)
-        if (!reused) throw new WorkflowError(`run is already being executed by pid ${holder.pid} — refusing concurrent execution of the same run`)
-        // pid reused by a newer process — the writer is dead; fall through to
-        // the verified reclaim path below
-      }
-      if (holder?.pid == null) {
-        // Unreadable body: could be a lock caught mid-creation, not a dead one.
-        // Only a lock that has STAYED unreadable for seconds is genuinely stale.
-        let ageMs = 0
-        try { ageMs = Date.now() - fs.statSync(lockPath).mtimeMs } catch { continue /* vanished — retry */ }
-        if (ageMs < 2000) throw new WorkflowError('run lock is being acquired by another process — refusing concurrent execution of the same run')
-      }
-      const claim = `${lockPath}.reclaim.${process.pid}.${attempt}`
-      try { fs.renameSync(lockPath, claim) } catch { continue /* another reclaimer won */ }
-      // Verify the claim took the SAME dead lock we observed. A slow contender can
-      // otherwise rename away a fresh live lock created after the winner's reclaim —
-      // and an unreadable claim may be a fresh lock caught between open and write,
-      // so only the exact observed-dead body (or aged unreadable garbage matching
-      // an aged unreadable observation) may be discarded. Anything else is restored
-      // atomically (link fails on EEXIST rather than clobbering) and we refuse.
-      let claimed = null
-      try { claimed = JSON.parse(fs.readFileSync(claim, 'utf8')) } catch { /* unreadable */ }
-      let claimAge = 0
-      try { claimAge = Date.now() - fs.statSync(claim).mtimeMs } catch { /* vanished */ }
-      const observedDead = claimed != null && holder != null && claimed.pid === holder.pid && claimed.startedAt === holder.startedAt
-      // unreadable-then AND unreadable-now AND the claimed inode itself is old —
-      // a fresh lock caught mid-creation would be young
-      const agedGarbage = claimed == null && holder == null && claimAge >= 2000
-      if (!observedDead && !agedGarbage) {
-        // We may have stolen a live lock. Restore it atomically (link never
-        // clobbers); if the slot was re-taken, LEAVE the claim file rather than
-        // destroy a lock we could not verify.
-        let restored = false
-        try { fs.linkSync(claim, lockPath); restored = true } catch { /* slot re-taken */ }
-        if (restored) { try { fs.unlinkSync(claim) } catch { /* gone */ } }
-        throw new WorkflowError('run lock contention — another engine acquired the run')
-      }
-      try { fs.unlinkSync(claim) } catch { /* gone */ }
+    return acquireLock(dir)
+  } catch (err) {
+    if (err instanceof RunLockError) throw new WorkflowError(err.message)
+    // A resume whose run directory was renamed away (retention's move-to-trash) between
+    // the existence check and the lock write: the lock is created with `wx` and never
+    // creates its parent, so this is the "resume loses" branch — reported as such
+    // instead of as a raw ENOENT from deep inside the lock protocol.
+    if (resuming && err?.code === 'ENOENT') {
+      throw new WorkflowError(`run ${runId ?? path.basename(dir)} disappeared while the resume was starting — it was deleted`)
     }
+    throw err
   }
-  throw new WorkflowError('could not acquire run lock')
 }
 
 // Minimal ESM import scanner — a character lexer, not a regex, so comment and
@@ -620,14 +569,31 @@ export async function runWorkflow(opts) {
   let dir
   try { dir = runDir(runId) } catch (err) { throw new WorkflowError(err.message) }
   const scratch = path.join(dir, 'scratch')
-  ensureDir(scratch, 0o700)
+  // A RESUME never creates anything under runs/<id> — not the run dir, not scratch —
+  // before it owns the run (DESIGN §7.3.3). A recursive ensureDir here would resurrect
+  // `runs/<id>` in the instant after retention has renamed it into the trash, so the
+  // delete's rollback would find the name taken and fail: the real journal stranded in
+  // trash, a stub at the original path. Requiring the directory to already exist makes
+  // the delete's rename the only linearization point, exactly as run-lock.js documents.
+  if (opts.resumeId) {
+    let st = null
+    try { st = fs.lstatSync(dir) } catch { /* gone or never existed */ }
+    if (!st?.isDirectory()) throw new WorkflowError(`run ${runId} does not exist — nothing to resume`)
+  } else {
+    ensureDir(dir, 0o700)
+  }
   // Run dirs made by older flowition versions (or a launcher racing an inherited umask) may
   // sit at 0755 — tighten best-effort at the ownership point, before the lock.
   try { fs.chmodSync(dir, 0o700) } catch { /* non-posix fs */ }
-  try { fs.chmodSync(scratch, 0o700) } catch { /* non-posix fs */ }
   // The lock comes before ANY journal read: even the strict loader's torn-tail
-  // repair must never touch a journal another engine is actively writing.
-  const releaseLock = acquireRunLock(dir)
+  // repair must never touch a journal another engine is actively writing. It is also
+  // where a resume takes ownership — a lock write into a directory that moved fails
+  // with ENOENT rather than recreating it, so the delete still wins that ordering.
+  const runLock = acquireRunLock(dir, { resuming: Boolean(opts.resumeId), runId })
+  // Ownership established: now the run's working directories may be (re)created.
+  ensureDir(scratch, 0o700)
+  try { fs.chmodSync(scratch, 0o700) } catch { /* non-posix fs */ }
+  const releaseLock = () => runLock.release()
   let control = null
 
   try {
@@ -649,6 +615,14 @@ export async function runWorkflow(opts) {
     const labels = new Map() // label -> index (live only)
     const pendingQuestions = new Map() // qid -> {question, resolve}
     const explicitKeys = new Set()
+    // index -> the identity fields captured when the agent was admitted to the
+    // queue (E1/E2), so emit sites without an ALS context — the control socket's
+    // `steered` event, the progress timer — can still stamp phase/path.
+    const agentInfo = new Map()
+    // Run-scoped monotonic phase counter (E1). JS increments are atomic, so
+    // concurrent branches can share it; identity is the index, titles repeat legally.
+    let phaseCounter = 0
+    const phaseByTitle = new Map() // title -> most recent phaseIndex (for `AgentOptions.phase`)
     const usedQids = new Set()
     const usageTotal = { input: 0, output: 0, cost: 0 }
     const inFlight = new Set()
@@ -662,7 +636,7 @@ export async function runWorkflow(opts) {
     function abortRun(reason) {
       if (aborted) return
       aborted = true
-      events.emit({ type: 'log', message: `aborting run: ${reason}` })
+      events.emit({ type: 'log', source: 'engine', level: 'warn', message: `aborting run: ${reason}` })
       for (const job of live.values()) job.cancel()
       for (const q of pendingQuestions.values()) q.reject?.(new WorkflowError('run aborted'))
     }
@@ -671,6 +645,26 @@ export async function runWorkflow(opts) {
       if (live.has(Number(sel))) return live.get(Number(sel))
       if (labels.has(String(sel))) return live.get(labels.get(String(sel)))
       return null
+    }
+
+    // E8: the `steered` annotation for a send, stamped with the identity captured at
+    // admission — neither the control socket nor sendTo() runs under the TARGET
+    // agent's ALS context, so agentInfo is the only source of its phase.
+    const emitSteered = (job, delivery, mailId) => {
+      const info = agentInfo.get(job.index)
+      events.emit({
+        type: 'agent', index: job.index, label: job.label, adapter: job.adapter.name,
+        state: 'steered', delivery, mailId: mailId ?? null,
+        phase: info?.phase ?? null, phaseIndex: info?.phaseIndex ?? null,
+      })
+    }
+
+    // `post` carries an agent index over the wire, where the CLI's env default arrives
+    // as a STRING ("0") — coerce to a real integer index or null, so MailView.agent is
+    // never a string that fails to join to an agent (E8).
+    const toIndex = (v) => {
+      const n = typeof v === 'number' ? v : typeof v === 'string' && v.trim() !== '' ? Number(v) : NaN
+      return Number.isInteger(n) ? n : null
     }
 
     // The control socket binds BEFORE any journal read or destructive prep: the
@@ -684,7 +678,7 @@ export async function runWorkflow(opts) {
             ok: true,
             runId,
             state: 'running',
-            agents: [...live.values()].map((j) => ({ index: j.index, label: j.label, adapter: j.adapter.name, model: j.spec.model ?? null, lastTool: j.lastTool, queuedMail: j.mailQueue.length, sessionId: j.sessionId })),
+            agents: [...live.values()].map((j) => ({ index: j.index, label: j.label, adapter: j.adapter.name, model: j.spec.model ?? null, lastTool: j.lastTool, lastOutputAt: j.lastOutputAt ?? null, queuedMail: j.mailQueue.length, sessionId: j.sessionId })),
             questions: [...pendingQuestions.entries()].map(([qid, q]) => ({ qid, question: q.question })),
             spentOutputTokens: usageTotal.output,
           }
@@ -692,9 +686,10 @@ export async function runWorkflow(opts) {
         case 'send': {
           const job = findJob(req.agent)
           if (!job) return { error: `no live agent "${req.agent}" (use \`flowition status\` for indices/labels)` }
-          const delivery = job.send(String(req.message), 'operator')
-          events.emit({ type: 'agent', index: job.index, label: job.label, adapter: job.adapter.name, state: 'steered', delivery })
-          events.emit({ type: 'mail', agent: job.index, dir: 'in', message: String(req.message) })
+          const out = {}
+          const delivery = job.send(String(req.message), 'operator', null, null, out)
+          emitSteered(job, delivery, out.mailId)
+          events.emit({ type: 'mail', agent: job.index, dir: 'in', message: String(req.message), delivery, mailId: out.mailId ?? null })
           return { ok: true, delivery }
         }
         case 'answer': {
@@ -702,7 +697,8 @@ export async function runWorkflow(opts) {
           if (!q) return { error: `no pending question "${req.qid}"` }
           pendingQuestions.delete(req.qid)
           journal.append({ type: 'answer', qid: req.qid, value: req.value })
-          events.emit({ type: 'answer', qid: req.qid })
+          // E7: the value is already on disk in the journal — same sensitivity class.
+          events.emit({ type: 'answer', qid: req.qid, value: req.value })
           q.resolve(req.value)
           return { ok: true }
         }
@@ -717,7 +713,15 @@ export async function runWorkflow(opts) {
           return { ok: true, cancelled: 'run' }
         }
         case 'post': {
-          events.emit({ type: 'mail', agent: req.agent ?? null, dir: 'out', message: String(req.message) })
+          // G14: the `mail-out` kind has been documented since the transcript was
+          // written and never emitted — an agent's own progress reports were invisible
+          // in its transcript. Written only while the sender is live; a post from a
+          // settled (or unknown) agent still lands in the event stream.
+          const agent = toIndex(req.agent)
+          const message = String(req.message)
+          const job = agent != null ? findJob(agent) : null
+          if (job) job.transcript.write('mail-out', { text: message })
+          events.emit({ type: 'mail', agent, dir: 'out', message })
           return { ok: true }
         }
         default:
@@ -827,11 +831,33 @@ export async function runWorkflow(opts) {
     if (!prior) {
       journal.append({ type: 'meta', runId, workflowFile: file, fileHash, graphHash, graphDynamic: graph.dynamic, ...(opts.args !== undefined ? { args: opts.args } : {}), seed, createdAt, keyVersion: K.KEY_VERSION, defaults, budgetTotal })
     }
-    if (prior?.repaired) events.emit({ type: 'log', message: 'journal had a torn final record (crash mid-write) — repaired' })
+    if (prior?.repaired) events.emit({ type: 'log', source: 'engine', level: 'warn', message: 'journal had a torn final record (crash mid-write) — repaired' })
 
     const hb = setInterval(() => { try { fs.writeFileSync(path.join(dir, '.heartbeat'), String(Date.now())) } catch { /* dir gone */ } }, 5000)
     hb.unref?.()
     try { fs.writeFileSync(path.join(dir, '.heartbeat'), String(Date.now())) } catch { /* dir gone */ }
+
+    // E6: throttled per-agent progress — one sweep per window over the LIVE jobs,
+    // emitting only for agents whose REAL provider output moved since their last
+    // emitted event. `outputRev` (agent-proc) counts only real output: turn start
+    // initializes lastOutputAt without bumping it, so an agent that has emitted
+    // nothing is skipped entirely and a SILENT AGENT PRODUCES NO PROGRESS EVENTS —
+    // the empty `progressSeen` map must never treat the turn-start baseline as a
+    // change. The timer never writes lastOutputAt: it reports the provider's own
+    // last-output stamp, so an agent that has gone quiet still reads as quiet and
+    // the client's stallMs warning stays honest.
+    const progressSeen = new Map() // index -> last emitted output revision
+    const progressTimer = setInterval(() => {
+      for (const job of live.values()) {
+        if (!job.outputRev) continue // admitted (or running) but the provider has said nothing
+        if (progressSeen.get(job.index) === job.outputRev) continue
+        progressSeen.set(job.index, job.outputRev)
+        const snap = { tool: job.lastTool ?? null, outputTokens: job.usage.output, lastOutputAt: job.lastOutputAt }
+        // telemetry must never take the run down (a full disk, a vanished dir)
+        try { events.emit({ type: 'agent', state: 'progress', index: job.index, key: job.key, ...snap }) } catch { /* best effort */ }
+      }
+    }, PROGRESS_MS)
+    progressTimer.unref?.()
 
     // Module loading is inside the run lifecycle: a syntax error or missing export
     // must still produce a terminal journal record and result.json.
@@ -845,6 +871,7 @@ export async function runWorkflow(opts) {
       const msg = String(err?.message ?? err) + cjsScopeHint(file, err)
       journal.append({ type: 'end', status: 'failed', error: msg })
       clearInterval(hb)
+      clearInterval(progressTimer)
       finalize({ runId, status: 'failed', error: msg })
       throw err instanceof WorkflowError ? err : new WorkflowError(`workflow module failed to load: ${msg}`)
     }
@@ -866,12 +893,37 @@ export async function runWorkflow(opts) {
       remaining: () => (budgetTotal == null ? Infinity : Math.max(0, budgetTotal - usageTotal.output)),
     }
 
+    // E1. `AgentOptions.phase` overrides the ambient phase for one agent. A title
+    // that no phase() call has declared yet gets its own index and a `phase` event
+    // (marked `implicit`) so the group the agent claims actually exists for readers;
+    // a title already declared reuses that phase's index. Ambient phases come off
+    // the ALS context, so concurrent branches never race each other.
+    function resolvePhase(ctx, explicit) {
+      if (explicit != null) {
+        const title = String(explicit)
+        if (!phaseByTitle.has(title)) {
+          const phaseIndex = phaseCounter++
+          phaseByTitle.set(title, phaseIndex)
+          events.emit({ type: 'phase', phaseIndex, title, implicit: true })
+        }
+        return { phase: title, phaseIndex: phaseByTitle.get(title) }
+      }
+      const p = ctx?.phase ?? null
+      return { phase: p?.title ?? null, phaseIndex: p?.phaseIndex ?? null }
+    }
+
     async function agentImpl(prompt, o = {}, onJob = null) {
       if (aborted || finishing) throw new WorkflowError('run aborted')
       if (typeof prompt !== 'string' || !prompt.trim()) throw new WorkflowError('agent() requires a non-empty prompt string')
       if (++agentCount > 1000) throw new WorkflowError('lifetime agent cap (1000) exceeded — runaway loop?')
       const ctx = K.currentCtx()
       if (!ctx) throw new WorkflowError('agent() called outside workflow context')
+      // E1: the phase is captured HERE, at agentImpl entry, from the calling
+      // context — NOT when the `running` event fires, which happens after
+      // semaphore admission and can therefore observe a later phase() call.
+      // E2: likewise the structural path, which the fan-out sites hand down.
+      const { phase, phaseIndex } = resolvePhase(ctx, o.phase)
+      const path = ctx.path ?? []
       const adapterName = o.adapter ?? defaults.adapter
       const adapter = getAdapter(adapterName)
       const spec = {
@@ -903,20 +955,48 @@ export async function runWorkflow(opts) {
         // from Journal.load's completedUsage aggregate — charging it at replay
         // would double-count, and charging it ONLY at replay under-counted
         // whenever resumed control flow skipped a completed key entirely.
-        events.emit({ type: 'agent', index: cached.index, key, label, adapter: adapterName, model: spec.model ?? null, state: 'cached' })
+        agentInfo.set(cached.index, { key, label, adapter: adapterName, model: spec.model ?? null, phase, phaseIndex, path })
+        events.emit({ type: 'agent', index: cached.index, key, label, adapter: adapterName, model: spec.model ?? null, state: 'cached', phase, phaseIndex, path })
         return cached.result
       }
       const index = prior?.indexByKey.get(key) ?? nextIndex++
+      agentInfo.set(index, { key, label, adapter: adapterName, model: spec.model ?? null, phase, phaseIndex, path })
+      const stallMs = spec.stallMs ?? DEFAULT_STALL_MS
+      // E4: admission is observable from here on. The gauge is sampled AT the emit
+      // site — release() hands a slot off directly without decrementing, so a sample
+      // taken anywhere else reads a different instant.
+      const queuedAt = Date.now()
+      events.emit({ type: 'agent', index, key, label, adapter: adapterName, model: spec.model ?? null, state: 'queued', phase, phaseIndex, path, sem: { active: sem.active, queued: sem.queued, limit: sem.limit } })
 
       return sem.with(async () => {
-        if (aborted || finishing) throw new WorkflowError('run aborted')
-        if (budget.total != null && usageTotal.output >= budget.total) throw new WorkflowError(`budget exceeded (${usageTotal.output}/${budget.total} output tokens)`)
+        const waitMs = Date.now() - queuedAt
+        // A queued agent whose run aborts (or whose budget runs out) before
+        // admission must not stay `queued` forever: emit its terminal event
+        // before propagating — the job that would have carried one never exists.
+        const preAdmission = (state, err) => {
+          events.emit({ type: 'agent', index, key, label, adapter: adapterName, model: spec.model ?? null, state, phase, phaseIndex, error: String(err.message), code: err.code ?? null, retryable: !!err.retryable, durationMs: null, usage: null, lastOutputAt: null, waitMs })
+          return err
+        }
+        if (aborted || finishing) throw preAdmission('cancelled', new WorkflowError('run aborted'))
+        if (budget.total != null && usageTotal.output >= budget.total) throw preAdmission('failed', new WorkflowError(`budget exceeded (${usageTotal.output}/${budget.total} output tokens)`))
         journal.append({ type: 'started', key, index, label, adapter: adapterName })
-        events.emit({ type: 'agent', index, key, label, adapter: adapterName, model: spec.model ?? null, effort: spec.effort ?? null, state: 'running', promptPreview: prompt.slice(0, 160) })
+        events.emit({ type: 'agent', index, key, label, adapter: adapterName, model: spec.model ?? null, effort: spec.effort ?? null, state: 'running', promptPreview: prompt.slice(0, 160), phase, phaseIndex, path, waitMs, stallMs, sem: { active: sem.active, queued: sem.queued, limit: sem.limit } })
         const resumedIndex = prior?.indexByKey.has(key) ?? false
         const transcript = new Transcript(dir, index, { fresh: !resumedIndex })
-        if (resumedIndex) transcript.write('status', { text: '— resumed run: new attempt below —' })
-        transcript.write('meta', { index, label, adapter: adapterName, model: spec.model ?? null, prompt: prompt.slice(0, 4000) })
+        // E9: this attempt's 1-based number — one more than the journal's result
+        // records for the key (§8 E9; `results` is last-wins and hides the history,
+        // hence Journal.load's attemptCounts). The machine-readable boundary goes
+        // FIRST so the sentinel belongs to the attempt it opens; the sentinel stays
+        // for old CLIs tailing the file.
+        const attempt = (prior?.attemptCounts.get(key) ?? 0) + 1
+        if (resumedIndex) {
+          transcript.write('attempt', { n: attempt })
+          transcript.write('status', { text: '— resumed run: new attempt below —' })
+        }
+        // E10: an honest cap beats a silent one — 32 KiB (the transcript's own text
+        // cap) with the explicit "… [+N chars]" marker, instead of a bare slice(0,4000)
+        // that made a truncated prompt indistinguishable from a short one.
+        transcript.write('meta', { index, label, adapter: adapterName, model: spec.model ?? null, attempt, prompt: truncate(prompt, 32768) })
         const priorSessionId = prior?.sessions.get(key) ?? null
         // ALL pending mail is restored — the restored copy is authoritative
         // for delivery. Workflow-origin sends are usually re-issued by the
@@ -953,7 +1033,7 @@ export async function runWorkflow(opts) {
             result = await job.execute()
           } catch (err) {
             if (err?.retryable && !aborted && !job.cancelled) {
-              events.emit({ type: 'log', message: `agent [${index}] retrying after: ${err.message}` })
+              events.emit({ type: 'log', source: 'engine', level: 'warn', index, message: `agent [${index}] retrying after: ${err.message}` })
               result = await job.execute()
             } else throw err
           }
@@ -978,9 +1058,9 @@ export async function runWorkflow(opts) {
             // session the resumed attempt must start).
             for (const m of job.sessionlessDelivered) journal.append({ type: 'mail-done', key, id: m.id })
             transcript.write('status', { text: 'completed' })
-            events.emit({ type: 'agent', index, key, label, adapter: adapterName, state: 'done', durationMs: Date.now() - t0, outputTokens: job.usage.output, resultPreview: String(typeof final === 'string' ? final : JSON.stringify(final)).slice(0, 200) })
+            events.emit({ type: 'agent', index, key, label, adapter: adapterName, model: spec.model ?? null, state: 'done', phase, phaseIndex, durationMs: Date.now() - t0, outputTokens: job.usage.output, usage: job.usage, lastOutputAt: job.lastOutputAt ?? null, resultPreview: String(typeof final === 'string' ? final : JSON.stringify(final)).slice(0, 200) })
           } catch (err) {
-            try { events.emit({ type: 'log', message: `agent [${index}] post-completion telemetry error (completed result stands): ${err.message}` }) } catch { /* best effort */ }
+            try { events.emit({ type: 'log', source: 'engine', level: 'error', index, message: `agent [${index}] post-completion telemetry error (completed result stands): ${err.message}` }) } catch { /* best effort */ }
           }
           return final
         } catch (err) {
@@ -989,9 +1069,12 @@ export async function runWorkflow(opts) {
           usageTotal.output += job.usage.output
           usageTotal.cost += job.usage.cost
           const status = err instanceof AgentError && err.code === 'cancelled' ? 'cancelled' : 'failed'
-          journal.append({ type: 'result', key, index, status, error: String(err.message), usage: job.usage, durationMs: Date.now() - t0 })
+          journal.append({ type: 'result', key, index, status, error: String(err.message), usage: job.usage, durationMs: Date.now() - t0, adapter: adapterName, model: spec.model ?? null })
           transcript.write('status', { text: `${status}: ${err.message}` })
-          events.emit({ type: 'agent', index, key, label, adapter: adapterName, state: status, error: String(err.message) })
+          // E5: a dead agent must stay diagnosable — the code the engine already
+          // branched on, whether a retry was possible, what it spent, and when the
+          // provider last said anything.
+          events.emit({ type: 'agent', index, key, label, adapter: adapterName, model: spec.model ?? null, state: status, phase, phaseIndex, error: String(err.message), code: err?.code ?? null, retryable: !!err?.retryable, durationMs: Date.now() - t0, usage: job.usage, lastOutputAt: job.lastOutputAt ?? null })
           if (err instanceof WorkflowError) throw err
           throw new AgentFailed(`agent [${index}]${label ? ` ${label}` : ''} ${status}: ${err.message}`, err.code)
         } finally {
@@ -1005,6 +1088,17 @@ export async function runWorkflow(opts) {
     const degrade = (err) => {
       if (err instanceof AgentFailed) return null
       throw err
+    }
+
+    // Fan-out children (E1/E2): makeCtx receives no parent context, so the creating
+    // context's phase is COPIED in — a top-level phase('A') before parallel() flows
+    // to every item, while a phase() call inside one branch stays in that branch —
+    // and the structural path is handed down explicitly. Neither reaches key
+    // derivation: makeCtx's key inputs are still (branchKey, runSeed) alone.
+    const childCtx = (branch, path, parent) => {
+      const c = K.makeCtx(branch, seed, path)
+      c.phase = parent?.phase ?? null
+      return c
     }
 
     const toolkit = {
@@ -1029,9 +1123,18 @@ export async function runWorkflow(opts) {
         let jobRef = null
         let settled = false
         const queued = []
+        // E8: a handle send is a steer like any other — emitting only for sendTo()
+        // would leave spawn()-steered agents with an empty steering history.
+        const handleSend = (job, text, callsite) => {
+          const out = {}
+          const delivery = job.send(text, 'workflow', senderBranch, callsite, out)
+          emitSteered(job, delivery, out.mailId)
+          events.emit({ type: 'mail', agent: job.index, dir: 'in', message: text, delivery, mailId: out.mailId ?? null })
+          return delivery
+        }
         const done = agentImpl(prompt, o, (job) => {
           jobRef = job
-          for (const m of queued.splice(0)) job.send(m.text, 'workflow', senderBranch, m.callsite)
+          for (const m of queued.splice(0)) handleSend(job, m.text, m.callsite)
         })
         // attached directly to `done` (before the workflow can await it) so a
         // send() right after the await already sees the settled state
@@ -1039,7 +1142,7 @@ export async function runWorkflow(opts) {
           settled = true
           // no job ever started (cache replay / pre-admission failure): queued
           // mail can never deliver — say so instead of letting it evaporate
-          if (!jobRef && queued.length) events.emit({ type: 'log', message: `spawn: ${queued.length} queued message(s) dropped — agent replayed from cache without starting` })
+          if (!jobRef && queued.length) events.emit({ type: 'log', source: 'engine', level: 'warn', message: `spawn: ${queued.length} queued message(s) dropped — agent replayed from cache without starting` })
         }
         done.then(settle, settle)
         inFlight.add(done)
@@ -1048,7 +1151,7 @@ export async function runWorkflow(opts) {
           done,
           send: (m) => {
             const callsite = wfCallsite()
-            if (jobRef) return jobRef.send(String(m), 'workflow', senderBranch, callsite)
+            if (jobRef) return handleSend(jobRef, String(m), callsite)
             // settled with no job ever started (cache replay, pre-admission
             // failure): mirror the settled-job semantics, don't queue forever
             if (settled) return 'dropped'
@@ -1066,10 +1169,16 @@ export async function runWorkflow(opts) {
           if (typeof t !== 'function') throw new WorkflowError(`parallel() takes an array of thunks (functions returning promises) — got ${t instanceof Promise ? 'a Promise; wrap calls as () => agent(...)' : typeof t}`)
         }
         const ctx = K.currentCtx()
-        const node = K.deriveBranch(ctx.branch, 'parallel', ctx.fanoutIndex++)
+        // ctx and ordinal are captured BEFORE the map: `ordinal` (the creating
+        // branch's fan-out counter) is what disambiguates sequential sibling
+        // fanouts, and it is the same value the branch derivation consumes.
+        const ordinal = ctx.fanoutIndex++
+        const node = K.deriveBranch(ctx.branch, 'parallel', ordinal)
+        const base = [...(ctx.path ?? []), { kind: 'parallel', ordinal, count: thunks.length }]
+        events.emit({ type: 'fanout', path: base, kind: 'parallel', count: thunks.length })
         return Promise.all(
           thunks.map((t, i) =>
-            K.withCtx(K.makeCtx(K.deriveBranch(node, 'item', i), seed), () => Promise.resolve().then(t).catch(degrade)),
+            K.withCtx(childCtx(K.deriveBranch(node, 'item', i), [...base, { kind: 'item', i }], ctx), () => Promise.resolve().then(t).catch(degrade)),
           ),
         )
       },
@@ -1080,13 +1189,20 @@ export async function runWorkflow(opts) {
           if (typeof s !== 'function') throw new WorkflowError(`pipeline() stages must be functions — got ${s instanceof Promise ? 'a Promise; wrap calls as (prev, item) => agent(...)' : typeof s}`)
         }
         const ctx = K.currentCtx()
-        const node = K.deriveBranch(ctx.branch, 'pipeline', ctx.fanoutIndex++)
+        const ordinal = ctx.fanoutIndex++
+        const node = K.deriveBranch(ctx.branch, 'pipeline', ordinal)
+        const base = [...(ctx.path ?? []), { kind: 'pipeline', ordinal, count: items.length, stages: stages.length }]
+        events.emit({ type: 'fanout', path: base, kind: 'pipeline', count: items.length, stages: stages.length })
         return Promise.all(
           items.map(async (item, i) => {
             const itemBranch = K.deriveBranch(node, 'item', i)
             let prev = item
             for (let s = 0; s < stages.length; s++) {
-              const sctx = K.makeCtx(K.deriveBranch(itemBranch, 'stage', s), seed)
+              // a fresh ctx per stage, so the item segment is RE-DERIVED here
+              // rather than inherited; an item that throws simply stops producing
+              // stage segments (the DAG renders the declared count, unreached
+              // stages dimmed)
+              const sctx = childCtx(K.deriveBranch(itemBranch, 'stage', s), [...base, { kind: 'item', i }, { kind: 'stage', s }], ctx)
               try {
                 prev = await K.withCtx(sctx, () => stages[s](prev, item, i))
               } catch (err) {
@@ -1100,7 +1216,20 @@ export async function runWorkflow(opts) {
           }),
         )
       },
-      phase: (title) => events.emit({ type: 'phase', title: String(title) }),
+      // E1: phase state lives on the ALS context, never in a run-global — two
+      // concurrent branches calling phase() must not overwrite each other. The
+      // index (not the title) is the identity: titles repeat legally.
+      phase: (title) => {
+        const t = String(title)
+        const phaseIndex = phaseCounter++
+        phaseByTitle.set(t, phaseIndex)
+        const ctx = K.currentCtx()
+        if (ctx) ctx.phase = { phaseIndex, title: t }
+        events.emit({ type: 'phase', phaseIndex, title: t })
+      },
+      // Deliberately bare (E12): a workflow's own log carries no source/level, and
+      // readers fold it as workflow/info. Only the engine's own five log sites are
+      // structured — that is what makes them distinguishable at all.
       log: (message) => events.emit({ type: 'log', message: String(message) }),
       // Block the workflow on operator input. Answers are journaled → replayed on resume.
       ask: (question, o = {}) => {
@@ -1113,7 +1242,12 @@ export async function runWorkflow(opts) {
         if (usedQids.has(qid)) return Promise.reject(new WorkflowError(`duplicate question id "${qid}" — ask() ids must be unique for the whole run`))
         usedQids.add(qid)
         const priorAnswer = prior?.answers.get(qid)
-        if (priorAnswer !== undefined) return Promise.resolve(priorAnswer)
+        if (priorAnswer !== undefined) {
+          // E7: the replay path used to resolve silently, leaving the resumed
+          // run's timeline with a question and no visible answer.
+          events.emit({ type: 'answer', qid, value: priorAnswer, replayed: true })
+          return Promise.resolve(priorAnswer)
+        }
         return new Promise((resolve, reject) => {
           pendingQuestions.set(qid, { question: String(question), resolve, reject })
           events.emit({ type: 'question', qid, question: String(question), runId })
@@ -1126,8 +1260,12 @@ export async function runWorkflow(opts) {
       sendTo: (sel, message) => {
         const job = findJob(sel)
         if (!job) return false
-        const delivery = job.send(String(message), 'workflow', K.currentCtx()?.branch ?? null, wfCallsite())
-        events.emit({ type: 'mail', agent: job.index, dir: 'in', message: String(message), delivery })
+        const out = {}
+        const delivery = job.send(String(message), 'workflow', K.currentCtx()?.branch ?? null, wfCallsite(), out)
+        // E8: a workflow-origin steer is the same event as an operator one — the
+        // agent's timeline must show both, not just the ones typed at the socket
+        emitSteered(job, delivery, out.mailId)
+        events.emit({ type: 'mail', agent: job.index, dir: 'in', message: String(message), delivery, mailId: out.mailId ?? null })
         return delivery
       },
       now: () => {
@@ -1137,7 +1275,23 @@ export async function runWorkflow(opts) {
       random: () => K.nextRandom(K.currentCtx()),
     }
 
-    events.emit({ type: 'run', runId, state: prior ? 'resumed' : 'started', file: path.basename(file), name: meta.name ?? null })
+    // E3: everything a reader needs to describe the run without opening the
+    // journal — plus `engine`, from which readers derive which of these event
+    // fields this run's engine was capable of writing (§6.2 Caps).
+    events.emit({
+      type: 'run',
+      runId,
+      state: prior ? 'resumed' : 'started',
+      file: path.basename(file),
+      name: meta.name ?? null,
+      workflowFile: file,
+      cwd: process.cwd(),
+      defaults: { adapter: defaults.adapter, model: defaults.model ?? null, effort: defaults.effort ?? null },
+      concurrency,
+      budgetTotal,
+      phases: meta.phases ?? null,
+      engine: ENGINE_VERSION,
+    })
 
     const sigint = () => abortRun('SIGINT')
     process.on('SIGINT', sigint)
@@ -1181,6 +1335,7 @@ export async function runWorkflow(opts) {
       process.off('SIGINT', sigint)
       process.off('SIGTERM', sigint)
       clearInterval(hb)
+      clearInterval(progressTimer)
       control.close()
     }
     return finalize(outcome)

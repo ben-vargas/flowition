@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark light">
+<title>flowition</title>
+<link rel="icon" href="./favicon.svg" type="image/svg+xml">
+<!--
+  DESIGN 7.1.4 / 9.9: the theme bootstrap is a separate first-party file loaded
+  render-blocking here, BEFORE the stylesheet, and never inlined - script-src 'self'
+  blocks inline scripts, and parser-blocking is what preserves the no-flash guarantee
+  (parity 109).
+
+  Nothing in this file may be inlined - no inline script element, no stylesheet element,
+  no styling attribute - and test/viewer-http.test.js asserts exactly that against the
+  committed dist. Note that those assertions grep the HTML text, so this comment must not
+  spell any of those tag names out either.
+-->
+<script src="./boot-theme.js"></script>
+  <script type="module" crossorigin src="./app.js"></script>
+  <link rel="stylesheet" crossorigin href="./app.css">
+</head>
+<body>
+<div id="root"></div>
+</body>
+</html>

@@ -1,3 +1,6 @@
 node_modules/
 .DS_Store
 *.log
+# Playwright's per-run artifact directory (traces, screenshots, videos). Written by
+# `npm --prefix viewer run test:e2e`; never part of the shipped package.
+viewer/test-results/
