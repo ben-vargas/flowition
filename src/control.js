@@ -132,17 +132,26 @@ export function serveControl(sockPath, handle) {
   function close() {
     if (closePromise) return closePromise
     closing = true
+    // Unlink NOW, synchronously, while this call still owns the path. Deferring the
+    // unlink to the server's async close callback loses ownership: a successor bind in
+    // this same process (a resume immediately after a completed run) can create a new
+    // socket at this path before the callback runs, and on filesystems that recycle
+    // inode numbers (Linux ext4 — unlike APFS, which allocates monotonically) the freed
+    // inode lands on the successor's file, so the dev/ino identity guard blesses
+    // deleting the successor's LIVE socket. First contact with Linux CI found exactly
+    // that: "control socket disappeared after listen" across every run→resume test.
+    // The bound server keeps serving established connections after the unlink; new
+    // connects failing is the point of closing. Cross-process claims are unaffected —
+    // the §claim-by-rename protocol never depended on this unlink's timing.
+    unlinkOwned()
+    owner = null
     for (const conn of clients) conn.destroy()
     closePromise = new Promise((resolve) => {
       if (!server.listening) {
-        unlinkOwned()
         resolve()
         return
       }
-      server.close(() => {
-        unlinkOwned()
-        resolve()
-      })
+      server.close(() => resolve())
     })
     return closePromise
   }

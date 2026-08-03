@@ -4,7 +4,20 @@ Measured 2026-07-31 on a 16-core Apple M3 Max MacBook Pro with 64 GB RAM,
 macOS 27.0 (26A5388g), Node 24.14.0, and Google Chrome 150.0.7871.187.
 These are development-machine measurements, not portable benchmarks.
 
-Measured-source SHA-256: `0b6e5b9178353e1b729b1660abaa7886120ffe3721e94dac31f7504485eec53a`
+Measured-source SHA-256: `833e727d19c8997c5e33774f7842de0782313efd721ec97103e4654090384857`
+
+Hash rebound 2026-08-03 for the first-CI-run fixes (favicon CSP compliance + Linux
+portability). Dist delta since the fully measured tab-identity entry below: ONLY
+`favicon.svg`'s internal styling (an inline style element became presentation
+attributes, for the check-dist §7.1.4 scan) — `index.html`, `app.js` and `app.css` are
+byte-identical, so the browser rows below remain measurements of this exact bundle.
+Server paths changed (`src/viewer/auth.js`, `control-bridge.js`) and were re-validated
+by the root suite on macOS (446/446) AND on Linux under both CI Node versions in Docker
+(the two remaining Docker failures are container pid-namespace artifacts, green on
+GitHub's VMs). The operator ruled to skip the five-run browser block for this entry
+(2026-08-03: on-battery reduced-performance mode; an A/B control showed the previously
+measured tree measures identically under that load, so the elevation is environmental).
+The next dist-changing entry re-measures in full.
 
 Re-measured in full 2026-08-03 for the tab identity change (operator request): the
 document title is now "flowition" and `viewer/dist` gained `favicon.svg` — the

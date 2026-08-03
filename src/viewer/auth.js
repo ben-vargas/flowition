@@ -242,7 +242,7 @@ function inspectTokenFile(file) {
       }
     }
     const st = assertTokenFileSecure(fd, file)
-    return { kind: 'ok', raw: fs.readFileSync(fd), dev: st.dev, ino: st.ino }
+    return { kind: 'ok', raw: fs.readFileSync(fd), dev: st.dev, ino: st.ino, birthtimeMs: st.birthtimeMs }
   } finally {
     fs.closeSync(fd)
   }
@@ -271,7 +271,7 @@ function readTokenFile(file) {
   if (found.kind === 'exposed') {
     throw new Error(`${file} cannot be used as a viewer token: its mode is ${octal(found.mode)}, which grants group or other access to the credential — §7.1.2 requires mode 0600. Stop any running viewer, \`rm ${file}\`, and start the viewer again to mint a fresh token`)
   }
-  return { raw: found.raw, dev: found.dev, ino: found.ino }
+  return { raw: found.raw, dev: found.dev, ino: found.ino, birthtimeMs: found.birthtimeMs }
 }
 
 /**
@@ -303,7 +303,7 @@ export function inspectToken(file) {
     if (!found.raw.length) return { kind: 'publishing' }
     const token = found.raw.toString('utf8')
     if (!isCanonicalToken(token)) return { kind: 'invalid' }
-    return { kind: 'ok', token, dev: found.dev, ino: found.ino }
+    return { kind: 'ok', token, dev: found.dev, ino: found.ino, birthtimeMs: found.birthtimeMs }
   } catch (err) {
     // The code only — an `err.message` here names the home, and these reasons reach an
     // HTTP body (§5.2: refusal messages carry no filesystem detail).
@@ -526,7 +526,7 @@ export function loadOrCreateCredential({
       if (!isCanonicalToken(value)) {
         throw new Error(`${file} is not a valid viewer token: expected ${TOKEN_CHARS} base64url characters (${TOKEN_BYTES} random bytes), found ${raw.length} byte(s) that are not exactly one — delete the file and try again`)
       }
-      return { token: value, dev: read.dev, ino: read.ino, file }
+      return { token: value, dev: read.dev, ino: read.ino, birthtimeMs: read.birthtimeMs, file }
     }
 
     // Present but zero bytes: a foreign creator mid-write. Wait; never reclaim.
@@ -617,7 +617,7 @@ function confirmPublished(file, token) {
     const found = onDisk === null ? 'the file is gone' : `${onDisk.raw.length} byte(s) on disk`
     throw new Error(`${file} does not hold the token this process just published (${found}) — delete the file and try again`)
   }
-  return { token, dev: onDisk.dev, ino: onDisk.ino, file }
+  return { token, dev: onDisk.dev, ino: onDisk.ino, birthtimeMs: onDisk.birthtimeMs, file }
 }
 
 /** A fresh in-memory control token — never persisted, rotated by restarting (§7.1.2). */
@@ -687,9 +687,16 @@ export function createCredentialGuard(credential, { inspect = () => inspectToken
         default: break
       }
       // Identity first, then value. A replacement that happens to carry the same bytes is
-      // still a different file — the §7.4 rotation path unlinks and re-links, so an inode
-      // change is the signal that something else has taken over this credential's name.
-      if (found.dev !== credential.dev || found.ino !== credential.ino) {
+      // still a different file — the §7.4 rotation path unlinks and re-links, so an
+      // identity change is the signal that something else has taken over this
+      // credential's name. Identity is dev+ino+birthtime, not dev+ino alone: Linux
+      // filesystems recycle freed inode numbers immediately (first-contact Linux CI
+      // proved an unlink-and-recreate can land on the SAME dev+ino), and a recreated
+      // file always carries a new birth time even when its inode number is recycled.
+      // APFS allocates inode numbers monotonically, which is why dev+ino alone was
+      // never caught lying on macOS.
+      if (found.dev !== credential.dev || found.ino !== credential.ino
+        || found.birthtimeMs !== credential.birthtimeMs) {
         return revoke('the viewer token file was replaced by a different file')
       }
       if (!tokenMatches(credential.token, found.token)) {

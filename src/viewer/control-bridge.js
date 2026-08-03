@@ -127,9 +127,21 @@ const notLive = (runId) =>
 const NOT_LIVE_ERRNOS = new Set(['ENOENT', 'ECONNREFUSED'])
 const CONTROL_TIMEOUT_MESSAGE = 'control request timed out'
 
-function isNotLive(err) {
-  if (err?.code !== undefined) return NOT_LIVE_ERRNOS.has(err.code)
-  return err?.message === CONTROL_TIMEOUT_MESSAGE
+function isNotLive(err, sockPath) {
+  if (err?.code === undefined) return err?.message === CONTROL_TIMEOUT_MESSAGE
+  if (!NOT_LIVE_ERRNOS.has(err.code)) return false
+  // ECONNREFUSED needs one disambiguation the errno alone cannot make: macOS answers
+  // ENOTSOCK when the path holds a REGULAR file (something that is not a control socket
+  // at all — a §5.2 generic 500, not a retryable liveness loss), but Linux answers
+  // ECONNREFUSED for that same file. The lstat settles it: a non-socket at the path is
+  // never "the run finished". A path that vanished between the connect and this stat is
+  // an absent socket — exactly what run_not_live means — so ENOENT here stays not-live.
+  if (err.code === 'ECONNREFUSED' && sockPath) {
+    try {
+      if (!fs.lstatSync(sockPath).isSocket()) return false
+    } catch { /* gone now: an absent socket is not-live */ }
+  }
+  return true
 }
 
 /**
@@ -181,7 +193,7 @@ export async function controlCommand(runId, request, { timeoutMs, requestFn = co
   try {
     reply = await requestFn(socketPath(runId), request, budget)
   } catch (err) {
-    if (isNotLive(err)) throw notLive(runId)
+    if (isNotLive(err, socketPath(runId))) throw notLive(runId)
     throw err
   }
   if (reply && typeof reply === 'object' && typeof reply.error === 'string') {
