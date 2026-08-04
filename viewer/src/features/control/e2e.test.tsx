@@ -39,40 +39,10 @@ import os from 'node:os'
 import path from 'node:path'
 import { configure, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { getFocusableTreeWalker } from '@react-aria/focus'
-import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
 import { App } from '../../app/App.js'
 import { api } from '../../api/client.js'
 import { resetRouteForTests } from '../../app/router.js'
-
-// This walkthrough owns SEQUENCE correctness — blocked → answered → steered → cancelled
-// → resumed → trashed, in one session — and deliberately NOT cadence: `runStore.test.ts`
-// owns the 10 s snapshot poll's own contract. At the production cadence the walkthrough's
-// state transitions each cost up to a poll interval, which summed to 60 s on the
-// reference machine and 108 s on Linux — and on CI's slower shared runners pushed
-// individual waits past their windows (the first-ever CI runs failed exactly there).
-// So the store's DEFAULT poll shrinks for this file only; every option a caller passes
-// explicitly still wins, and nothing shipped changes.
-vi.mock('../../state/runStore.js', async (importOriginal) => {
-  const mod = await importOriginal<typeof import('../../state/runStore.js')>()
-  return {
-    ...mod,
-    createRunStore: (options: Parameters<typeof mod.createRunStore>[0]) =>
-      mod.createRunStore({ pollMs: 250, ...options }),
-  }
-})
-
-// Same reasoning for the rail: its 5 s list poll is what refreshes the run facts the
-// ⌘K palette snapshots, so at production cadence every palette step waits out most of a
-// poll interval for its row to become current-and-enabled.
-vi.mock('../../app/RunRail.js', async (importOriginal) => {
-  const react = await import('react')
-  const mod = await importOriginal<typeof import('../../app/RunRail.js')>()
-  return {
-    ...mod,
-    RunRail: react.forwardRef((props: Record<string, unknown>, ref) =>
-      react.createElement(mod.RunRail as never, { pollMs: 250, ...props, ref })),
-  }
-})
 
 // Instrumented accounting of where this walkthrough's time actually goes: the dominant
 // waits are the ENGINE's own lifecycle transitions (a cancel settling its agents, a
@@ -80,8 +50,15 @@ vi.mock('../../app/RunRail.js', async (importOriginal) => {
 // legitimately several times that on CI's shared runners. Cadence was a minor term. So
 // the windows scale for CI rather than the product being rushed: Testing Library's 1 s
 // default is calibrated for component tests, and "Unable to find role=option at 1 s" on
-// a busy runner is a runner-speed report, not a product defect.
+// a busy runner is a runner-speed report, not a product defect. (A round of shrinking
+// the store/rail poll cadences via vi.mock was tried first and REVERTED: it bought ~8%
+// locally — the engine transitions dominate — and on CI-class hardware a 250 ms poll
+// re-rendering the cockpit is churn that starves the very updates being waited for.)
 const WAIT_WINDOW_MS = process.env.CI ? 60_000 : 20_000
+// 250 ms polls on CI, not 50: each Testing Library poll re-queries the tree, and at
+// 20 queries/second for a minute the allocation rate is itself GC pressure on a worker
+// that is already the suite's largest (see vite.config.ts poolOptions note).
+const WAIT_INTERVAL_MS = process.env.CI ? 250 : 50
 configure({ asyncUtilTimeout: WAIT_WINDOW_MS })
 
 // The viewer home is REALPATH'd and its prefix kept short for the same reason
@@ -95,6 +72,32 @@ const PRIOR_HOME = process.env.FLOWITION_HOME
 process.env.FLOWITION_HOME = HOME
 const RUNS = path.join(HOME, 'runs')
 const DIST = path.join(HOME, 'dist')
+
+/**
+ * Failure forensics, because a CI runner cannot be ssh'd into after the fact: when a
+ * step of the walkthrough dies, the assertion says what the SCREEN failed to show, and
+ * this says what the RUN actually was — the difference is the diagnosis. (Two blind
+ * CI rounds against this file are why it exists; bounded output, failure-only.)
+ */
+afterEach((ctx) => {
+  if (ctx.task.result?.state !== 'fail') return
+  for (const runId of fs.existsSync(RUNS) ? fs.readdirSync(RUNS) : []) {
+    const dir = path.join(RUNS, runId)
+    const tail = (file: string, n: number) => {
+      try { return fs.readFileSync(path.join(dir, file), 'utf8').trimEnd().split('\n').slice(-n) } catch { return ['<absent>'] }
+    }
+    const age = (file: string) => {
+      try { return `${Math.round(Date.now() - fs.statSync(path.join(dir, file)).mtimeMs)}ms old` } catch { return 'absent' }
+    }
+    console.error([
+      `FORENSICS ${runId}:`,
+      `  entries: ${fs.readdirSync(dir).join(', ')}`,
+      `  heartbeat: ${age('.heartbeat')} | control.sock: ${age('control.sock')} | result.json: ${age('result.json')}`,
+      `  events tail: ${tail('events.jsonl', 4).join(' | ')}`,
+      `  journal tail: ${tail('journal.jsonl', 2).join(' | ')}`,
+    ].join('\n'))
+  }
+})
 
 // The server halves, loaded by Node rather than through Vite's module graph — see
 // `vite.config.ts`'s `test.server.deps.external`, which is what makes `import.meta.url`
@@ -570,7 +573,7 @@ const mountApp = (route = '/') => {
   return render(<App />)
 }
 
-const SLOW = { timeout: WAIT_WINDOW_MS, interval: 50 }
+const SLOW = { timeout: WAIT_WINDOW_MS, interval: WAIT_INTERVAL_MS }
 
 /**
  * Keyboard activation OF WHATEVER HAS FOCUS. It takes no target, on purpose.

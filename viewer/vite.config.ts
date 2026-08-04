@@ -68,6 +68,15 @@ export default defineConfig({
     // ceiling is a coin flip, and a flaky green is worth less than a slow one. A genuinely
     // hung test still fails — later, and for the right reason.
     testTimeout: 20_000,
+    // The §12.1 walkthrough peaks near 3.8 GB of worker heap on a PASSING run (measured
+    // with --logHeapUsage; jsdom retention across a 60 s live session, not product
+    // memory — the real browser's P6 budget holds 20k records in 14.4 MiB). Node derives
+    // its default old-space ceiling from the machine, and on cgroup-limited or smaller
+    // hosts that lands near 2 GB: the worker then GC-storms as it approaches the wall —
+    // the UI under test stops updating, waits expire, and under enough pressure the
+    // worker OOMs outright (CI showed all three faces before this was pinned in a
+    // 2-CPU container). A limit is not a reservation: lean files stay lean.
+    poolOptions: { forks: { execArgv: ['--max-old-space-size=6144'] } },
     server: {
       deps: {
         // The ROOT server modules (`../src/**`) are loaded by NODE, not through Vite's
