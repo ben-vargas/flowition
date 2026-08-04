@@ -130,6 +130,16 @@ export interface WorkflowMeta {
    * comes from the `phase()` calls the workflow actually makes.
    */
   phases?: readonly WorkflowPhase[]
+  /**
+   * Input contract for the run's `--args` value.
+   *
+   * Validated against the effective args before any agent or step executes, on
+   * fresh runs and resumes alike; a violation fails the run with the schema
+   * paths that did not match. Uses the same JSON Schema subset as agent output
+   * schemas — unsupported keywords are rejected loudly. No defaults are merged:
+   * the toolkit still receives the `--args` value verbatim.
+   */
+  argsSchema?: JSONSchema
   /** Additional metadata is passed through unchanged and is not interpreted. */
   [key: string]: unknown
 }
@@ -350,6 +360,38 @@ export interface WorkflowToolkit<
 > {
   /** Starts an agent and waits for its text or structured result. */
   agent: Agent
+  /**
+   * Runs local code as a durable, journaled step.
+   *
+   * A completed callback's JSON result is journaled and replayed on resume
+   * instead of re-executing; incomplete or failed attempts re-run on resume.
+   * `name` plus the canonicalized `args` are
+   * part of the step's resume key, so a changed name or args is a different
+   * step that never reuses a cached result. Steps use their own per-branch
+   * counter, independent of agents — adding or removing a step never shifts
+   * agent resume keys.
+   *
+   * Args and the result must be JSON values (`undefined`, functions, BigInt,
+   * cycles, and non-finite numbers are rejected loudly). A callback that
+   * returns nothing resolves to `null`.
+   *
+   * The guarantee is durable memoization, not exactly-once side effects: a
+   * crash between the callback's external effect and its completion record
+   * re-runs the callback on resume, so callbacks should be idempotent. A
+   * failed step is journaled but not cached — it re-runs on resume.
+   *
+   * At most 10000 `step()` calls per execution attempt (replayed cached calls
+   * count too; the counter resets on resume).
+   */
+  step<T extends JSONValue | void = JSONValue>(
+    name: string,
+    args: JSONValue,
+    fn: () => MaybePromise<T>,
+  ): Promise<T extends void ? null : T>
+  step<T extends JSONValue | void = JSONValue>(
+    name: string,
+    fn: () => MaybePromise<T>,
+  ): Promise<T extends void ? null : T>
   /** Starts an agent immediately and returns a steerable handle. */
   spawn: Spawn
   /** Runs thunks concurrently behind a result barrier. */

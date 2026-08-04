@@ -24,7 +24,7 @@ export const meta = {
   phases: [{ title: 'Review' }, { title: 'Verify' }],   // optional, documentation only
 }
 
-export default async function ({ agent, spawn, parallel, pipeline, phase, log,
+export default async function ({ agent, spawn, step, parallel, pipeline, phase, log,
                                  ask, sendTo, args, budget, meta, now, random }) {
   phase('Review')
   const findings = await parallel(AREAS.map((a) => () =>
@@ -37,7 +37,7 @@ export default async function ({ agent, spawn, parallel, pipeline, phase, log,
 }
 ```
 
-`meta.name` and `meta.description` are required by the TypeScript authoring contract (the runtime accepts absent metadata). `meta.phases` is an outline for readers — flowition doesn't read it; the phase list in `flowition status` comes from the `phase()` calls the workflow actually makes.
+`meta.name` and `meta.description` are required by the TypeScript authoring contract (the runtime accepts absent metadata). `meta.phases` is an outline for readers — flowition doesn't read it; the phase list in `flowition status` comes from the `phase()` calls the workflow actually makes. `meta.argsSchema` (optional) is an input contract for `--args`, using the same JSON Schema subset as agent output schemas: the effective args are validated before any agent or step executes — fresh runs and resumes alike — and a violation fails the run with the schema paths that missed. No defaults are merged; the toolkit's `args` stays verbatim.
 
 Two file-level gotchas that waste real time:
 - **Workflow files are ES modules.** Node decides how to parse a `.js` file from the nearest package.json — it needs `"type": "module"`, or name the file `.mjs`, or the workflow fails to load.
@@ -77,6 +77,7 @@ becomes unresumable, and the program text that produced a recorded run is gone.
 - **spawn(prompt, opts?) → { done, send(msg) }** — `agent()` returning immediately with a steerable handle. `done` is the final-result promise; `send()` live-injects into claude/amp/mock mid-turn, and queues a session-resume follow-up turn for codex/droid/opencode/pi. See Mid-run communication for the send verdicts.
 - **parallel(thunks) → Promise<Array<thunk result | null>>** — run thunks concurrently. This is a BARRIER: awaits all before returning. Agent failures become `null` in their original positions; `.filter(Boolean)` before using the results. Workflow errors and non-agent exceptions reject. Pass **thunks** (`() => agent(...)`), never already-started promises. At most 4096 thunks.
 - **pipeline(items, ...stages) → Promise<Array<last-stage result | null>>** — run each item through all stages independently, NO barrier between stages; with no stages it returns `Promise<Item[]>`. Every stage callback receives `(prev, originalItem, index)` — use originalItem/index in later stages to label work without threading context through stage 1's return value. An agent failure or an intentional `null` drops that item to `null` and skips its remaining stages; workflow errors and non-agent exceptions reject. At most 4096 items.
+- **step(name, args?, fn) → Promise<JSONValue>** — durable local code (git commands, file writes, API calls). A completed callback's JSON result is journaled and REPLAYED on resume instead of re-executing; incomplete or failed attempts re-run. `name` + canonicalized `args` form the resume identity — changed args = a different step — and steps use their own per-branch counter, so adding/removing one never shifts agent resume keys. Args and result must be plain JSON (`undefined`/functions/`NaN`/`BigInt`/cycles are rejected loudly); a void callback resolves to `null`. The guarantee is durable memoization, NOT exactly-once: a crash between the callback's external effect and its completion record re-runs it on resume — make callbacks idempotent (or carry an idempotency key in args). A FAILED step re-runs on resume; its error propagates to your code unchanged. At most 10000 `step()` calls per execution attempt (replayed calls count; the counter resets on resume).
 - **phase(title) / log(message) → void** — progress structure; phases show in `flowition status` and both appear in `flowition tail`.
 - **ask(question, opts?) → Promise<string>** — block the workflow on operator input; `opts` is `{ id?: string }`. Unanswered questions show in `flowition status`; answer with `flowition answer <runId> <qid> "<text>"` (generated ids are q0, q1, … on the root branch and gain a branch suffix under fan-out; explicit ids must be unique per run). Answers are journaled and replay on resume.
 - **sendTo(indexOrLabel, message) → Exclude<SendVerdict, 'pending'> | false** — steer one of your own live agents from workflow code; returns `false` when no live agent matches.
@@ -137,7 +138,7 @@ The built-in validator implements ONLY this subset: `type` (incl. type arrays), 
 - Pass **thunks** to `parallel()` — an already-started promise is rejected, after its work may already have escaped the branch's journal ordering.
 - Every `agent()` call gets a chained positional resume key derived from its branch-local index, prompt, and keyed spec (`adapter`, `model`, `mode`, `effort`, `system`, `schema`, `cwd`), so replay is stable regardless of completion order; `key` overrides it when you need an explicit identity.
 
-`flowition resume <runId>` replays completed agents from the journal instantly and re-runs the rest — and an interrupted agent whose provider session id was journaled **continues that session** with an "interrupted, finish the task" nudge rather than starting over. Undelivered steering mail is restored, `ask()` answers replay, and the budget ceiling is restored.
+`flowition resume <runId>` replays completed agents and completed `step()` results from the journal instantly and re-runs the rest — and an interrupted agent whose provider session id was journaled **continues that session** with an "interrupted, finish the task" nudge rather than starting over. Undelivered steering mail is restored, `ask()` answers replay, and the budget ceiling is restored.
 
 Resume refuses — loudly, rather than silently forking history — when:
 - the workflow file **or any local import** changed (byte-for-byte hash of the module graph),

@@ -35,6 +35,13 @@ export function renderEvent(ev) {
       if (ev.state === 'steered') return `  ✉ ${id}${label} received message (${ev.delivery})`
       return null
     }
+    case 'step': {
+      if (ev.state === 'running') return `  ⚙ step ${ev.name} running…`
+      if (ev.state === 'cached') return `  ✓ step ${ev.name} replayed from journal`
+      if (ev.state === 'done') return `  ✓ step ${ev.name} done${ev.durationMs != null ? ' ' + fmtDuration(ev.durationMs) : ''}`
+      if (ev.state === 'failed') return `  ✗ step ${ev.name} failed: ${ev.error}`
+      return null
+    }
     case 'question': return `? [${ev.qid}] ${ev.question}   (answer with: flowition answer ${ev.runId} ${ev.qid} "<text>")`
     case 'answer': return `✓ [${ev.qid}] answered`
     case 'mail': return `✉ agent ${ev.agent} ${ev.dir === 'out' ? 'reports' : 'received'}: ${truncate(ev.message, 200)}`
@@ -62,11 +69,14 @@ function foldAgent(prev, ev) {
 // Fold events.jsonl into a status snapshot for `flowition status` / MCP.
 export function foldEvents(dir) {
   const events = readJsonl(path.join(dir, 'events.jsonl'))
-  const snap = { run: null, phases: [], agents: new Map(), questions: new Map(), logs: [] }
+  const snap = { run: null, phases: [], agents: new Map(), steps: new Map(), questions: new Map(), logs: [] }
   for (const ev of events) {
     if (ev.type === 'run') snap.run = { ...(snap.run || {}), ...ev }
     else if (ev.type === 'phase') snap.phases.push(ev.title)
     else if (ev.type === 'agent') snap.agents.set(ev.index, foldAgent(snap.agents.get(ev.index), ev))
+    // Steps share the agent fold: same state names, same stale-field clearing
+    // on a live transition (a re-run step must drop its previous failure).
+    else if (ev.type === 'step') snap.steps.set(ev.key, foldAgent(snap.steps.get(ev.key), ev))
     else if (ev.type === 'question') snap.questions.set(ev.qid, { ...ev, answered: false })
     else if (ev.type === 'answer' && snap.questions.has(ev.qid)) snap.questions.get(ev.qid).answered = true
     else if (ev.type === 'log') snap.logs.push(ev.message)

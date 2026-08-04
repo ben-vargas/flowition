@@ -566,3 +566,64 @@ test('RunDetail projects meta.graphDynamic, tri-state, without disturbing old ru
   // An old run: the key is absent from meta, so the answer is "not recorded", never `false`.
   assert.equal((await store().get(make({}))).graphDynamic, null)
 })
+
+test('step events fold first-class: lifecycle, replay, re-run clears outcome, never unknown', () => {
+  const state = fold(null, records([
+    { t: 1, type: 'run', state: 'started', engine: '0.2.0' },
+    // s1: failed on the first attempt, re-run to done on resume — the failure must not survive.
+    { t: 2, type: 'step', key: 's1', name: 'create-branch', state: 'running', phaseIndex: 0, path: [] },
+    { t: 3, type: 'step', key: 's1', state: 'failed', error: 'boom', durationMs: 5 },
+    { t: 4, type: 'step', key: 's1', state: 'running' },
+    { t: 5, type: 'step', key: 's1', state: 'done', durationMs: 3, resultPreview: '{"branch":"x"}' },
+    // s2: a journal replay — one event, nothing executed.
+    { t: 6, type: 'step', key: 's2', name: 'push', state: 'cached' },
+    // keyless records are dropped, not folded into a phantom entry
+    { t: 7, type: 'step', state: 'running' },
+  ]))
+  assert.equal(state.unknownEvents, 0, 'step is a known event type, never the debug row')
+  assert.equal(state.steps.length, 2)
+  const [s1, s2] = state.steps
+  assert.equal(s1.name, 'create-branch')
+  assert.equal(s1.state, 'done')
+  assert.equal(s1.error, null, 're-run cleared the previous failure')
+  assert.equal(s1.startedAt, 4, 're-entry restarts the clock')
+  assert.equal(s1.endedAt, 5)
+  assert.equal(s1.durationMs, 3)
+  assert.equal(s1.resultPreview, '{"branch":"x"}')
+  assert.equal(s1.cached, false)
+  assert.equal(s2.state, 'cached')
+  assert.equal(s2.cached, true)
+  assert.equal(s2.durationMs, null, 'a replay executed nothing; no duration')
+  assert.equal(s2.endedAt, 6, 'dated by the replay instant')
+})
+
+test('materializeFold orphans a running step under a dead run and ships steps on the view', () => {
+  const raw = fold(null, records([
+    { t: 1, type: 'run', state: 'started', engine: '0.2.0' },
+    { t: 2, type: 'step', key: 's1', name: 'slow', state: 'running' },
+    { t: 3, type: 'step', key: 's2', name: 'fast', state: 'running' },
+    { t: 4, type: 'step', key: 's2', state: 'done', durationMs: 1 },
+    { t: 5, type: 'run', state: 'interrupted' },
+  ]))
+  const view = materializeFold(raw, 'interrupted')
+  assert.equal(view.steps.length, 2)
+  assert.equal(view.steps[0].displayState, 'orphaned', 'a step the dead run left running is stranded')
+  assert.equal(view.steps[0].state, 'running', 'displayState projects; the folded state is untouched')
+  assert.equal(view.steps[1].displayState, 'done')
+})
+
+test('a JSON round trip of the fold state preserves steps and keeps folding onto them', () => {
+  const before = fold(null, records([
+    { t: 1, type: 'run', state: 'started', engine: '0.2.0' },
+    { t: 2, type: 'step', key: 's1', name: 'a', state: 'running' },
+  ]))
+  // Snapshots cross the server/browser boundary as JSON (normalizeState's contract).
+  const revived = JSON.parse(JSON.stringify(before))
+  delete revived._stepByKey
+  const after = fold(revived, records([
+    { t: 3, type: 'step', key: 's1', state: 'done', durationMs: 2 },
+  ], before.lastOffset))
+  assert.equal(after.steps.length, 1)
+  assert.equal(after.steps[0].state, 'done')
+  assert.equal(after.steps[0].name, 'a', 'identity fields survived the round trip')
+})

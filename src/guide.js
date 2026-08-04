@@ -6,9 +6,15 @@ A workflow is a plain-JS ES module:
       name: 'review-changes',
       description: 'Review changed files, verify findings',
       phases: [{ title: 'Review' }, { title: 'Verify' }],
+      argsSchema: {          // optional input contract for --args (same JSON
+        type: 'object',      // Schema subset as agent output schemas); invalid
+        properties: { target: { type: 'string' } },  // args fail the run BEFORE
+        required: ['target'],                        // any agent or step starts
+        additionalProperties: false,
+      },
     }
 
-    export default async function ({ agent, spawn, parallel, pipeline, phase, log, ask, sendTo, args, budget, now, random }) {
+    export default async function ({ agent, spawn, step, parallel, pipeline, phase, log, ask, sendTo, args, budget, now, random }) {
       phase('Review')
       const findings = await parallel(AREAS.map((a) => () =>
         agent('Review ' + a + ' for bugs.', { schema: FINDINGS, label: 'review:' + a })))
@@ -77,6 +83,19 @@ spawn(prompt, opts) -> { done: Promise, send(msg) }
   turn) — it is then DECLARED dropped at the final drain (journaled mail-done
   dropped:true + a transcript notice), it does not retroactively re-report.
 
+step(name, args?, fn) -> Promise<JSON>
+  Durable local code (side effects, git commands, file writes). A completed
+  callback's JSON result is journaled and REPLAYED on resume instead of
+  re-executing; incomplete or failed attempts re-run.
+  name + canonicalized args form the resume identity — changed args = a different
+  step. Steps use their own per-branch counter, so adding/removing one never shifts
+  agent resume keys. Args and result must be plain JSON (undefined/functions/NaN/
+  BigInt/cycles are rejected loudly); a void callback resolves to null.
+  Guarantee: durable memoization, NOT exactly-once — a crash between the callback's
+  external effect and its completion record re-runs it on resume, so make callbacks
+  idempotent (or carry an idempotency key in args). A FAILED step re-runs on resume
+  like any unfinished work; its error propagates to your code unchanged.
+
 parallel(thunks) -> Promise<any[]>     BARRIER: all results together; failures -> null.
 pipeline(items, ...stages)             NO barrier between stages; each stage gets
                                        (prev, originalItem, index); prefer this.
@@ -93,6 +112,8 @@ now() / random()                       deterministic; use instead of Date.now()/
 
 ## Rules
 - Never use Date.now()/Math.random() in workflow code — they break resume replay; use now()/random().
+- Wrap side effects (git, file writes, network calls) in step() so resume replays them
+  instead of re-executing; keep the callbacks idempotent.
 - Prefer pipeline() over parallel(); use a barrier only when a stage needs ALL prior results.
 - Every agent runs with full permissions (no sandbox) — write prompts accordingly.
 - Agents you spawn get FLOWITION_RUN_ID / FLOWITION_AGENT_INDEX / FLOWITION_BIN env vars and may

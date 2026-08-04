@@ -14,7 +14,8 @@ import { AgentJob, AgentError, DEFAULT_STALL_MS } from './agent-proc.js'
 import { serveControl } from './control.js'
 import { getAdapter } from './adapters/index.js'
 import * as K from './keys.js'
-import { sha256, canonical, ensureDir, runDir, shortId, truncate } from './util.js'
+import { sha256, canonical, ensureDir, runDir, shortId, truncate, assertJsonValue } from './util.js'
+import { validate } from './schema.js'
 
 export class WorkflowError extends Error {}
 // Per-item degradable failure — parallel()/pipeline() turn these into null.
@@ -876,6 +877,43 @@ export async function runWorkflow(opts) {
       throw err instanceof WorkflowError ? err : new WorkflowError(`workflow module failed to load: ${msg}`)
     }
 
+    // Admission-time input contract: `meta.argsSchema` validates the EFFECTIVE
+    // args of this invocation — opts.args verbatim, exactly what the toolkit
+    // will receive; no defaults are merged. The schema lives in the workflow
+    // module, so this necessarily runs after module load; a violation
+    // terminates the run before any agent or step executes, exactly like a
+    // module-load failure. Resume re-validates identically by construction:
+    // the fileHash guard pins the schema and the canonical-args guard pins the
+    // args. Unsupported schema keywords are rejected loudly here too (schema.js).
+    {
+      // A validator THROW (a malformed schema shape the structural walk did not
+      // anticipate) is the same admission failure as returned errors: it must
+      // reach the same terminal journal/result path, never escape it — an
+      // admission-failed run without terminal artifacts would look crashed, not
+      // rejected. The `meta.argsSchema` READ is inside the boundary too: a
+      // throwing getter on the meta object is just another way the schema can
+      // detonate.
+      let schemaErrs = []
+      try {
+        const argsSchema = meta.argsSchema
+        if (argsSchema !== undefined) {
+          schemaErrs = argsSchema == null || typeof argsSchema !== 'object' || Array.isArray(argsSchema)
+            ? ['meta.argsSchema must be a JSON Schema object']
+            : validate(argsSchema, opts.args)
+        }
+      } catch (err) {
+        schemaErrs = [`meta.argsSchema is not a valid schema: ${String(err?.message ?? err)}`]
+      }
+      if (schemaErrs.length) {
+        const msg = 'workflow args do not satisfy meta.argsSchema:\n  - ' + schemaErrs.join('\n  - ')
+        journal.append({ type: 'end', status: 'failed', error: msg })
+        clearInterval(hb)
+        clearInterval(progressTimer)
+        finalize({ runId, status: 'failed', error: msg })
+        throw new WorkflowError(msg)
+      }
+    }
+
     const sem = new Semaphore(concurrency)
     // Seed with ALL journaled spend — failed/cancelled attempts AND completed
     // results: that cost is real and must keep counting against the budget
@@ -1085,6 +1123,78 @@ export async function runWorkflow(opts) {
       })
     }
 
+    // Durable side-effect step: run local code once, journal its JSON result,
+    // replay it on resume. The contract (journal.js) is deliberately weaker
+    // than exactly-once — a JSONL journal cannot commit an external effect and
+    // its completion record atomically. What IS guaranteed: a COMPLETED step is
+    // durably memoized and never re-runs; a step-start with no step-result is
+    // an ambiguous crash window and the callback RE-RUNS on resume, so
+    // callbacks must be idempotent or carry their own idempotency keys. A
+    // failed step also re-runs, like any unfinished work. The key comes from an
+    // independent per-branch counter plus name plus canonical args (keys.js), so
+    // steps and agents never shift each other's resume keys, and a changed
+    // name/args is a different step that never reuses a cached result.
+    let stepCount = 0
+    async function stepImpl(name, args, fn) {
+      if (typeof fn === 'undefined' && typeof args === 'function') { fn = args; args = null } // step(name, fn)
+      if (aborted || finishing) throw new WorkflowError('run aborted')
+      if (typeof name !== 'string' || !name.trim()) throw new WorkflowError('step() requires a non-empty name string')
+      if (typeof fn !== 'function') throw new WorkflowError('step() requires a callback function')
+      if (++stepCount > 10000) throw new WorkflowError('step cap (10000 step() calls per execution attempt, replayed calls included) exceeded — runaway loop?')
+      const ctx = K.currentCtx()
+      if (!ctx) throw new WorkflowError('step() called outside workflow context')
+      const { phase, phaseIndex } = resolvePhase(ctx, null)
+      const spath = ctx.path ?? []
+      // Args are keyed and persisted — they must be real JSON. JSON.stringify
+      // alone would silently drop undefined/functions and normalize NaN to null,
+      // letting two different call sites collide on one key. An EXPLICIT
+      // undefined (step(name, undefined, fn)) is rejected like any other
+      // non-JSON value — only the two-argument overload supplies null.
+      let normArgs
+      try { normArgs = assertJsonValue(args, `step "${name}" args`) } catch (err) { throw new WorkflowError(String(err?.message ?? err)) }
+      const key = K.stepKey(ctx, name, normArgs)
+      const cached = prior?.stepResults.get(key)
+      if (cached) {
+        events.emit({ type: 'step', key, name, state: 'cached', phase, phaseIndex, path: spath })
+        return cached.result
+      }
+      journal.append({ type: 'step-start', key, name, args: normArgs })
+      events.emit({ type: 'step', key, name, state: 'running', phase, phaseIndex, path: spath })
+      const t0 = Date.now()
+      let result
+      try {
+        const raw = await fn()
+        // A void callback is a pure side effect — normalize top-level undefined
+        // to null (a JSON value). A nested undefined, function, cycle, BigInt or
+        // non-finite number still fails loudly: a malformed result must never
+        // become a replayable completion record.
+        try { result = raw === undefined ? null : assertJsonValue(raw, `step "${name}" result`) } catch (err) { throw new WorkflowError(String(err?.message ?? err)) }
+      } catch (err) {
+        // Journaled as failed (observable, NOT replayable), then propagated
+        // unchanged so workflow code can catch and branch on its own error. The
+        // failure event is best-effort: telemetry must never replace the
+        // callback's original error with its own.
+        const msg = String(err?.message ?? err)
+        const durationMs = Date.now() - t0
+        journal.append({ type: 'step-result', key, name, status: 'failed', error: msg, durationMs })
+        try { events.emit({ type: 'step', key, name, state: 'failed', phase, phaseIndex, error: msg, durationMs }) } catch { /* best effort */ }
+        throw err
+      }
+      const durationMs = Date.now() - t0
+      // The completed step-result record SEALS the outcome, exactly like an
+      // agent's completed result (see agentImpl). Everything after it is
+      // telemetry — a throw there must never reach a failure path that appends
+      // a FAILED record for the same key (last-wins on replay: the completed
+      // side effect would re-run on resume).
+      journal.append({ type: 'step-result', key, name, status: 'completed', result, durationMs })
+      try {
+        events.emit({ type: 'step', key, name, state: 'done', phase, phaseIndex, durationMs, resultPreview: truncate(typeof result === 'string' ? result : JSON.stringify(result), 200) })
+      } catch (err) {
+        try { events.emit({ type: 'log', source: 'engine', level: 'error', message: `step "${name}" post-completion telemetry error (completed result stands): ${String(err?.message ?? err)}` }) } catch { /* best effort */ }
+      }
+      return result
+    }
+
     const degrade = (err) => {
       if (err instanceof AgentFailed) return null
       throw err
@@ -1107,6 +1217,14 @@ export async function runWorkflow(opts) {
       meta,
       agent: (prompt, o) => {
         const p = agentImpl(prompt, o)
+        inFlight.add(p)
+        p.catch(() => {}).finally(() => inFlight.delete(p))
+        return p
+      },
+      // Durable local code: a completed callback's JSON result is journaled and
+      // replayed on resume (see stepImpl for the crash-window contract).
+      step: (name, args, fn) => {
+        const p = stepImpl(name, args, fn)
         inFlight.add(p)
         p.catch(() => {}).finally(() => inFlight.delete(p))
         return p

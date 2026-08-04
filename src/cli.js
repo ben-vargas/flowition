@@ -305,6 +305,7 @@ export async function main(argv) {
           result: st.result ?? null,
           phases: snap.phases,
           agents: [...snap.agents.values()],
+          steps: [...snap.steps.values()],
           questions: [...snap.questions.values()].filter((q) => !q.answered),
           live: liveInfo?.ok ? liveInfo : null,
         }))
@@ -316,6 +317,10 @@ export async function main(argv) {
         const who = [a.adapter, a.model].filter(Boolean).join(':')
         const dur = a.durationMs != null ? ` ${fmtDuration(a.durationMs)}` : ''
         console.log(`  [${a.index}] ${(a.label ?? '').padEnd(20)} ${who.padEnd(24)} ${a.state}${dur}${a.error ? ' — ' + a.error : ''}`)
+      }
+      for (const s of snap.steps.values()) {
+        const dur = s.durationMs != null ? ` ${fmtDuration(s.durationMs)}` : ''
+        console.log(`  ⚙ ${(s.name ?? '').padEnd(22)} ${'step'.padEnd(24)} ${s.state}${dur}${s.error ? ' — ' + s.error : ''}`)
       }
       for (const q of [...snap.questions.values()].filter((q) => !q.answered)) {
         console.log(`  ? ${q.qid}: ${q.question}   → flowition answer ${id} ${q.qid} "<text>"`)

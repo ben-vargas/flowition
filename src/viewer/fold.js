@@ -38,6 +38,7 @@ export function createFoldState({ createdAt = null } = {}) {
     run: null,
     phases: scope.phases,
     agents: [],
+    steps: [],
     questions: [],
     mail: scope.mail,
     logs: scope.logs,
@@ -53,6 +54,7 @@ export function createFoldState({ createdAt = null } = {}) {
     _scope: 0,
     _attemptOpen: false,
     _agentByIndex: Object.create(null),
+    _stepByKey: Object.create(null),
     _questionById: Object.create(null),
     _fanouts: [],
     _lastPhaseIndex: null,
@@ -64,6 +66,8 @@ function normalizeState(prev) {
   // Snapshots cross the server/browser boundary as JSON, so tolerate loss of
   // null-prototypes and reconstruct private indexes if a caller passes one back.
   prev._agentByIndex ??= Object.fromEntries((prev.agents ?? []).map((a) => [a.index, a]))
+  prev._stepByKey ??= Object.fromEntries((prev.steps ?? []).map((s) => [s.key, s]))
+  prev.steps ??= []
   prev._questionById ??= Object.fromEntries((prev.questions ?? []).map((q) => [q.qid, q]))
   prev._fanouts ??= []
   prev.attemptScopes ??= [{ phases: prev.phases ?? [], logs: prev.logs ?? [], mail: prev.mail ?? [] }]
@@ -346,6 +350,60 @@ function foldAgent(state, ev, offset) {
   }
 }
 
+// Step transitions are a strict subset of agent states (src/engine.js stepImpl):
+// `running` → `done`/`failed`, or a single `cached` on replay. There is no queue, no
+// progress/steered annotations, no usage, and no per-index identity — the journal key
+// IS the identity, so a re-run after a failure (resume) folds onto the same entry and
+// must drop the previous outcome, exactly like an agent's CLEAR_OUTCOME_STATES.
+const STEP_TRANSITION_STATES = new Set(['running', 'cached', 'done', 'failed'])
+const STEP_CLEAR_OUTCOME_STATES = new Set(['running', 'cached', 'done'])
+
+function blankStep(key) {
+  return {
+    key,
+    name: null,
+    state: 'running',
+    displayState: 'running',
+    phaseIndex: null,
+    path: null,
+    startedAt: null,
+    endedAt: null,
+    durationMs: null,
+    error: null,
+    resultPreview: null,
+    cached: false,
+  }
+}
+
+function foldStep(state, ev) {
+  if (typeof ev.key !== 'string' || !ev.key) return
+  const step = state._stepByKey[ev.key] ?? (state._stepByKey[ev.key] = blankStep(ev.key))
+  step.name = valueOr(ev.name, step.name)
+  step.phaseIndex = valueOr(ev.phaseIndex, step.phaseIndex)
+  step.path = valueOr(ev.path, step.path)
+  // Future state strings are retained neutrally, same policy as agents.
+  step.state = typeof ev.state === 'string' ? ev.state : step.state
+  step.displayState = step.state
+  if (!STEP_TRANSITION_STATES.has(ev.state)) return
+  if (STEP_CLEAR_OUTCOME_STATES.has(ev.state)) {
+    step.error = null
+    step.durationMs = null
+    step.resultPreview = null
+    step.endedAt = null
+  }
+  if (ev.state === 'running') step.startedAt = finite(ev.t)
+  if (ev.state === 'done' || ev.state === 'failed') {
+    step.endedAt = finite(ev.t)
+    step.durationMs = finite(ev.durationMs)
+  }
+  // A cache hit emits exactly one event and nothing executed: `t` is the replay
+  // instant and `durationMs` stays cleared, mirroring the agent `cached` rule.
+  if (ev.state === 'cached') step.endedAt = finite(ev.t)
+  step.cached = ev.state === 'cached'
+  if (own(ev, 'error')) step.error = ev.error == null ? null : String(ev.error)
+  if (own(ev, 'resultPreview')) step.resultPreview = ev.resultPreview ?? null
+}
+
 function foldQuestion(state, ev) {
   const qid = String(ev.qid ?? '')
   if (!qid) return
@@ -478,6 +536,9 @@ function buildStructure(state) {
 function exposeCollections(state) {
   exposeScope(state)
   state.agents = Object.values(state._agentByIndex).sort((a, b) => a.index - b.index)
+  // Steps have no index; insertion order IS event order, which is what a JSON
+  // round trip through normalizeState preserves too.
+  state.steps = Object.values(state._stepByKey)
   state.questions = Object.values(state._questionById).sort((a, b) => a.askedAt - b.askedAt)
   state.structure = buildStructure(state)
 }
@@ -498,6 +559,7 @@ export function fold(prev, recs) {
       case 'run': foldRun(state, ev); break
       case 'phase': foldPhase(state, ev); break
       case 'agent': foldAgent(state, ev, offset); break
+      case 'step': foldStep(state, ev); break
       case 'question': foldQuestion(state, ev); break
       case 'answer': foldAnswer(state, ev); break
       case 'mail': foldMail(state, ev); break
@@ -588,6 +650,12 @@ export function materializeFold(raw, runState, caps = deriveCaps(raw?.run)) {
     agent.displayState = dead && (agent.state === 'queued' || agent.state === 'running') ? 'orphaned' : agent.state
     return agent
   })
+  // A step left `running` under a dead run is stranded exactly like an agent —
+  // the callback will never report, and a resume re-runs it (crash-window rule).
+  const steps = state.steps.map((s) => ({
+    ...s,
+    displayState: dead && s.state === 'running' ? 'orphaned' : s.state,
+  }))
   const questions = state.questions.map((q) => ({ ...q, abandoned: dead && !q.answered }))
   const phases = state.phases.map((p) => ({
     ...p,
@@ -607,6 +675,7 @@ export function materializeFold(raw, runState, caps = deriveCaps(raw?.run)) {
     run: state.run ? { ...state.run } : null,
     phases,
     agents,
+    steps,
     questions,
     mail: attemptScopes[state._scope]?.mail ?? [],
     logs: attemptScopes[state._scope]?.logs ?? [],

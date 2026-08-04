@@ -28,6 +28,15 @@
 //                                         exists; a sessionless turn's deliveries are journaled by
 //                                         the engine alongside the COMPLETED result record instead
 //   result    {key, index, status, result, usage, durationMs, adapter, model}
+//   step-start {key, name, args}       — durable step() callback about to execute. A
+//                                         start with no matching step-result is an
+//                                         ambiguous crash window: the callback may or
+//                                         may not have performed its side effect. Policy:
+//                                         resume RE-RUNS it (callbacks must be idempotent
+//                                         or carry their own idempotency keys).
+//   step-result {key, name, status, result?, error?, durationMs} — step outcome. Only
+//                                         status 'completed' is replayed on resume;
+//                                         failed steps re-run like unfinished work.
 //   answer    {qid, value}              — operator answers to ask(), replayed on resume
 //   end       {status, error?}
 import path from 'node:path'
@@ -79,6 +88,11 @@ export class Journal {
       // is absorbed rather than landing alongside the restored copy. Computed
       // below, after mail-done records have cleared what was delivered or dropped.
       restoredWorkflowMail: new Map(),
+      // key -> step-result entry with status 'completed' (last wins). A separate
+      // map from `results` on purpose: agent keys and step keys come from
+      // independent counters and must never satisfy each other's lookups.
+      stepResults: new Map(),
+      stepStarted: new Map(), // key -> step-start entry (observability; NEVER replayed as success)
       started: new Map(),   // key -> started entry
       // key -> number of result records seen for it (E9). `results` is last-wins and
       // hides history; this is the attempt count a resumed attempt numbers itself from.
@@ -159,6 +173,14 @@ export class Journal {
             r.output += e.usage.output ?? 0
             recordedUsage.set(e.key, r)
           }
+          break
+        case 'step-start': state.stepStarted.set(e.key, e); break
+        case 'step-result':
+          // Only completed outcomes are replayable; a failed step re-runs on
+          // resume exactly like unfinished work. Keep last-wins so a later
+          // successful retry supersedes an earlier failure record.
+          if (e.status === 'completed') state.stepResults.set(e.key, e)
+          else state.stepResults.delete(e.key)
           break
         case 'answer': state.answers.set(e.qid, e.value); break
         case 'end': state.end = e; break

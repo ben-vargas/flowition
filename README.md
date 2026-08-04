@@ -154,12 +154,12 @@ security, packaging, and on-disk contracts are documented in
 ### The workflow contract
 
 A workflow is a plain ES module — no source transform, no vm. It exports `meta`
-(`name`, `description`, optional `phases`) and a default async function that
-receives the toolkit:
+(`name`, `description`, optional `phases`, optional `argsSchema`) and a default
+async function that receives the toolkit:
 
 ```js
-export default async function ({ agent, spawn, parallel, pipeline, phase, log,
-                                 ask, sendTo, args, budget, now, random }) { … }
+export default async function ({ agent, spawn, step, parallel, pipeline, phase,
+                                 log, ask, sendTo, args, budget, now, random }) { … }
 ```
 
 `agent(prompt, opts)` resolves to the agent's final text, or a validated object
@@ -169,6 +169,59 @@ immediately with a steerable handle (`{ done, send }`). `parallel(thunks)` is a
 barrier; `pipeline(items, ...stages)` runs each item through stages with no
 barrier between them — prefer it. `flowition guide` prints the full authoring
 contract, written to be pasted into an agent's context.
+
+### Input contracts
+
+`meta.argsSchema` declares what the run's `--args` value must look like, using
+the same JSON Schema subset as agent output schemas (unsupported keywords are
+rejected loudly, never silently ignored):
+
+```js
+export const meta = {
+  name: 'release',
+  description: 'cut and publish a release',
+  argsSchema: {
+    type: 'object',
+    properties: { version: { type: 'string', minLength: 1 }, dryRun: { type: 'boolean' } },
+    required: ['version'],
+    additionalProperties: false,
+  },
+}
+```
+
+The effective args are validated before any agent or step executes — on fresh
+runs and resumes alike — and a violation fails the run with the schema paths
+that did not match. No defaults are merged: the toolkit's `args` is still the
+`--args` value verbatim.
+
+### Durable steps
+
+`step(name, args, fn)` runs local code — git commands, file writes, API calls —
+as a journaled unit of work. When the callback completes, its JSON result is
+written to the journal, and a resume *replays* the recorded result instead of
+re-executing the callback (incomplete or failed attempts re-run):
+
+```js
+const branch = await step('create-branch', { name: `release/${args.version}` }, async () => {
+  execSync(`git switch -c release/${args.version}`)
+  return { branch: `release/${args.version}` }
+})
+```
+
+`name` plus the canonicalized `args` are part of the step's resume identity —
+changed args are a different step and never reuse a cached result. Steps keep
+their own per-branch counter, independent of agents, so inserting or removing a
+step never shifts agent resume keys. Args and results must be plain JSON
+(`undefined`, functions, `NaN`, `BigInt`, and cycles are rejected loudly); a
+void callback resolves to `null`. Steps appear in `flowition status`, `tail`,
+the web viewer's run snapshot,
+and the MCP snapshot alongside agents.
+
+The guarantee is durable memoization, **not** exactly-once side effects: an
+append-only journal cannot commit an external effect and its completion record
+atomically. A completed step never re-runs; a step interrupted between its
+effect and its completion record — and a *failed* step — re-runs on resume.
+Write callbacks to be idempotent, or carry an idempotency key in `args`.
 
 ### Editor autocomplete
 
@@ -263,7 +316,8 @@ from its branch, index, prompt, and resolved spec, so replay is stable
 regardless of completion order.
 
 `flowition resume <runId>` (or `flowition run <file> --resume <runId>`) replays completed
-agents from the journal and re-runs the rest; an interrupted agent whose
+agents and completed `step()` results from the journal and re-runs the rest; an
+interrupted agent whose
 provider session id was journaled *continues that session* with an
 "interrupted, finish the task" nudge rather than starting over. Undelivered
 steering mail is restored, `ask()` answers replay, and the budget ceiling is

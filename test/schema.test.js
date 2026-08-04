@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { validate } from '../src/schema.js'
-import { parseJsonLoose, canonical } from '../src/util.js'
+import { parseJsonLoose, canonical, assertJsonValue } from '../src/util.js'
 
 test('validate: types, required, nested, arrays, enum', () => {
   const schema = {
@@ -122,4 +122,50 @@ test('parseJsonLoose: fences, prose, plain', () => {
 
 test('canonical: key order independence', () => {
   assert.equal(canonical({ b: 1, a: [{ d: 2, c: 3 }] }), canonical({ a: [{ c: 3, d: 2 }], b: 1 }))
+})
+
+test('validate: malformed keyword shapes are rejected loudly, including explicit null', () => {
+  assert.ok(validate({ anyOf: { type: 'string' } }, 'x').some((e) => e.includes('malformed "anyOf"')))
+  assert.ok(validate({ enum: {} }, 'x').some((e) => e.includes('malformed "enum"')))
+  assert.ok(validate({ required: {} }, {}).some((e) => e.includes('malformed "required"')))
+  assert.ok(validate({ properties: [] }, {}).some((e) => e.includes('malformed "properties"')))
+  // explicit null is malformed too — not "absent"
+  assert.ok(validate({ anyOf: null }, 'x').some((e) => e.includes('malformed "anyOf"')))
+  assert.ok(validate({ enum: null }, 'x').some((e) => e.includes('malformed "enum"')))
+  assert.ok(validate({ required: null }, {}).some((e) => e.includes('malformed "required"')))
+  assert.ok(validate({ properties: null }, {}).some((e) => e.includes('malformed "properties"')))
+  // nested malformed shapes are caught off the value path too
+  assert.ok(validate({ type: 'object', properties: { x: { enum: {} } } }, {}).some((e) => e.includes('malformed "enum" at $.x')))
+})
+
+test('assertJsonValue: sparse arrays are rejected, never keyed or persisted sparse', () => {
+  // Array#map preserves holes — a sparse array would canonical()-collide with
+  // a shorter array while JSON-serializing as [null]; fresh and replayed
+  // results must never diverge like that.
+  assert.throws(() => assertJsonValue(Array(1), 'v'), /array hole/)
+  assert.throws(() => assertJsonValue([1, , 3], 'v'), /at \[1\] is an array hole/)
+  assert.throws(() => assertJsonValue({ a: [ , ] }, 'v'), /at a\[0\] is an array hole/)
+  // dense arrays still pass untouched
+  assert.deepEqual(assertJsonValue([1, null, 'x'], 'v'), [1, null, 'x'])
+})
+
+test('assertJsonValue: an own __proto__ property survives the copy', () => {
+  const v = JSON.parse('{"__proto__":{"x":1},"y":2}')
+  const out = assertJsonValue(v, 'v')
+  assert.ok(Object.hasOwn(out, '__proto__'), 'own __proto__ key preserved')
+  assert.deepEqual(Object.getOwnPropertyDescriptor(out, '__proto__').value, { x: 1 })
+  assert.equal(Object.getPrototypeOf(out), Object.prototype, 'real prototype untouched')
+  assert.equal(out.y, 2)
+  // identity holds across the JSON round trip a journal replay performs
+  assert.equal(canonical(JSON.parse(JSON.stringify(out))), canonical(out))
+})
+
+test('assertJsonValue: -0 normalizes to 0 — fresh and replayed results must be identical', () => {
+  // JSON.stringify(-0) === "0", so an un-normalized -0 would differ from its
+  // own journal replay (Object.is distinguishes them; 1/x flips sign).
+  assert.ok(Object.is(assertJsonValue(-0, 'v'), 0))
+  assert.ok(!Object.is(assertJsonValue(-0, 'v'), -0))
+  assert.ok(Object.is(assertJsonValue({ a: [-0] }, 'v').a[0], 0))
+  // ordinary numbers pass through untouched
+  assert.equal(assertJsonValue(-1.5, 'v'), -1.5)
 })

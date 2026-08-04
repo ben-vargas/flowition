@@ -82,6 +82,7 @@ async function runSnapshot(runId) {
     ...detail,
     phases: snap.phases,
     agents: [...snap.agents.values()],
+    steps: [...snap.steps.values()],
     questions: [...snap.questions.values()].filter((q) => !q.answered).map((q) => ({ qid: q.qid, question: q.question })),
   }
 }
@@ -128,7 +129,7 @@ async function callTool(name, a) {
       // E14: same unfiltered listing as `flowition runs` — custom `--run-id` runs and
       // dirs still in their startup window are runs too
       const snapshots = await Promise.all(listRunIds().map((id) => runSnapshot(id)))
-      return snapshots.map(({ agents, phases, ...r }) => r)
+      return snapshots.map(({ agents, steps, phases, ...r }) => r)
     }
     case 'flowition_guide': return { guide: GUIDE }
     default: return { error: `unknown tool ${name}` }

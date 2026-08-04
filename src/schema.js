@@ -35,19 +35,32 @@ function checkKeywords(schema, path, errs) {
     }
   }
   // Same silent-accept class as unknown keywords: shapes this validator would
-  // ignore rather than enforce are rejected, not skipped.
+  // ignore rather than enforce are rejected, not skipped. Malformed shapes
+  // (non-array anyOf/enum/required, non-object properties) are structural
+  // errors too — validateValue would crash on them, and a crash is a worse
+  // error message than a rejection.
   if (Array.isArray(schema.items)) errs.push(`unsupported tuple-form "items" array at ${path} — items must be a single schema`)
   else if (schema.items != null) checkKeywords(schema.items, `${path}[*]`, errs)
   if (schema.additionalProperties != null && typeof schema.additionalProperties !== 'boolean') {
     errs.push(`unsupported non-boolean "additionalProperties" at ${path} — only true/false is enforced`)
   }
-  for (const k of Object.keys(schema.properties ?? {})) checkKeywords(schema.properties[k], `${path}.${k}`, errs)
-  if (Array.isArray(schema.anyOf)) for (const s of schema.anyOf) checkKeywords(s, path, errs)
+  if (Object.hasOwn(schema, 'enum') && !Array.isArray(schema.enum)) errs.push(`malformed "enum" at ${path} — must be an array of values`)
+  if (Object.hasOwn(schema, 'required') && !Array.isArray(schema.required)) errs.push(`malformed "required" at ${path} — must be an array of property names`)
+  if (Object.hasOwn(schema, 'properties') && (schema.properties == null || typeof schema.properties !== 'object' || Array.isArray(schema.properties))) {
+    errs.push(`malformed "properties" at ${path} — must be an object of schemas`)
+  } else {
+    for (const k of Object.keys(schema.properties ?? {})) checkKeywords(schema.properties[k], `${path}.${k}`, errs)
+  }
+  if (Object.hasOwn(schema, 'anyOf') && !Array.isArray(schema.anyOf)) errs.push(`malformed "anyOf" at ${path} — must be an array of schemas`)
+  else if (Array.isArray(schema.anyOf)) for (const s of schema.anyOf) checkKeywords(s, path, errs)
 }
 
 export function validate(schema, value, path = '$') {
   const errs = []
   checkKeywords(schema, path, errs)
+  // A structurally invalid schema has no meaningful value verdict — and
+  // validateValue may crash on the very shapes checkKeywords just rejected.
+  if (errs.length) return errs
   errs.push(...validateValue(schema, value, path))
   return errs
 }

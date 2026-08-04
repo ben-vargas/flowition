@@ -87,6 +87,59 @@ export function canonical(v) {
   return '{' + keys.map((k) => JSON.stringify(k) + ':' + canonical(v[k])).join(',') + '}'
 }
 
+// Assert a value is a plain JSON value (no functions, symbols, BigInt, cycles,
+// non-finite numbers, or undefined anywhere inside). Returns a normalized deep
+// copy safe to canonicalize and persist. `what` names the value in errors.
+export function assertJsonValue(v, what = 'value') {
+  const seen = new Set()
+  function walk(x, path) {
+    const at = path ? ` at ${path}` : ''
+    if (x === null) return null
+    const t = typeof x
+    if (t === 'string' || t === 'boolean') return x
+    if (t === 'number') {
+      if (!Number.isFinite(x)) throw new Error(`${what}${at} is a non-finite number (${x}); not valid JSON`)
+      // JSON has no -0: JSON.stringify(-0) === "0", so a fresh -0 would replay
+      // as 0 from the journal. Normalize eagerly — fresh and replayed results
+      // must be identical.
+      return Object.is(x, -0) ? 0 : x
+    }
+    if (t === 'undefined') throw new Error(`${what}${at} is undefined; not valid JSON`)
+    if (t === 'bigint') throw new Error(`${what}${at} is a BigInt; not valid JSON`)
+    if (t === 'function') throw new Error(`${what}${at} is a function; not valid JSON`)
+    if (t === 'symbol') throw new Error(`${what}${at} is a symbol; not valid JSON`)
+    if (seen.has(x)) throw new Error(`${what}${at} contains a circular reference; not valid JSON`)
+    seen.add(x)
+    let out
+    if (Array.isArray(x)) {
+      // Walk by index and reject holes: Array#map PRESERVES holes, so a sparse
+      // array would slip through as sparse — canonical() would key Array(1)
+      // identically to [], while JSON serialization persists it as [null]. A
+      // fresh result and its replay must never diverge like that.
+      out = new Array(x.length)
+      for (let i = 0; i < x.length; i++) {
+        if (!Object.hasOwn(x, i)) throw new Error(`${what}${path ? ` at ${path}[${i}]` : ` at [${i}]`} is an array hole; not valid JSON`)
+        out[i] = walk(x[i], path ? `${path}[${i}]` : `[${i}]`)
+      }
+    } else {
+      const proto = Object.getPrototypeOf(x)
+      if (proto !== Object.prototype && proto !== null) {
+        throw new Error(`${what}${at} is a non-plain object (${x.constructor?.name ?? 'unknown'}); not valid JSON`)
+      }
+      out = {}
+      for (const k of Object.keys(x)) {
+        // defineProperty, not assignment: `out[k] = v` for an own "__proto__"
+        // key (e.g. from JSON.parse('{"__proto__":…}')) would invoke the legacy
+        // prototype setter and silently DROP the property from the copy.
+        Object.defineProperty(out, k, { value: walk(x[k], path ? `${path}.${k}` : k), enumerable: true, writable: true, configurable: true })
+      }
+    }
+    seen.delete(x)
+    return out
+  }
+  return walk(v, '')
+}
+
 // Extract a JSON value from model text: tolerate fences and surrounding prose.
 export function parseJsonLoose(text) {
   if (typeof text !== 'string') return undefined

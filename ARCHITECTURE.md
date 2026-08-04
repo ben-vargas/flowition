@@ -302,13 +302,16 @@ Run dir: `$FLOWITION_HOME/runs/<flo_id>/` (default `~/.flowition`):
   `mail`/`mail-done` (origin-tagged steering messages — workflow-origin ones
   carry their `sender` branch, `callsite` position, and per-(agent, sender,
   callsite) send ordinal `seq` —
-  accepted / delivered into the provider session), `result`, `answer` (ask()
+  accepted / delivered into the provider session), `result`, `step-start`/
+  `step-result` (durable `step()` lifecycle: only `completed` step results are
+  replayed on resume; a start with no result is an ambiguous crash window and
+  the callback re-runs — callbacks must be idempotent), `answer` (ask()
   replies), `end`.
   Loaded strictly on resume: a torn final record (crash mid-append) is repaired by
   truncation; interior corruption refuses to resume rather than silently
   re-running side-effecting history.
-- `events.jsonl` — observability: `run`, `phase`, `agent` state changes, `log`,
-  `question`/`answer`, `mail`.
+- `events.jsonl` — observability: `run`, `phase`, `agent` state changes, `step`
+  state changes, `log`, `question`/`answer`, `mail`.
 - `agents/<index>.jsonl` — per-agent transcript (text/reasoning/tool/mail).
 - `result.json`, `run.log` (detached), `.heartbeat` (5s deadman), `control.sock`,
   `scratch/` (prompt/schema temp files).
@@ -339,6 +342,9 @@ Run dir: `$FLOWITION_HOME/runs/<flo_id>/` (default `~/.flowition`):
 Resume keys are chained positional (v3-style): each `parallel()`/`pipeline()` call
 derives a branch node from a per-branch fan-out counter; items and stages derive
 sub-branches; `agent()` chains branch + local index + prompt + resolved-spec hash.
+`step()` chains branch + its own independent per-branch counter + name +
+canonicalized args, so steps and agents never shift each other's keys and a
+changed step spec never reuses a cached result.
 Keys are concurrency-invariant, so replay is stable regardless of completion order.
 
 `flowition resume <runId>` verifies key version, fileHash, the local import graph hash

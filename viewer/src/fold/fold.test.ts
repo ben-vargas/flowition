@@ -72,6 +72,7 @@ function detailFrom(events: Record<string, unknown>[], state: RunState = 'runnin
     declaredPhases: null,
     phases: p.phases,
     agents: p.agents,
+    steps: p.steps,
     questions: p.questions,
     mail: p.mail,
     mailTotal: p.mail.length,
@@ -258,6 +259,25 @@ describe('seedFoldState — snapshot-then-tail (§9.3)', () => {
     expect(a.attemptSpans).toEqual(b.attemptSpans)
     expect(a.run!.endedAt).toBe(b.run!.endedAt)
     expect(a.lastOffset).toBe(b.lastOffset)
+  })
+
+  it('steps survive the seed and keep folding — a tail transition lands on the seeded entry', () => {
+    const detail = detailFrom([
+      ...prefix,
+      { t: 6.5, type: 'step', key: 's1', name: 'create-branch', state: 'running', phaseIndex: 0 },
+    ])
+    expect(detail.steps).toHaveLength(1)
+    const seeded = fold(seedFoldState(detail), records([
+      { t: 7, type: 'step', key: 's1', state: 'done', durationMs: 4, resultPreview: 'ok' },
+    ], detail.offsets.events))
+    const direct = fold(null, records([
+      ...prefix,
+      { t: 6.5, type: 'step', key: 's1', name: 'create-branch', state: 'running', phaseIndex: 0 },
+      { t: 7, type: 'step', key: 's1', state: 'done', durationMs: 4, resultPreview: 'ok' },
+    ]))
+    expect(materializeFold(seeded, 'running').steps).toEqual(materializeFold(direct, 'running').steps)
+    expect(seeded.steps[0]!.state).toBe('done')
+    expect(seeded.steps[0]!.name).toBe('create-branch')
   })
 
   it('the structure survives the first batch — fanouts round-trip through the tree', () => {

@@ -33,6 +33,8 @@ export type RunState =
 
 export type AgentState = 'queued' | 'running' | 'done' | 'failed' | 'cancelled' | 'cached'
 // `steered` and `progress` events are annotations folded INTO AgentView, never states.
+/** Step transitions are a strict subset of agent states: no queue, no cancel. */
+export type StepState = 'running' | 'done' | 'failed' | 'cached'
 
 /** §6.2: one canonical container-path schema (critiques M15/Sol-10). */
 export type PathSeg =
@@ -168,6 +170,28 @@ export interface AgentView {
   cached: boolean
 }
 
+/**
+ * A durable `step()` — journaled local code (src/engine.js stepImpl). Its identity is
+ * the journal KEY (branch + ordinal + name + canonical args), not an index: a resume
+ * re-run of a failed step folds onto the same entry and clears the previous outcome.
+ * `cached` means the completed result was replayed from the journal; nothing executed,
+ * so `durationMs` stays null and `endedAt` is the replay instant.
+ */
+export interface StepView {
+  key: string
+  name: string | null
+  state: StepState
+  displayState: StepState | 'orphaned'
+  phaseIndex: number | null
+  path: PathSeg[] | null
+  startedAt: number | null
+  endedAt: number | null
+  durationMs: number | null
+  error: string | null
+  resultPreview: string | null
+  cached: boolean
+}
+
 export interface StructNode {
   path: PathSeg[]
   kind: 'root' | 'parallel' | 'pipeline' | 'item' | 'stage'
@@ -216,6 +240,8 @@ export interface RunDetail extends Omit<RunSummary, 'agents'> {
   declaredPhases: { title: string; detail?: string }[] | null
   phases: PhaseView[]
   agents: AgentView[]
+  /** Durable `step()` calls, in event order. Absent on runs from engines without steps. */
+  steps?: StepView[]
   questions: QuestionView[]
   mail: MailView[]
   mailTotal: number
@@ -276,6 +302,7 @@ export interface FoldState {
   run: Record<string, unknown> | null
   phases: PhaseView[]
   agents: AgentView[]
+  steps: StepView[]
   questions: QuestionView[]
   mail: MailView[]
   logs: LogView[]
@@ -295,6 +322,7 @@ export interface MaterializedFold {
   run: Record<string, unknown> | null
   phases: PhaseView[]
   agents: AgentView[]
+  steps: StepView[]
   questions: QuestionView[]
   mail: MailView[]
   logs: LogView[]

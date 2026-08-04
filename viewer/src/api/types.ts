@@ -23,6 +23,8 @@ export type {
   RunDetail,
   RunState,
   RunSummary,
+  StepState,
+  StepView,
   StructNode,
 } from '../fold/index.js'
 

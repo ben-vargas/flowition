@@ -326,6 +326,7 @@ export class SnapshotStore {
       concurrency: Number.isInteger(run?.concurrency) ? run.concurrency : null,
       declaredPhases: Array.isArray(run?.phases) ? run.phases : null,
       phases: projected.phases,
+      steps: projected.steps,
       questions: projected.questions,
       mail: projected.mail.slice(-DETAIL_TAIL_RECORDS),
       mailTotal: projected.mail.length,

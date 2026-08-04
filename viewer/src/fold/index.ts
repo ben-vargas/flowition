@@ -75,6 +75,8 @@ export type {
   RunDetail,
   RunState,
   RunSummary,
+  StepState,
+  StepView,
   StructNode,
 } from '../../../src/viewer/fold.js'
 
@@ -341,6 +343,12 @@ export function seedFoldState(detail: RunDetail): FoldState {
   }
   state._agentByIndex = byIndex
 
+  // Steps are event-derived only — no journal join writes to them — so the whole
+  // snapshot copy is safe to keep inside the fold, unlike agents' journal facts.
+  const byKey: Record<string, unknown> = Object.create(null)
+  for (const step of detail.steps ?? []) byKey[step.key] = clone(step)
+  state._stepByKey = byKey
+
   // A pre-E7 run answers ONLY in the journal (src/engine.js:699 appends the record; the
   // `answer` EVENT at :701 belongs to the same engine cohort as every Cap), so for a
   // legacy snapshot `answered`/`answer` are a journal projection like any other and go to
@@ -365,5 +373,5 @@ export function seedFoldState(detail: RunDetail): FoldState {
 
 /** The fold owns these; anything else on the events stream is counted, never applied. */
 export const EVENT_TYPES = Object.freeze([
-  'run', 'phase', 'agent', 'question', 'answer', 'mail', 'log', 'fanout',
+  'run', 'phase', 'agent', 'step', 'question', 'answer', 'mail', 'log', 'fanout',
 ])

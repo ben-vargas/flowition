@@ -4,7 +4,19 @@ Measured 2026-07-31 on a 16-core Apple M3 Max MacBook Pro with 64 GB RAM,
 macOS 27.0 (26A5388g), Node 24.14.0, and Google Chrome 150.0.7871.187.
 These are development-machine measurements, not portable benchmarks.
 
-Measured-source SHA-256: `5927fff171a9c307b449374d554b35340bdf8f62355a9272eec18c88b039769e`
+Measured-source SHA-256: `9aa5ffc6a7a05ff0de72d43805c7909afe17d0cee99ea722fc0e6f9d76981b80`
+
+Hash rebound 2026-08-04 for durable `step()` viewer support: `src/viewer/fold.js`
+gained an additive `step` event fold (a `steps` collection beside `agents`; no change
+to any existing fold path), `fold.d.ts` the matching `StepView` declarations, and
+`src/viewer/snapshot.js` one projected `steps` field on RunDetail. `viewer/dist`
+was rebuilt (`app.js` carries the shared fold, so its bytes change; `index.html`,
+`app.css` and all other assets are byte-identical) — no UI component consumes the new
+collection yet, so every measured browser code path renders identical work. Server
+paths were re-validated by the root suite plus new step-fold tests; browser rows below
+were NOT re-measured for this entry and remain measurements of the previous bundle's
+identical hot paths. The next dist-changing entry that adds step RENDERING re-measures
+in full.
 
 Hash rebound 2026-08-03 for the first-CI-run fixes (favicon CSP compliance + Linux
 portability). Dist delta since the fully measured tab-identity entry below: ONLY

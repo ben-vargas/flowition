@@ -18,7 +18,7 @@ function seedState(branchKey, runSeed) {
 // the engine. Neither is an input to agentKey/deriveBranch — resume keys must stay
 // byte-identical (pinned by test/engine-events.test.js).
 export function makeCtx(branchKey, runSeed, path = []) {
-  return { branch: branchKey, runSeed, agentIndex: 0, fanoutIndex: 0, questionIndex: 0, rngState: seedState(branchKey, runSeed), nowCount: 0, path, phase: null }
+  return { branch: branchKey, runSeed, agentIndex: 0, stepIndex: 0, fanoutIndex: 0, questionIndex: 0, rngState: seedState(branchKey, runSeed), nowCount: 0, path, phase: null }
 }
 
 export const rootCtx = (runSeed) => makeCtx(sha256(KEY_VERSION + '\0root'), runSeed, [])
@@ -32,6 +32,15 @@ export function deriveBranch(parentBranch, kind, index) {
 export function agentKey(ctx, prompt, keyedFields) {
   const idx = ctx.agentIndex++
   return sha256(KEY_VERSION + '\0' + ctx.branch + '\0agent\0' + idx + '\0' + prompt + '\0' + canonical(keyedFields))
+}
+
+// Step keys use an independent per-branch counter (`stepIndex`, not `agentIndex`)
+// so inserting or removing a step() never shifts agent keys in the same branch,
+// and vice versa. Name + canonicalized args are part of the key: a changed spec
+// is a different step and never reuses a cached result.
+export function stepKey(ctx, name, args) {
+  const idx = ctx.stepIndex++
+  return sha256(KEY_VERSION + '\0' + ctx.branch + '\0step\0' + idx + '\0' + name + '\0' + canonical(args))
 }
 
 export const explicitKey = (k) => sha256(KEY_VERSION + '\0explicit\0' + k)
