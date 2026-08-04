@@ -2692,6 +2692,19 @@ receipt. `--stop` is an action, not a modifier: it refuses every other viewer fl
 except `--json`. Foreground semantics of `flowition viewer` are unchanged (the operator
 runs it in tmux and wants it visible and killable); no `--detach` is introduced.
 
+**16.9 The live-session walkthrough is a local release gate (2026-08-04).** The §12.1
+item-5 live session (`features/control/e2e.test.tsx`, the single marathon test driving a
+real engine, a real viewer server, SSE and the shipped App through
+answer→steer→cancel→resume→delete) runs in every local `npm test` as its own vitest
+invocation, and self-skips on GitHub's shared runners. Four hardening rounds (worker
+heap ceiling, CI-scaled wait windows, a solo invocation) ended with forensics showing
+the runner executing every step correctly at 30–100× local latency — 38 s for an
+answer→steer sequence that takes ~2 s locally — which no honest window survives. This
+is the same standing §11/§12 already give the Playwright suite and the perf P-block:
+release gates run on the reference machine, not on burst-throttled shared hardware. CI
+retains the API-stubbed walkthrough, this file's smaller live-server tests, the full
+root suite, and the dist byte-determinism check.
+
 
 
 *End of DESIGN.md.*

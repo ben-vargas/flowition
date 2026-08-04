@@ -57,6 +57,12 @@ jobs:
       - name: Rebuild viewer and verify committed dist + CSP inline policy
         run: npm run check:dist
         working-directory: viewer
+      # The full suite, minus one deliberate skip: the live-session §12.1 walkthrough
+      # (features/control/e2e.test.tsx, the marathon it()) self-skips under
+      # GITHUB_ACTIONS — see its comment for the measured reasons. It is a LOCAL
+      # release gate, in the same class as the Playwright suite and the perf P-block,
+      # neither of which this workflow has ever run. Its API-stubbed twin
+      # (walkthrough.test.tsx) and this file's smaller live-server tests DO run here.
       - run: npm test
         working-directory: viewer
       - name: Verify the published package carries the viewer
