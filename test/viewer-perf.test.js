@@ -242,6 +242,18 @@ test('P2 measured over real HTTP against 5,000 generated runs with 10% stale', {
     assert.equal(warmup.status, 200, warmup.text)
     assert.equal(warmup.json.totalOnDisk, 5_000)
   }
+  // ...and one more warm-up on the far side of the artifact TTL. The burst above never
+  // crosses it, so the FIRST TTL-crossing refresh — the only genuinely cold one, paying
+  // first-touch artifact stats across all 5,000 run dirs — was landing in measured
+  // sample 1 wearing a steady-state label it had not earned. CI's slower shared runners
+  // made the mislabelling visible: 785.6/66.6/104.5/65.6/109.9 ms — every actually-steady
+  // sample deep inside budget, the cold refresh alone above it. Steady-state refresh cost
+  // is still measured: the sampling cadence below crosses the TTL on alternating samples.
+  // (6_000 = summaries.js ARTIFACT_TTL_MS; +500 keeps timer jitter from landing short.)
+  await new Promise((resolve) => setTimeout(resolve, 6_500))
+  const refreshWarmup = await request(viewer, '/api/runs?limit=200', probe)
+  assert.equal(refreshWarmup.status, 200, refreshWarmup.text)
+  assert.equal(refreshWarmup.json.totalOnDisk, 5_000)
   const samples = []
   for (let i = 0; i < STEADY; i++) {
     await new Promise((resolve) => setTimeout(resolve, RUN_LIST_POLL_MS))

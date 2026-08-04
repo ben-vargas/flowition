@@ -37,12 +37,52 @@ import fs from 'node:fs'
 import http from 'node:http'
 import os from 'node:os'
 import path from 'node:path'
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { configure, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { getFocusableTreeWalker } from '@react-aria/focus'
-import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import { App } from '../../app/App.js'
 import { api } from '../../api/client.js'
 import { resetRouteForTests } from '../../app/router.js'
+
+// This walkthrough owns SEQUENCE correctness — blocked → answered → steered → cancelled
+// → resumed → trashed, in one session — and deliberately NOT cadence: `runStore.test.ts`
+// owns the 10 s snapshot poll's own contract. At the production cadence the walkthrough's
+// state transitions each cost up to a poll interval, which summed to 60 s on the
+// reference machine and 108 s on Linux — and on CI's slower shared runners pushed
+// individual waits past their windows (the first-ever CI runs failed exactly there).
+// So the store's DEFAULT poll shrinks for this file only; every option a caller passes
+// explicitly still wins, and nothing shipped changes.
+vi.mock('../../state/runStore.js', async (importOriginal) => {
+  const mod = await importOriginal<typeof import('../../state/runStore.js')>()
+  return {
+    ...mod,
+    createRunStore: (options: Parameters<typeof mod.createRunStore>[0]) =>
+      mod.createRunStore({ pollMs: 250, ...options }),
+  }
+})
+
+// Same reasoning for the rail: its 5 s list poll is what refreshes the run facts the
+// ⌘K palette snapshots, so at production cadence every palette step waits out most of a
+// poll interval for its row to become current-and-enabled.
+vi.mock('../../app/RunRail.js', async (importOriginal) => {
+  const react = await import('react')
+  const mod = await importOriginal<typeof import('../../app/RunRail.js')>()
+  return {
+    ...mod,
+    RunRail: react.forwardRef((props: Record<string, unknown>, ref) =>
+      react.createElement(mod.RunRail as never, { pollMs: 250, ...props, ref })),
+  }
+})
+
+// Instrumented accounting of where this walkthrough's time actually goes: the dominant
+// waits are the ENGINE's own lifecycle transitions (a cancel settling its agents, a
+// resume's detached spawn and preflight scan) — 1–5 s each on the reference machine and
+// legitimately several times that on CI's shared runners. Cadence was a minor term. So
+// the windows scale for CI rather than the product being rushed: Testing Library's 1 s
+// default is calibrated for component tests, and "Unable to find role=option at 1 s" on
+// a busy runner is a runner-speed report, not a product defect.
+const WAIT_WINDOW_MS = process.env.CI ? 60_000 : 20_000
+configure({ asyncUtilTimeout: WAIT_WINDOW_MS })
 
 // The viewer home is REALPATH'd and its prefix kept short for the same reason
 // test/viewer-control.test.js does it: `sun_path` is 104 bytes on macOS and the run's
@@ -501,7 +541,7 @@ beforeAll(async () => {
   } as never) as Viewer
   restoreFetch = installFetch()
   ;(globalThis as { EventSource?: unknown }).EventSource = NodeEventSource
-}, 30_000)
+}, process.env.CI ? 90_000 : 30_000)
 
 afterAll(async () => {
   restoreFetch?.()
@@ -530,7 +570,7 @@ const mountApp = (route = '/') => {
   return render(<App />)
 }
 
-const SLOW = { timeout: 20_000, interval: 50 }
+const SLOW = { timeout: WAIT_WINDOW_MS, interval: 50 }
 
 /**
  * Keyboard activation OF WHATEVER HAS FOCUS. It takes no target, on purpose.
@@ -727,7 +767,7 @@ describe('§12.1 item 5 — a live viewer, end to end', () => {
     const question = detail.questions?.find((q) => q.qid === 'q0')
     expect(question?.answered).toBe(true)
     expect(detail.openQuestions ?? 0).toBe(0)
-  }, 40_000)
+  }, process.env.CI ? 120_000 : 40_000)
 
   it('delete: focus lands on Home’s heading, never on the deleted run’s opener (§3.6)', async () => {
     mountApp(`/run/${DEL_RUN}`)
@@ -761,7 +801,7 @@ describe('§12.1 item 5 — a live viewer, end to end', () => {
     expect(landing?.textContent).toBe('Runs')
     expect(document.activeElement).not.toBe(document.body)
     expect(opener.isConnected).toBe(false)
-  }, 40_000)
+  }, process.env.CI ? 120_000 : 40_000)
 })
 
 /**
@@ -1193,5 +1233,5 @@ describe('§12.1 item 5 — one session, one run, from blocked to trashed', () =
       expect(document.activeElement).toBe(landing)
     }, SLOW)
     expect(window.location.hash).not.toContain(WALK_RUN)
-  }, 120_000)
+  }, process.env.CI ? 360_000 : 120_000)
 })

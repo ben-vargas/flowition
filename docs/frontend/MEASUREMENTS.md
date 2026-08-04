@@ -4,7 +4,7 @@ Measured 2026-07-31 on a 16-core Apple M3 Max MacBook Pro with 64 GB RAM,
 macOS 27.0 (26A5388g), Node 24.14.0, and Google Chrome 150.0.7871.187.
 These are development-machine measurements, not portable benchmarks.
 
-Measured-source SHA-256: `833e727d19c8997c5e33774f7842de0782313efd721ec97103e4654090384857`
+Measured-source SHA-256: `5927fff171a9c307b449374d554b35340bdf8f62355a9272eec18c88b039769e`
 
 Hash rebound 2026-08-03 for the first-CI-run fixes (favicon CSP compliance + Linux
 portability). Dist delta since the fully measured tab-identity entry below: ONLY
