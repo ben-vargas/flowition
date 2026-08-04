@@ -44,6 +44,12 @@ import { App } from '../../app/App.js'
 import { api } from '../../api/client.js'
 import { resetRouteForTests } from '../../app/router.js'
 
+// This file runs in its OWN vitest invocation (`npm test` chains it after the parallel
+// pass — the `test:perf` precedent): it is a complete engine+server+SPA session, and on
+// a 4-vCPU CI runner sharing the machine with three other worker forks its effective
+// budget was a fraction of a core — the CI forensics showed a steer POST taking >60 s to
+// even REACH the engine. Alone, the same runner passes with minutes of headroom.
+//
 // Instrumented accounting of where this walkthrough's time actually goes: the dominant
 // waits are the ENGINE's own lifecycle transitions (a cancel settling its agents, a
 // resume's detached spawn and preflight scan) — 1–5 s each on the reference machine and

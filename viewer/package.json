@@ -12,7 +12,8 @@
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
     "tokens": "node scripts/emit-tokens.mjs",
-    "test": "vitest run && npm run test:perf",
+    "test": "vitest run --exclude '**/control/e2e.test.tsx' && npm run test:walkthrough && npm run test:perf",
+    "test:walkthrough": "vitest run src/features/control/e2e.test.tsx",
     "test:watch": "vitest",
     "test:e2e": "playwright test",
     "test:perf": "FLO_PERF=1 vitest run --config vitest.perf.config.ts src/fold/bench.test.ts src/state/runStore.test.ts src/features/transcript/performance.test.tsx src/features/transcript/packageGraph.test.ts"
