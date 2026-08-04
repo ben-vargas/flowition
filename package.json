@@ -18,8 +18,8 @@
     }
   },
   "bin": {
-    "flowition": "./bin/flowition.js",
-    "flo": "./bin/flowition.js"
+    "flowition": "bin/flowition.js",
+    "flo": "bin/flowition.js"
   },
   "engines": {
     "node": ">=18.17"
