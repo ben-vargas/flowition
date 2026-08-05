@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { SummaryStore, decodeRunsCursor } from '../src/viewer/summaries.js'
+import { SummaryStore, decodeRunsCursor, quiescentTtlMs } from '../src/viewer/summaries.js'
 
 const line = (rec) => JSON.stringify(rec) + '\n'
 
@@ -62,10 +62,22 @@ test('summary cache tiers, run.lock invalidation, meta identity, pruning, and cu
   await store.list({ limit: 20 })
   assert.equal(calls.get('live.one'), 2, 'live tier re-derives at 2 seconds')
   assert.equal(calls.get('stale_one'), 1, 'quiescent tier remains cached')
-  now += 28_000
+  // Quiescent TTLs are jittered ±25% around 30 s per directory (herd avoidance);
+  // the entry must hold until ITS OWN deadline, then re-derive exactly there.
+  const staleTtl = quiescentTtlMs(path.join(root, 'stale_one'))
+  assert.ok(staleTtl >= 22_500 && staleTtl <= 37_500, 'jittered TTL stays within ±25% of 30 s')
+  now = 1000 + staleTtl - 1
   await store.list({ limit: 20 })
-  assert.equal(calls.get('stale_one'), 2, 'quiescent tier re-derives at 30 seconds')
+  assert.equal(calls.get('stale_one'), 1, 'quiescent entry stays cached until its own deterministic deadline')
+  now = 1000 + staleTtl
+  await store.list({ limit: 20 })
+  assert.equal(calls.get('stale_one'), 2, 'quiescent tier re-derives at its ~30 s jittered deadline')
   assert.equal(calls.get('named-run'), 1, 'settled tier remains cached')
+
+  fs.writeFileSync(path.join(root, 'stale_one', 'run.lock'), '{}')
+  await store.list({ limit: 20 })
+  assert.equal(calls.get('stale_one'), 3, 'a lock appearing re-derives a quiescent verdict immediately, TTL notwithstanding')
+  fs.unlinkSync(path.join(root, 'stale_one', 'run.lock'))
 
   fs.writeFileSync(path.join(terminal, 'run.lock'), '{}')
   const locked = await store.list({ limit: 20 })
@@ -208,9 +220,40 @@ test('5,000-run cache tier amortizes artifact stats and keeps signal probes imme
   await store.list({ limit: 200 })
   assert.equal(metadataCalls, 5000 * 4,
     'the 6 second artifact TTL refreshes events/journal stats while keeping signal probes')
-  assert.equal(stateCalls, 0, 'an artifact refresh does not bypass the 30 second quiescent TTL')
+  assert.equal(stateCalls, 0, 'an artifact refresh does not bypass the quiescent TTL (≥ 22.5 s even jittered)')
 
-  now += 28_000
+  // All 500 quiescent rows were classified in the same cold pass (checkedAt 0), the
+  // exact condition that used to make them expire together and dump 500 re-derives on
+  // one request (the P2 herd). Jittered TTLs spread the deadlines over 22.5–37.5 s:
+  // a mid-spread poll re-probes only the rows whose own deadline has passed, and the
+  // remainder re-probe by the spread's upper bound — each exactly once.
+  const quiescentDirs = Array.from({ length: 500 },
+    (_, i) => path.join(root, `run_${String(i).padStart(4, '0')}`))
+  now += 28_000 // 34,001 — inside the spread
+  const due = quiescentDirs.filter((dir) => quiescentTtlMs(dir) <= now).length
+  assert.ok(due > 0 && due < 500, `a mid-spread poll must catch a strict subset of the herd (${due}/500)`)
   await store.list({ limit: 200 })
-  assert.equal(stateCalls, 500, 'only the 10% quiescent rows re-probe after 30 seconds')
+  assert.equal(stateCalls, due, 'only the rows past their own jittered deadline re-probe — never the whole herd')
+
+  stateCalls = 0
+  now = 37_500 // the spread's upper bound
+  await store.list({ limit: 200 })
+  assert.equal(stateCalls, 500 - due,
+    'the remaining rows re-probe by the spread upper bound, and none re-probes twice')
+})
+
+test('quiescent TTL jitter is deterministic, bounded, and leaves no poll-window herd', () => {
+  const dirs = Array.from({ length: 500 }, (_, i) => `/home/runs/run_${String(i).padStart(4, '0')}`)
+  const ttls = dirs.map(quiescentTtlMs)
+  for (const ttl of ttls) assert.ok(ttl >= 22_500 && ttl <= 37_500, `TTL ${ttl} outside ±25% of 30 s`)
+  assert.deepEqual(dirs.map(quiescentTtlMs), ttls, 'a directory keeps the same TTL forever')
+  assert.ok(new Set(ttls).size > 400, `deadlines must spread, not cluster (${new Set(ttls).size} unique)`)
+  // The runs list polls every 5 s; no single poll window may inherit most of the herd.
+  const windows = new Map()
+  for (const ttl of ttls) {
+    const w = Math.floor(ttl / 5_000)
+    windows.set(w, (windows.get(w) ?? 0) + 1)
+  }
+  const worst = Math.max(...windows.values())
+  assert.ok(worst < 250, `worst 5 s poll window holds ${worst}/500 quiescent expiries`)
 })

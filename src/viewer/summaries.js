@@ -10,6 +10,7 @@ import { MAX_JSONL_LINE_BYTES } from './pages.js'
 const LIVE_TTL_MS = 2000
 const ARTIFACT_TTL_MS = 6000
 const QUIESCENT_TTL_MS = 30_000
+const QUIESCENT_TTL_SPREAD = 0.25
 const SETTLED = new Set(['completed', 'failed', 'interrupted'])
 const QUIESCENT = new Set(['stale', 'unknown', 'corrupt-result'])
 const RUN_STATES = new Set(['running', 'starting', 'completed', 'failed', 'interrupted', 'corrupt-result', 'stale', 'unknown'])
@@ -23,6 +24,24 @@ const statOrNull = (file, fsImpl = fs) => {
 }
 const sig = (s) => s ? `${s.dev}:${s.ino}:${s.size}:${s.mtimeMs}` : '-'
 const identity = (s) => s ? `${s.dev}:${s.ino}` : null
+
+// Quiescent runs are usually all classified during the same cold request, so a single
+// fixed TTL makes every one of them expire on the same later request — 500 stale runs
+// re-derive at once and that request alone blows the P2 budget while its neighbours
+// coast. Spreading each run's TTL deterministically over ±25% of the 30 s base keeps
+// the population's amortized probe rate at ~1/30 s per run (DESIGN §5.4.2/§10 P2)
+// while making a synchronized expiry herd structurally impossible. The spread is a
+// pure function of the run directory (FNV-1a), not Math.random(): the same run keeps
+// the same deadline across requests and across restarts, and tests can compute it.
+export function quiescentTtlMs(dir) {
+  let h = 0x811c9dc5
+  for (let i = 0; i < dir.length; i++) {
+    h ^= dir.charCodeAt(i)
+    h = Math.imul(h, 0x01000193)
+  }
+  const unit = (h >>> 0) / 0x1_0000_0000 // [0, 1)
+  return Math.round(QUIESCENT_TTL_MS * (1 + QUIESCENT_TTL_SPREAD * (2 * unit - 1)))
+}
 
 export function encodeRunsCursor({ createdAt, runId }) {
   return Buffer.from(JSON.stringify({ createdAt, runId })).toString('base64url')
@@ -237,7 +256,7 @@ export class SummaryStore {
     const cached = entry.state
     let valid = cached && cached.eventSignature === eventSignature && !signalPresent
     if (valid && SETTLED.has(cached.value.state)) return cached.value
-    if (valid && QUIESCENT.has(cached.value.state)) valid = now - cached.checkedAt < QUIESCENT_TTL_MS
+    if (valid && QUIESCENT.has(cached.value.state)) valid = now - cached.checkedAt < (entry.quiescentTtl ??= quiescentTtlMs(dir))
     else if (valid) valid = now - cached.checkedAt < LIVE_TTL_MS
     if (valid) return cached.value
     const value = await this.deriveState(dir)

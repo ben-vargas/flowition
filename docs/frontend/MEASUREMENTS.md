@@ -4,7 +4,20 @@ Measured 2026-07-31 on a 16-core Apple M3 Max MacBook Pro with 64 GB RAM,
 macOS 27.0 (26A5388g), Node 24.14.0, and Google Chrome 150.0.7871.187.
 These are development-machine measurements, not portable benchmarks.
 
-Measured-source SHA-256: `269d1e2934e913ed6f4947c5d0b97ff94b9bcaf9fa57d3f499dd398d0834a03e`
+Measured-source SHA-256: `676820953aec34315783705a12a6e7b36eeb45f7865e8b22a2e0ce8eb9e228cf`
+
+Hash rebound 2026-08-05 for quiescent TTL desynchronization (operator-reported P2
+flake): all 500 stale runs in the P2 mix were classified during the same cold request,
+so the former fixed 30 s quiescent TTL expired them together and dumped ~500
+`deriveRunState` re-derives on a single later poll — measured at 143.8 ms on steady-state
+request 5/5 under the concurrent root suite (budget 120 ms), while its neighbours ran
+~65–115 ms. `src/viewer/summaries.js` now jitters each run's quiescent TTL
+deterministically (±25% around 30 s, FNV-1a over the run directory — no `Math.random()`,
+same deadline across requests and restarts), bounding any 5 s poll window to roughly a
+third of the herd while preserving the amortized ~1/30 s probe rate. Server-only change;
+`viewer/dist` is byte-identical and no browser row was re-measured. P2 re-measured
+in isolation after the change: 77.8/87.5/65.5/105.3/82.1 ms — the spread expiries now
+amortize across samples instead of landing on one (full-suite row below).
 
 Hash rebound 2026-08-05 for the fit-zoom meta gutter (operator-reported): `cockpit.css`
 gained `--meta-gutter` padding on `.tl-plot`, reserving room for the trailing `.bar-meta`
@@ -138,7 +151,7 @@ panel round 5, which scoped four CSS name collisions.)
 | --- | --- | ---: | ---: | --- |
 | P1 | Built viewer, 200-run Home, navigation start to visible table | 210.7–249.9 ms across five consecutive full-gate runs | 500 ms | Pass (5/5) |
 | P1 | Real server, warm 200-run list request | 3.4 ms | 150 ms | Pass |
-| P2 | Real HTTP warm listing over 5,000 generated run dirs, 4,500 settled and 500 stale, sampled at the shipped 5 s poll cadence inside the concurrent root suite | 74.8 ms worst of five (47.6–74.8 ms); at most 10,000 immediate signal stats; artifact refresh included | 120 ms local / 360 ms CI; at most 2 immediate signal stats/run | Pass |
+| P2 | Real HTTP warm listing over 5,000 generated run dirs, 4,500 settled and 500 stale, sampled at the shipped 5 s poll cadence inside the concurrent root suite | 91.6 ms worst of five (67.4–91.6 ms, 2026-08-05 after quiescent TTL jitter; the pre-jitter herd spiked one sample to 143.8 ms); at most 10,000 immediate signal stats; artifact refresh and spread quiescent re-derives included | 120 ms local / 360 ms CI; at most 2 immediate signal stats/run | Pass |
 | P3 | Built viewer, cold cockpit route over a 10 MiB journal | 852.9–865.7 ms across five consecutive full-gate runs | 1,000 ms | Pass (5/5) |
 | P3 | Real server, cold fold then one-record delta | 49.8 ms cold; 0.9 ms delta | 400 ms; 20 ms | Pass |
 | P4 | 120,000-record fold | 8,783,353 records/s | at least 50,000 records/s | Pass |
@@ -171,7 +184,9 @@ staleRatio: 0.1})`. Its five measured requests are each separated by the shipped
 RunRail poll interval, so the samples cross the 6-second artifact TTL and include both
 reused and refreshed artifact metadata. The instrumented `SummaryStore` test separately
 owns the two immediate resume-signal stats, 6-second artifact-stat amortization, and
-30-second quiescent-probe contracts; it is not used as a timing surrogate. The viewer `test`
+jittered ~30-second quiescent-probe contracts (including that a cold-classified herd
+re-derives as a strict subset per poll, never all at once); it is not used as a timing
+surrogate. The viewer `test`
 script invokes `test:perf`, whose fork pool starts Node with `--expose-gc`, so P6 is
 evaluated by the normal viewer gate.
 

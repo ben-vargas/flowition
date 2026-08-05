@@ -813,10 +813,17 @@ Listing algorithm (this is the 5,000-runs answer):
   `run.lock` is the earliest resume signal and forces a full re-derive. Also
   invalidated by any `events.jsonl` (size,mtime) change.
 - **Quiescent** (`stale|unknown|corrupt-result`): not terminal, but nothing changes
-  them without a lock or marker appearing — re-derive on a 30 s TTL, with the same two
+  them without a lock or marker appearing — re-derive on a ~30 s TTL, with the same two
   stats checked each request (a marker/lock appearing re-derives immediately). This
   keeps 500 stale runs from costing ~7 syscalls + a 300 ms socket-probe ceiling each,
-  every 2 s (critique M4).
+  every 2 s (critique M4). The TTL is **deterministically jittered per run** (±25%
+  around 30 s, FNV-1a over the run directory — not `Math.random()`, so a run keeps the
+  same deadline across requests and restarts): quiescent runs are typically all
+  classified in the same cold request, and a single fixed TTL would make the whole
+  population expire together, dumping every re-derive on one later request — an expiry
+  herd P2 measured as a 143 ms spike on an otherwise ~75 ms steady state. The spread
+  bounds any 5 s poll window to roughly a third of the herd while preserving the
+  amortized ~1/30 s probe rate per run.
 - **Live** (`running|starting`): re-derive at most every 2 s.
 
 The `(size,mtime)` stats for events and journal are amortized over 6 s for signal-free
@@ -828,7 +835,8 @@ at least one production poll reuses artifact metadata before the next refresh.
 
 Cost at 5,000 runs, steady state at the shipped 5 s poll cadence: one root readdir + ≤2 existence stats
 per settled run per request (marker, lock), zero journal parses, zero socket probes for settled
-runs; quiescent runs add their probe cost at 1/30 s each. Probes every 2 s only for the
+runs; quiescent runs add their probe cost at ~1/30 s each, desynchronized by the
+per-run TTL jitter so the population never re-derives in one request. Probes every 2 s only for the
 (few) live runs. P2 (§10) is stated against this mix, and its fixture includes 10%
 stale runs so the budget is tested against the expensive case.
 
@@ -1086,7 +1094,7 @@ regression net), so "shared" is structural, not aspirational.
 | resolved createdAt | (path, ino) | process lifetime — pinned so pagination order is stable (§5.4.2 step 3) |
 | run summary | events.jsonl (size,mtime) | mismatch, dir vanished |
 | settled state (completed/failed/interrupted) | runId | `.resuming` **or `run.lock`** appears (2 stats/request), or events.jsonl changes (§5.4.2 tiers) |
-| quiescent state (stale/unknown/corrupt-result) | runId, 30s TTL | TTL, or marker/lock appears |
+| quiescent state (stale/unknown/corrupt-result) | runId, per-run 30s±25% TTL (deterministic jitter, §5.4.2) | own TTL, or marker/lock appears |
 | deriveRunState (live runs) | runId, 2s TTL | TTL |
 | folded snapshot | (events,journal) (size,mtime) | delta-fold on growth; reset on shrink |
 
@@ -2018,7 +2026,7 @@ thresholds ×3 for machine variance; the local baseline is an M1/M2).
 | # | Metric | Budget | How achieved | How measured |
 |---|---|---|---|---|
 | P1 | Run list TTFMP, 200 runs, warm server | ≤ 500 ms total (server ≤ 150 ms) | summary caches, keyset pagination, virtualized rows | root perf test hits `/api/runs` on a generated 200-run home; DOM test measures first commit |
-| P2 | Run list server cost at 5,000 runs (90% settled, **10% stale** — the expensive mix, critique M4), steady state | ≤ 120 ms/request local / ≤ 360 ms CI; ≤ 2 immediate signal stats per settled run; artifact stats amortized over 6 s; quiescent probes amortized at 1/30 s. The former 80 ms local threshold measured an artificial within-TTL burst; real 5 s cadence samples include artifact-refresh polls (99.7 ms observed under the concurrent root suite), so 120 ms is the honest regression ceiling with 20% local headroom. *Ratified by the operator (Ben Vargas, 2026-08-01): the deviation from the original 80 ms is accepted — concurrent-load noise on the dev machine, not a code regression (the endpoint got faster in the same change); revisitable in a follow-up PR.* | §5.4.2 tiers | perf fixture with 5,000 synthetic dirs incl. 500 stale, sampled at the shipped 5 s poll cadence |
+| P2 | Run list server cost at 5,000 runs (90% settled, **10% stale** — the expensive mix, critique M4), steady state | ≤ 120 ms/request local / ≤ 360 ms CI; ≤ 2 immediate signal stats per settled run; artifact stats amortized over 6 s; quiescent probes amortized at ~1/30 s with deterministic per-run TTL jitter (±25%, §5.4.2) so quiescent expiries never land on one request as a herd. The former 80 ms local threshold measured an artificial within-TTL burst; real 5 s cadence samples include artifact-refresh polls (99.7 ms observed under the concurrent root suite), so 120 ms is the honest regression ceiling with 20% local headroom. *Ratified by the operator (Ben Vargas, 2026-08-01): the deviation from the original 80 ms is accepted — concurrent-load noise on the dev machine, not a code regression (the endpoint got faster in the same change); revisitable in a follow-up PR.* | §5.4.2 tiers | perf fixture with 5,000 synthetic dirs incl. 500 stale, sampled at the shipped 5 s poll cadence |
 | P3 | Cockpit interactive, 10 MB events.jsonl | ≤ 1.0 s (server fold ≤ 400 ms cold, ≤ 20 ms delta) | incremental fold cache, snapshot-then-tail | perf fixture run, `performance.now` around fold; jsdom mount timing |
 | P4 | Fold throughput | ≥ 50,000 events/s (pure) | single-pass fold, no per-event allocation of agents map copies | vitest bench on shared fold.js |
 | P5 | Live tail sustained | 5,000 records/s ingested, ≤ 60 store commits/s, zero dropped SSE frames | server batching (§5.6.3) + client rAF coalescing | mock EventSource feeding synthetic bursts; assert commit count |
