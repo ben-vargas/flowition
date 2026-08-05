@@ -144,6 +144,32 @@ the read token exposes prompts, transcripts, args, and results for this
 Flowition home, while the control token can steer full-permission agents and
 change run lifecycle state.
 
+### Tailnet access (Tailscale Serve)
+
+The viewer never listens on a non-loopback address, but it can be reached from
+your own tailnet through [Tailscale Serve](https://tailscale.com/kb/1312/serve),
+which terminates tailnet TLS and proxies to the loopback port:
+
+```sh
+flowition viewer --port 4646 --tailscale-origin https://machine.tailnet-name.ts.net
+tailscale serve --bg 4646
+```
+
+`--tailscale-origin` requires an explicit fixed `--port` and accepts exactly one
+canonical HTTPS `*.ts.net` origin. Serve's external HTTPS port defaults to 443;
+an origin with a nonstandard port (`https://machine.tailnet-name.ts.net:8443`)
+needs the matching flag: `tailscale serve --bg --https=8443 4646`.
+
+The flag teaches the request gates about that one
+path: the `.ts.net` name joins the closed Host allowlist, requests for it must
+carry Serve's `X-Forwarded-Proto: https`, and anything marked as public Funnel
+traffic (`Tailscale-Funnel-Request`) is refused — use `tailscale serve`, never
+`tailscale funnel`. Every other gate is unchanged: tailnet requests need the
+same bearer token, and mutations still need `--control` plus the control token.
+The startup banner prints both the local and the tailnet URL; open the tailnet
+one from another machine on your tailnet. All tokens travel in the URL fragment,
+which never crosses the network.
+
 The viewer reads the same append-only artifacts used by the CLI and degrades
 unknown or older fields instead of requiring a migration. The exact module,
 security, packaging, and on-disk contracts are documented in
@@ -372,7 +398,7 @@ journaled (including failed and cancelled agents) and restored on resume.
 | `flowition cancel <runId>` | Cancel the run, or one agent with `--agent N` |
 | `flowition post <msg…>` | Agent→operator progress report; run/agent come from `FLOWITION_*` env or `--run`/`--agent` |
 | `flowition result <runId>` | Print the final result; `--wait [seconds]` blocks until one exists |
-| `flowition viewer` | Serve the authenticated local run UI. `--port N`, `--control[=send,answer,cancel,resume,delete]`, `--idle-shutdown`, `--idle-timeout M`, `--open`, `--print-url`, `--json` |
+| `flowition viewer` | Serve the authenticated local run UI. `--port N`, `--control[=send,answer,cancel,resume,delete]`, `--tailscale-origin https://…ts.net`, `--idle-shutdown`, `--idle-timeout M`, `--open`, `--print-url`, `--json` |
 | `flowition doctor` | Check each adapter CLI: found, version, steering/resume/schema capabilities, amp modes |
 | `flowition guide` | Print the workflow authoring guide (written for agents) |
 | `flowition mcp` | Serve flowition as an MCP stdio server |

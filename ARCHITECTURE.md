@@ -105,6 +105,19 @@ workflow. It auto-starts only on a TTY without `--detach`, `--json`, `--quiet`,
 challenge succeeds, and always starts the server with idle shutdown and without
 control capabilities. MCP and detached paths never auto-start a viewer.
 
+`--tailscale-origin https://machine.tailnet-name.ts.net` opts a viewer into being
+reached from the operator's own tailnet through Tailscale Serve, which terminates
+tailnet TLS and proxies to the loopback port — the bind itself never leaves
+`127.0.0.1`. The flag accepts exactly one canonical HTTPS `*.ts.net` origin,
+requires an explicit fixed `--port` (no port walking — Serve forwards to one
+port), and refuses to run as a secondary. It adds that single authority to the
+closed Host allowlist, requires Serve's `X-Forwarded-Proto: https` on requests
+for it, and unconditionally refuses traffic marked with Serve's public-Funnel
+header. The rendezvous record carries the origin, and reuse matches on it: a
+caller whose tailnet policy differs from the live instance gets a loud refusal
+after the challenge proof, never a second listener with different exposure. All
+token, origin, and capability gates apply to tailnet requests unchanged.
+
 The default capability set is empty. `--control` enables
 `send,answer,cancel,resume,delete`; `--control=<comma-list>` enables a subset.
 Every absent capability remains a 403 at the HTTP boundary and is reported by

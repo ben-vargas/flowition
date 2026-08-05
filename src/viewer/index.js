@@ -19,7 +19,8 @@ import { fileURLToPath } from 'node:url'
 // §4.1's platform + ownership gate first (see auth.js's choke-point note).
 import { runDir } from '../util.js'
 import { loadOrCreateCredential, createCredentialGuard, inspectToken, tokenPath, mintControlToken, mintChallenge, verifyProof, parseCapabilities, CHALLENGE_HEADER, viewerHome, viewerRunsDir, assertViewerHome, assertViewerPlatform } from './auth.js'
-import { attachRequestPipeline } from './http.js'
+import { attachRequestPipeline, parseTailscaleOrigin } from './http.js'
+export { parseTailscaleOrigin }
 import { resolveDistRoot } from './static.js'
 import { appendAudit } from './audit.js'
 import * as routes from './routes.js'
@@ -57,11 +58,13 @@ export function viewerVersion() {
 }
 
 /**
- * The §2.2 hash grammar, the one URL builder for everything the CLI prints. The token
- * rides in the **fragment**, which browsers never send over the network.
+ * The §2.2 hash grammar, the one URL builder for everything the CLI prints — local and
+ * tailscale alike (§7.1.8): `origin` defaults to the loopback authority and is otherwise
+ * the canonical `--tailscale-origin`. The token rides in the **fragment**, which
+ * browsers never send over the network.
  */
-export function viewerUrl({ port, token, controlToken, route = '/' }) {
-  let url = `http://127.0.0.1:${port}/#${route}?t=${encodeURIComponent(token)}`
+export function viewerUrl({ port, token, controlToken, route = '/', origin }) {
+  let url = `${origin ?? `http://127.0.0.1:${port}`}/#${route}?t=${encodeURIComponent(token)}`
   if (controlToken) url += `&c=${encodeURIComponent(controlToken)}`
   return url
 }
@@ -80,11 +83,13 @@ export { assertViewerHome as assertOwnership }
 
 // ---- rendezvous file (§4.2) --------------------------------------------------------
 
-export function writeRendezvous({ port, control }) {
+export function writeRendezvous({ port, control, tailscaleOrigin = null }) {
   // `rendezvousPath()` asserts ownership and creates a missing home 0700 (§4.1).
   const file = rendezvousPath()
   const tmp = `${file}.${process.pid}.tmp`
-  const body = JSON.stringify({ pid: process.pid, port, startedAt: Date.now(), control })
+  // `tailscaleOrigin` (§7.1.8) is recorded only when set, so a record written without the
+  // flag keeps its old shape byte-for-byte and old readers ignore the field either way.
+  const body = JSON.stringify({ pid: process.pid, port, startedAt: Date.now(), control, ...(tailscaleOrigin ? { tailscaleOrigin } : {}) })
   fs.writeFileSync(tmp, body, { mode: 0o600 })
   try { fs.chmodSync(tmp, 0o600) } catch { /* non-posix fs */ }
   fs.renameSync(tmp, file)
@@ -647,6 +652,15 @@ export async function discoverViewer({ timeoutMs = PROBE_TIMEOUT_MS, ...credenti
     token,
     pid: Number.isInteger(current.pid) ? current.pid : null,
     control: Array.isArray(current.control) ? current.control : [],
+    // §7.1.8: the recorded policy travels with discovery so a caller can see it. It is
+    // NOT re-validated here — a malformed value must surface as a policy to refuse
+    // loudly (startOrReuseViewer), never collapse into "no instance". A PRESENT field
+    // that does not hold a nonempty string (a number, an object, "", even an explicit
+    // null) is the same class of corruption as a malformed string — writeRendezvous
+    // never writes the key at all for a local-only instance — so presence alone flags
+    // it: `tailscalePolicyInvalid` preserves that fact for the reuse matrix.
+    tailscaleOrigin: typeof current.tailscaleOrigin === 'string' && current.tailscaleOrigin ? current.tailscaleOrigin : null,
+    tailscalePolicyInvalid: Object.hasOwn(current, 'tailscaleOrigin') && !(typeof current.tailscaleOrigin === 'string' && current.tailscaleOrigin),
     version: probed.version,
     reused: true,
   }
@@ -685,14 +699,14 @@ export async function stopViewer({ timeoutMs = 5_000, ...credentialOpts } = {}) 
   while (Date.now() < deadline) {
     try { process.kill(found.pid, 0) } catch { alive = false }
     if (!alive && !fs.existsSync(rendezvousPath())) {
-      return { stopped: true, pid: found.pid, port: found.port, rendezvousRemoved: true }
+      return { stopped: true, pid: found.pid, port: found.port, rendezvousRemoved: true, tailscaleOrigin: found.tailscaleOrigin }
     }
     await new Promise((resolve) => setTimeout(resolve, 50))
   }
   if (!alive) {
     // Dead but its record lingers: report it. Discovery fails closed on stale records
     // (the challenge proof cannot pass against nothing), so this is residue, not risk.
-    return { stopped: true, pid: found.pid, port: found.port, rendezvousRemoved: false }
+    return { stopped: true, pid: found.pid, port: found.port, rendezvousRemoved: false, tailscaleOrigin: found.tailscaleOrigin }
   }
   return { stopped: false, pid: found.pid, port: found.port, reason: `viewer pid ${found.pid} did not exit within ${timeoutMs}ms — it may be mid-request; retry, or kill ${found.pid}` }
 }
@@ -771,6 +785,15 @@ export async function startViewer(opts = {}) {
   assertViewerHome()
 
   const capabilities = parseCapabilities(opts.control)
+  // §7.1.8: parsed once, up front — a malformed origin is a startup refusal, never a
+  // listener with a half-configured gate. Tailscale Serve is configured against ONE
+  // fixed local port, so this mode never walks on collision (`bind` below): a viewer
+  // that silently moved to 4647 would leave the tailnet URL pointing at whatever else
+  // owns 4646. An explicit nonzero port is therefore required.
+  const tailscale = opts.tailscaleOrigin != null ? parseTailscaleOrigin(opts.tailscaleOrigin) : null
+  if (tailscale && (opts.port == null || Number(opts.port) === 0)) {
+    throw new Error('--tailscale-origin requires an explicit --port (the fixed local port tailscale serve proxies to), e.g. flowition viewer --port 4646 --tailscale-origin ' + tailscale.origin)
+  }
   // The credential comes with the inode it was read from, and the guard holds this instance
   // to both for its whole life: §7.1.2's "0600 file another local user cannot read" is the
   // boundary the entire read surface sits behind, so it is re-proven per request rather than
@@ -802,6 +825,10 @@ export async function startViewer(opts = {}) {
     // W6's `args-read` line and W7's resume/delete/cancel lines go through this, the
     // same 0600 writer `flowition rm`/`prune` already use via src/retention.js.
     audit: appendAudit,
+    // §7.1.8: the parsed `--tailscale-origin`, or null. http.js's Host/Origin gates and
+    // the funnel/forwarded-proto checks read this; with null, every request is answered
+    // exactly as by a viewer that never heard of the flag.
+    tailscale,
     port: 0, // filled in after bind; the host/origin allowlists read it live
   }
 
@@ -899,9 +926,16 @@ export async function startViewer(opts = {}) {
   }
 
   const primary = opts.primary !== false
+  // §7.1.8: a tailscale-enabled instance must be the primary. A secondary publishes no
+  // rendezvous record, so nothing could see it, refuse a conflicting policy against it,
+  // or hold a credential rotation for it — an invisible listener is exactly the wrong
+  // thing to hand a tailnet-reachable authority to.
+  if (tailscale && !primary) {
+    throw new Error('--tailscale-origin cannot start a secondary viewer — stop the running primary first (flowition viewer --stop), then start the tailscale-enabled viewer')
+  }
   let instance
   try {
-    boundPort = await bind(server, resolvePort(opts.port))
+    boundPort = await bind(server, resolvePort(opts.port), { walk: !tailscale })
     ctx.port = boundPort
     // Registered before the rendezvous is published and while the token is still known to be
     // good: from here on, anything in this process that needs to revoke this home's credential
@@ -910,7 +944,7 @@ export async function startViewer(opts = {}) {
     // §13.2: one rendezvous per home, describing the primary. A secondary publishes
     // nothing and, by never having written the file, removes nothing on close either.
     if (primary) {
-      writeRendezvous({ port: boundPort, control: capabilities })
+      writeRendezvous({ port: boundPort, control: capabilities, tailscaleOrigin: tailscale?.origin ?? null })
       published = true
     }
 
@@ -937,6 +971,11 @@ export async function startViewer(opts = {}) {
 
     instance = {
       url: viewerUrl({ port: boundPort, token, controlToken }),
+      // §7.1.8: the tailnet URL, carrying the same fragment credentials as the local one
+      // (including `c=` on a fresh --control start — a control token is minted per
+      // process and this is its one printing).
+      tailscaleUrl: tailscale ? viewerUrl({ port: boundPort, token, controlToken, origin: tailscale.origin }) : null,
+      tailscaleOrigin: tailscale?.origin ?? null,
       port: boundPort,
       home: viewerHome(),
       runsDir: viewerRunsDir(),
@@ -975,6 +1014,20 @@ export async function startViewer(opts = {}) {
  * but if a proven primary exists the new instance starts as a **secondary** and leaves
  * `viewer.json` alone.
  *
+ * §7.1.8's exception: with `--tailscale-origin` the explicit port names the Serve proxy
+ * target, not "never reuse" — an instance already serving the **same** policy (same
+ * origin, same port) is reused, and every other combination of live instance × requested
+ * policy is a loud refusal decided AFTER the challenge proof, never a silent shadow
+ * start or a "no instance". The matrix:
+ *
+ *   | caller                        | live instance policy      | outcome            |
+ *   |-------------------------------|---------------------------|--------------------|
+ *   | --tailscale-origin X --port P | X on port P               | reuse              |
+ *   | --tailscale-origin X …        | absent, different, or     | refuse → --stop    |
+ *   |                               |   another port            |                    |
+ *   | (no flag)                     | tailscale origin recorded | refuse → --stop or |
+ *   |                               |                           |   pass the flag    |
+ *
  * @param {object} opts everything `startViewer` takes, plus:
  * @param {boolean} [opts.explicitPort] the port came from `--port`, so never reuse
  * @param {(found: object) => void} [opts.onReuseRefused] called instead of reusing, to let
@@ -983,16 +1036,70 @@ export async function startViewer(opts = {}) {
  */
 export async function startOrReuseViewer(opts = {}) {
   const { explicitPort = false, onReuseRefused, probeTimeoutMs, ...rest } = opts
+  // Parsed before the lock: a malformed value refuses without touching the home.
+  const requested = rest.tailscaleOrigin != null ? parseTailscaleOrigin(rest.tailscaleOrigin) : null
+  // The fixed-port invariant holds at THIS entry point too, not only in `startViewer`:
+  // reuse-without-a-port would otherwise satisfy a tailscale request with "whatever port
+  // the live instance happens to hold", which is not a policy `tailscale serve` can follow.
+  if (requested && !(Number.isInteger(Number(rest.port)) && Number(rest.port) > 0)) {
+    throw new Error('--tailscale-origin requires an explicit --port (the fixed local port tailscale serve proxies to), e.g. flowition viewer --port 4646 --tailscale-origin ' + requested.origin)
+  }
   return withHomeLock(async () => {
     // Discovery is also where an exposed token file is revoked end to end, so the credential
     // options travel with it — inside the lock, so no second caller can bind against the
     // credential this one is in the middle of replacing.
     const found = await discoverViewer({ timeoutMs: probeTimeoutMs, onRotate: rest.onRotate, revokeWaitMs: rest.revokeWaitMs })
+    // The recorded policy is re-validated before it is ever echoed: viewer.json is a
+    // same-user file, but a corrupted value (control characters, userinfo) must not be
+    // reproduced into stderr or a suggested command — describe it instead.
+    const recordedOrigin = (value) => {
+      if (!value) return null
+      try { return parseTailscaleOrigin(value).origin } catch { return null }
+    }
+    if (found && requested) {
+      // Same policy, same port: this IS the instance the flag describes — reuse it.
+      // (`found.tailscaleOrigin` was written from a parsed origin, so equality on the
+      // canonical string is exact; anything else — malformed included — is a mismatch.)
+      const samePolicy = found.tailscaleOrigin === requested.origin
+        && (rest.port == null || Number(rest.port) === found.port)
+      if (!samePolicy) {
+        const recorded = recordedOrigin(found.tailscaleOrigin)
+        const recordedLabel = recorded ? `tailscale origin ${recorded}`
+          : (found.tailscaleOrigin || found.tailscalePolicyInvalid) ? 'an invalid tailscale origin recorded in viewer.json'
+          : 'no tailscale origin'
+        throw new Error(
+          `a flowition viewer is already serving this home on port ${found.port}${found.pid ? ` (pid ${found.pid})` : ''} with ${recordedLabel}, `
+          + `which does not match the requested ${requested.origin}${rest.port != null ? ` on port ${rest.port}` : ''}. `
+          + `The viewer's host/origin gates are fixed at startup, so stop it and start again: flowition viewer --stop && flowition viewer --port ${rest.port ?? found.port} --tailscale-origin ${requested.origin}`)
+      }
+      onReuseRefused?.(found)   // may throw — the caller's refusal, inside the lock
+      return {
+        ...found,
+        reused: true,
+        url: viewerUrl({ port: found.port, token: found.token }),
+        tailscaleUrl: viewerUrl({ port: found.port, token: found.token, origin: requested.origin }),
+      }
+    }
+    if (found && (found.tailscaleOrigin || found.tailscalePolicyInvalid) && !requested) {
+      // No flag means "I am requesting local-only policy" — reusing a tailnet-exposed
+      // instance under that request would silently hand back more exposure than asked
+      // for, and shadow-starting a second primary is §13.2's cardinal sin. Refuse.
+      // `tailscalePolicyInvalid` lands here too: a record whose policy field holds a
+      // number or an object is the same corruption as a malformed string, and must not
+      // collapse into "local-only" and admit reuse or an explicit-port secondary.
+      const recorded = recordedOrigin(found.tailscaleOrigin)
+      throw new Error(recorded
+        ? `the flowition viewer on port ${found.port}${found.pid ? ` (pid ${found.pid})` : ''} was started with --tailscale-origin ${recorded}. `
+          + `Reuse it by passing the same flag (flowition viewer --port ${found.port} --tailscale-origin ${recorded}), or stop it first: flowition viewer --stop`
+        : `the flowition viewer on port ${found.port}${found.pid ? ` (pid ${found.pid})` : ''} records an invalid tailscale origin in viewer.json. `
+          + `Stop it and start again: flowition viewer --stop`)
+    }
     if (found && !explicitPort) {
       onReuseRefused?.(found)   // may throw — the caller's refusal, inside the lock
       return { ...found, reused: true, url: viewerUrl({ port: found.port, token: found.token }) }
     }
     // A proven live primary + an explicit port = the deliberate second instance.
+    // (`startViewer` refuses the tailscale × secondary combination itself.)
     const instance = await startViewer({ ...rest, primary: !found })
     return { ...instance, reused: false }
   })
@@ -1009,9 +1116,13 @@ function resolvePort(explicit) {
   return DEFAULT_PORT
 }
 
-/** §4.2: `--port 0` binds ephemeral and skips the walk; a fixed port walks +9. */
-async function bind(server, first) {
-  const candidates = first === 0 ? [0] : Array.from({ length: PORT_WALK }, (_, i) => first + i)
+/**
+ * §4.2: `--port 0` binds ephemeral and skips the walk; a fixed port walks +9.
+ * §7.1.8: tailscale mode passes `walk: false` — Serve proxies to one fixed port, so a
+ * collision is a loud failure, never a silent move.
+ */
+async function bind(server, first, { walk = true } = {}) {
+  const candidates = first === 0 || !walk ? [first] : Array.from({ length: PORT_WALK }, (_, i) => first + i)
   let lastError
   for (const candidate of candidates) {
     try {
@@ -1183,3 +1294,6 @@ function scheduleBootstrapCleanup(file, { spawnFn = spawn, warn = () => {}, unli
 
 /** The §2.2 startup line, e.g. `viewer: http://…/#/?t=…  (reading ~/.flowition/runs)`. */
 export const startupLine = (url) => `viewer: ${url}  (reading ${collapseHome(viewerRunsDir())})`
+
+/** §7.1.8: the companion line for the tailnet URL, printed under `startupLine`'s. */
+export const tailscaleLine = (url) => `viewer: ${url}  (via tailscale serve)`

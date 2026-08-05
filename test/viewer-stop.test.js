@@ -107,6 +107,10 @@ test('--stop --json reports the settled fact as JSON on stdout', async () => {
   assert.equal(report.stopped, true)
   assert.equal(typeof report.pid, 'number')
   assert.equal(typeof report.port, 'number')
+  // §7.1.8 is opt-in: a local-only viewer's stop report carries no tailscale field,
+  // and no serve-teardown reminder appears on stderr.
+  assert.ok(!('tailscaleOrigin' in report))
+  assert.ok(!res.stderr.includes('tailscale'))
   await exited
 })
 

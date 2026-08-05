@@ -4,7 +4,17 @@ Measured 2026-07-31 on a 16-core Apple M3 Max MacBook Pro with 64 GB RAM,
 macOS 27.0 (26A5388g), Node 24.14.0, and Google Chrome 150.0.7871.187.
 These are development-machine measurements, not portable benchmarks.
 
-Measured-source SHA-256: `676820953aec34315783705a12a6e7b36eeb45f7865e8b22a2e0ce8eb9e228cf`
+Measured-source SHA-256: `03fc640baa2ccafa75e6257ca373fdbf9a5968b4658ec9f9b8cb80a116234d19`
+
+Hash rebound 2026-08-05 for tailnet access (`--tailscale-origin`): `src/viewer/http.js`
+gained a strict `*.ts.net` origin parser, an optional third entry in the closed
+Host→Origin map, an `X-Forwarded-Proto: https` provenance gate and a Funnel-header
+refusal; `src/viewer/index.js` gained origin plumbing, rendezvous `tailscaleOrigin`,
+fixed-port (no-walk) binding and reuse-policy matching. All of it is behind the new
+flag — without `--tailscale-origin` the request path evaluates the same three-entry
+loopback map as before, and no measured request in this file's mixes carries the flag.
+Server-only change; `viewer/dist` is byte-identical and no browser row was re-measured.
+The perf pool ran green on this tree under the concurrent root suite.
 
 Hash rebound 2026-08-05 for quiescent TTL desynchronization (operator-reported P2
 flake): all 500 stale runs in the P2 mix were classified during the same cold request,

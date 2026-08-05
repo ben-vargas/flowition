@@ -104,11 +104,36 @@ export function sendError(req, res, status, code, message, { runId, headers, ext
 /**
  * The names this server answers to. All three are loopback, so a rebound DNS name
  * (which carries the attacker's Host) never matches — that is the whole DNS-rebinding
- * defense (§7.1.3). There is no `--host` flag, so the set is closed.
+ * defense (§7.1.3). There is no `--host` flag, so the set is closed. `--tailscale-origin`
+ * (§7.1.8) extends it by exactly one explicit, validated entry — the Host that Tailscale
+ * Serve preserves when proxying tailnet TLS traffic to this loopback listener — so the
+ * set stays closed: a rebound name still matches nothing.
  */
 export const allowedHosts = (port) => [`127.0.0.1:${port}`, `localhost:${port}`, `[::1]:${port}`]
 
-export const hostAllowed = (host, port) => typeof host === 'string' && allowedHosts(port).includes(host)
+export const hostAllowed = (host, port, tailscale = null) =>
+  typeof host === 'string' && expectedOriginFor(host, port, tailscale) !== null
+
+/**
+ * The one canonical Host → expected-Origin mapping (§7.1.3 + §7.1.5 + §7.1.8). Every
+ * loopback authority is an `http://` origin of itself; the configured Tailscale authority
+ * is the `https://` origin the browser actually loaded from (Tailscale Serve terminates
+ * TLS and preserves the Host, so the internal hop's scheme never reaches the browser).
+ * DNS names are case-insensitive, so the tailscale comparison lowercases the incoming
+ * Host; the loopback trio keeps its exact byte match, unchanged.
+ *
+ * @param {string} host the request's `Host` header
+ * @param {number} port the bound loopback port
+ * @param {{origin: string, host: string}|null} tailscale parsed `--tailscale-origin`, or null
+ * @returns {string|null} the only Origin a browser on that authority can send, or null
+ *   when the Host is not ours at all
+ */
+export const expectedOriginFor = (host, port, tailscale = null) => {
+  if (typeof host !== 'string') return null
+  if (allowedHosts(port).includes(host)) return `http://${host}`
+  if (tailscale && host.toLowerCase() === tailscale.host) return tailscale.origin
+  return null
+}
 
 /**
  * §7.1.5: the Origin must equal **the server's own origin** — which, for a browser, is
@@ -116,14 +141,75 @@ export const hostAllowed = (host, port) => typeof host === 'string' && allowedHo
  * already-validated `Host`, not against the allowlist as a whole: a document loaded from
  * `http://localhost:<port>/` can only ever send `Origin: http://localhost:<port>` with
  * `Host: localhost:<port>`. Accepting `Origin: http://localhost:<port>` on a request
- * whose Host is `127.0.0.1:<port>` would accept a cross-origin request (the three names
- * are three distinct web origins even though they are one socket) and hand the CSRF
- * defense back to the attacker.
+ * whose Host is `127.0.0.1:<port>` would accept a cross-origin request (the names
+ * are distinct web origins even though they are one socket) and hand the CSRF
+ * defense back to the attacker. The same rule covers the Tailscale authority: its only
+ * legal Origin is the configured `https://` origin, never an `http://` reflection.
  *
  * @param {unknown} origin the request's `Origin` header
  * @param {string} host the request's `Host`, already through `hostAllowed`
+ * @param {number} port the bound loopback port
+ * @param {{origin: string, host: string}|null} tailscale parsed `--tailscale-origin`, or null
  */
-export const originAllowed = (origin, host) => typeof origin === 'string' && origin === `http://${host}`
+export const originAllowed = (origin, host, port, tailscale = null) =>
+  typeof origin === 'string' && origin === expectedOriginFor(host, port, tailscale)
+
+// ---- tailscale serve integration (§7.1.8) -------------------------------------------
+
+/**
+ * Parse and validate a `--tailscale-origin` value into its canonical origin and the Host
+ * header Tailscale Serve will preserve onto proxied requests.
+ *
+ * Deliberately Tailscale-specific, not a generic trusted-proxy escape hatch: the §7.1.8
+ * security argument leans on Tailscale Serve's header contract (ipn/ipnlocal/serve.go —
+ * it deletes the known client-supplied `Tailscale-*` identity/Funnel headers by name,
+ * overwrites `X-Forwarded-Proto: https` at TLS termination, preserves the `.ts.net`
+ * Host to a TCP-port backend, and marks public Funnel traffic with
+ * `Tailscale-Funnel-Request: ?1`), so the flag only accepts an origin that proxy can
+ * actually terminate: `https://`, a `*.ts.net` name, nothing else in the URL.
+ *
+ * @param {unknown} value the raw flag value
+ * @returns {{origin: string, host: string}} `origin` is the canonical WHATWG origin
+ *   (default port elided); `host` is the exact lowercased authority (`URL.host`) the
+ *   proxied requests carry as their Host header
+ */
+export function parseTailscaleOrigin(value) {
+  const refuse = (why) => {
+    throw new Error(`--tailscale-origin ${why} — expected the HTTPS origin tailscale serve terminates, e.g. https://machine.tailnet-name.ts.net or https://machine.tailnet-name.ts.net:8443`)
+  }
+  if (typeof value !== 'string' || value === '' || value === 'true') refuse('requires a value')
+  let url
+  try { url = new URL(value) } catch { return refuse(`is not a valid URL (got "${value}")`) }
+  if (url.protocol !== 'https:') refuse(`must be https:// (got "${url.protocol}//")`)
+  if (url.username || url.password) refuse('must not carry credentials')
+  if (url.pathname !== '/') refuse(`must not carry a path (got "${url.pathname}")`)
+  if (url.search) refuse('must not carry a query')
+  if (url.hash) refuse('must not carry a fragment')
+  // The URL getters cannot see EMPTY components — "https://@host", a trailing "?" or
+  // "#" — but an origin never contains those delimiters at all, so the raw string is
+  // the authority on their absence. (Non-empty components were refused just above.)
+  if (value.includes('@')) refuse('must not carry credentials')
+  if (value.includes('?')) refuse('must not carry a query')
+  if (value.includes('#')) refuse('must not carry a fragment')
+  // The hostname is already lowercased by the URL parser. `.ts.net` is the contract —
+  // see the function comment; a bare "ts.net" is nobody's machine.
+  if (!url.hostname.endsWith('.ts.net') || url.hostname === 'ts.net') {
+    refuse(`must name a *.ts.net host (got "${url.hostname}")`)
+  }
+  // WHATWG parsing tolerates spellings no MagicDNS name can have — empty labels
+  // ("foo..ts.net", ".ts.net"), underscores, edge hyphens, labels past DNS's 63-octet
+  // limit, names past its 253-octet limit, port 0. Serve never terminates such an
+  // authority, so they are configuration mistakes; refuse them here, not at 3 AM.
+  if (url.hostname.length > 253
+    || url.hostname.split('.').some((label) => label.length > 63 || !/^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/.test(label))) {
+    refuse(`must name a valid DNS host (got "${url.hostname}")`)
+  }
+  if (url.port === '0') refuse('must not name port 0')
+  return { origin: url.origin, host: url.host }
+}
+
+/** The header Tailscale Serve sets on public Funnel traffic and strips from clients. */
+export const FUNNEL_HEADER = 'tailscale-funnel-request'
 
 const JSON_CONTENT_TYPE = /^application\/json[ \t]*(;|$)/i
 const isJsonContentType = (value) => typeof value === 'string' && JSON_CONTENT_TYPE.test(value.trim())
@@ -320,14 +406,42 @@ function assertServiceable(state) {
 }
 
 async function handleRequest(ctx, req, res, state) {
+  // 0. Funnel refusal (§7.1.8) — before even the Host gate, and only when this instance
+  //    was started with `--tailscale-origin` (without the flag, behavior is unchanged).
+  //    Tailscale Serve sets this header on PUBLIC Funnel traffic and strips any
+  //    client-supplied value, so through the proxy it cannot be spoofed away or forged:
+  //    its presence in any form means this listener has been exposed past the tailnet,
+  //    which is never what the flag authorized. (A direct local caller can add the
+  //    header to its own request; it only earns itself a 403.)
+  if (ctx.tailscale && req.headers[FUNNEL_HEADER] !== undefined) {
+    throw new HttpError(403, 'forbidden', 'funnel traffic is refused — the viewer serves the tailnet only, never the public internet')
+  }
+
   // 1. Host allowlist — before anything else, including static, the body, and auth
   //    (§7.1.3). `requireHostHeader: false` on the server (index.js) is what lets an
   //    HTTP/1.1 request with NO Host reach this gate: node's canned 400 for that case
   //    carries none of §7.1.4's headers, and §7.1.3 wants a 403 for every Host that is
   //    not exactly ours — absent very much included.
   const host = req.headers.host
-  if (!hostAllowed(host, ctx.port)) {
-    throw new HttpError(403, 'forbidden', 'host not allowed — the viewer answers only on 127.0.0.1, localhost or [::1]')
+  if (!hostAllowed(host, ctx.port, ctx.tailscale)) {
+    throw new HttpError(403, 'forbidden', ctx.tailscale
+      ? `host not allowed — the viewer answers only on 127.0.0.1, localhost, [::1] or ${ctx.tailscale.host}`
+      : 'host not allowed — the viewer answers only on 127.0.0.1, localhost or [::1]')
+  }
+
+  // 1b. HTTPS proxy provenance (§7.1.8): a request addressed to the Tailscale authority
+  //     must have entered through Serve's TLS ingress. Serve overwrites
+  //     `X-Forwarded-Proto: https` at TLS termination (Set replaces any client-supplied
+  //     value), so this is exactly the architecture the flag promised — it catches an
+  //     accidental plaintext or non-Tailscale proxy path, and keeps the new Host entry
+  //     from becoming a bare-HTTP alias. It is provenance, not authentication: a local
+  //     same-user process can forge it, and is out of scope (§7.4).
+  //     The comparison is byte-exact: Serve writes the literal "https", so anything
+  //     else — including a comma-joined value from a second proxy layer — fails closed.
+  if (ctx.tailscale && typeof host === 'string' && host.toLowerCase() === ctx.tailscale.host) {
+    if (req.headers['x-forwarded-proto'] !== 'https') {
+      throw new HttpError(403, 'forbidden', `requests for ${ctx.tailscale.host} must arrive via tailscale serve's TLS ingress (missing or non-https X-Forwarded-Proto)`)
+    }
   }
 
   let url
@@ -388,7 +502,7 @@ async function apiRequest(ctx, req, res, url, host, state) {
   //    the origin of the authority the client actually connected to, which refuses a
   //    cross-origin fetch before it runs.
   const origin = req.headers.origin
-  if (origin !== undefined && !originAllowed(origin, host)) {
+  if (origin !== undefined && !originAllowed(origin, host, ctx.port, ctx.tailscale)) {
     throw new HttpError(403, 'forbidden', 'origin not allowed')
   }
 

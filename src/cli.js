@@ -15,7 +15,7 @@ import { GUIDE } from './guide.js'
 import { ByteTail, drainTail } from './viewer/tail.js'
 
 const booleanFlags = new Set(['json', 'detach', 'follow', 'wait', 'quiet', 'purge', 'idle-shutdown', 'open', 'print-url', 'no-viewer', 'stop'])
-const valueFlags = new Set(['args', 'args-file', 'adapter', 'model', 'effort', 'cwd', 'concurrency', 'budget', 'resume', 'run-id', 'seed-from', 'agent', 'run', 'older-than', 'port', 'idle-timeout'])
+const valueFlags = new Set(['args', 'args-file', 'adapter', 'model', 'effort', 'cwd', 'concurrency', 'budget', 'resume', 'run-id', 'seed-from', 'agent', 'run', 'older-than', 'port', 'idle-timeout', 'tailscale-origin'])
 // `--control` is the one optional-value flag (DESIGN §4.2): bare enables every
 // capability, `--control=send,cancel` a subset. It never consumes the next argv token,
 // so `flowition viewer --control` cannot swallow a following option.
@@ -514,6 +514,20 @@ export async function main(argv) {
       const idleTimeoutMinutes = flags['idle-timeout'] != null ? integerOption(flags['idle-timeout'], '--idle-timeout', 1) : undefined
       let capabilities
       try { capabilities = parseCapabilities(flags.control) } catch (err) { throw new WorkflowError(err.message) }
+      // §7.1.8: validated up front so a typo is a clean refusal before any home access,
+      // and the fixed-port requirement is stated here where the operator typed the flags
+      // (tailscale serve proxies to ONE local port; a walked port would silently detach
+      // the tailnet URL from this instance — see startViewer).
+      let tailscaleOrigin = null
+      if (flags['tailscale-origin'] != null) {
+        try { tailscaleOrigin = viewer.parseTailscaleOrigin(flags['tailscale-origin']).origin } catch (err) { throw new WorkflowError(err.message) }
+        if (port == null || port === 0) {
+          // The suggested serve command matches the origin the operator actually typed:
+          // a nonstandard external port needs `--https=<port>` (serve's default is 443).
+          const externalPort = new URL(tailscaleOrigin).port
+          throw new WorkflowError(`--tailscale-origin requires an explicit --port (the fixed local port tailscale serve proxies to): flowition viewer --port 4646 --tailscale-origin ${tailscaleOrigin}, then: tailscale serve --bg${externalPort ? ` --https=${externalPort}` : ''} 4646`)
+        }
+      }
 
       // Reprinting or reusing an instance is only ever done on the evidence of the
       // §4.2.1 authenticated probe — never on an unauthenticated /healthz shape, which
@@ -524,9 +538,15 @@ export async function main(argv) {
       // bootstrap file's deletion is delegated to a detached process, so it outlives this
       // command by exactly its grace period and no longer (§4.2, and the note on
       // `scheduleBootstrapCleanup`).
-      const announce = (url, extra) => {
-        if (flags.json) console.log(JSON.stringify({ url, ...extra }))
-        else console.error(viewer.startupLine(url))
+      // `tailscaleUrl` (§7.1.8) rides along when the instance has one: an extra stderr
+      // line, an extra JSON field. `--open` always opens the LOCAL url — the browser on
+      // this machine reaches loopback directly; the tailnet URL is for other machines.
+      const announce = (url, extra = {}, tailscaleUrl = null) => {
+        if (flags.json) console.log(JSON.stringify({ url, ...(tailscaleUrl ? { tailscaleUrl } : {}), ...extra }))
+        else {
+          console.error(viewer.startupLine(url))
+          if (tailscaleUrl) console.error(viewer.tailscaleLine(tailscaleUrl))
+        }
         if (flags.open) viewer.openInBrowser(url)
       }
 
@@ -552,8 +572,18 @@ export async function main(argv) {
           console.error(result.reason ?? 'no live flowition viewer for this home')
           return 1
         }
-        if (flags.json) console.log(JSON.stringify({ stopped: true, pid: result.pid, port: result.port, home: home(), rendezvousRemoved: result.rendezvousRemoved }))
-        else console.error(`viewer: stopped (pid ${result.pid}, port ${result.port})${result.rendezvousRemoved ? '' : ` — it exited without removing its rendezvous file; the stale record is harmless (discovery fails closed) but unexpected`}`)
+        // §7.1.8: the serve forward outlives the viewer, and the freed fixed port is
+        // bindable by anyone local — remind the operator to tear the proxy down. The
+        // recorded origin is re-validated before it is echoed (same rule as --print-url).
+        let stoppedTailscale = null
+        if (result.tailscaleOrigin) {
+          try { stoppedTailscale = viewer.parseTailscaleOrigin(result.tailscaleOrigin).origin } catch { /* corrupt record — say nothing specific */ }
+        }
+        if (flags.json) console.log(JSON.stringify({ stopped: true, pid: result.pid, port: result.port, home: home(), rendezvousRemoved: result.rendezvousRemoved, ...(stoppedTailscale ? { tailscaleOrigin: stoppedTailscale } : {}) }))
+        else {
+          console.error(`viewer: stopped (pid ${result.pid}, port ${result.port})${result.rendezvousRemoved ? '' : ` — it exited without removing its rendezvous file; the stale record is harmless (discovery fails closed) but unexpected`}`)
+          if (stoppedTailscale) console.error(`viewer: the tailscale serve forward to port ${result.port} is still active — remove it (tailscale serve status, then tailscale serve reset) or the freed port serves ${stoppedTailscale} for whatever binds it next`)
+        }
         return 0
       }
 
@@ -575,7 +605,19 @@ export async function main(argv) {
         // The control token is ephemeral and in-memory (§7.1.2), so a reprinted URL is
         // read-only by construction even against a --control instance: restart the
         // viewer to mint a new one (§13.3).
-        announce(viewer.viewerUrl({ port: found.port, token: found.token }), { port: found.port, home: home(), control: found.control })
+        // A recorded tailscale origin is reprinted only when it still parses as one —
+        // a corrupted record must degrade to the local URL, not to a garbage authority.
+        // The JSON field is emitted from the same validated parse, never the raw record:
+        // a corrupted viewer.json must not reach stdout in any shape.
+        let printedTailscaleUrl = null
+        let printedTailscaleOrigin = null
+        if (found.tailscaleOrigin) {
+          try {
+            printedTailscaleOrigin = viewer.parseTailscaleOrigin(found.tailscaleOrigin).origin
+            printedTailscaleUrl = viewer.viewerUrl({ port: found.port, token: found.token, origin: printedTailscaleOrigin })
+          } catch { /* malformed record */ }
+        }
+        announce(viewer.viewerUrl({ port: found.port, token: found.token }), { port: found.port, home: home(), control: found.control, ...(printedTailscaleOrigin ? { tailscaleOrigin: printedTailscaleOrigin } : {}) }, printedTailscaleUrl)
         return 0
       }
 
@@ -600,13 +642,21 @@ export async function main(argv) {
           onRotate,
           port,
           explicitPort: port != null,
+          tailscaleOrigin,
           onReuseRefused: (found) => {
             if (!capabilities.length) return
+            const controlFlag = `--control${capabilities.length === CAPABILITIES.length ? '' : '=' + capabilities.join(',')}`
+            // §7.1.8: while a tailscale primary lives, a "second, separate instance" is
+            // impossible (the policy mismatch and the no-secondary rule both refuse it),
+            // so that suggestion is only offered in local mode. The tailscale recipe is
+            // the one command that actually works: stop, restart with the same flags.
             throw new WorkflowError(
               `a flowition viewer is already serving this home on port ${found.port}${found.pid ? ` (pid ${found.pid})` : ''}, and its control token exists only in that process's memory — `
               + `--control cannot attach to it.\n`
-              + `  stop it and start again with control:  ${found.pid ? `kill ${found.pid} && ` : ''}flowition viewer --control${capabilities.length === CAPABILITIES.length ? '' : '=' + capabilities.join(',')}\n`
-              + `  or run a second, separate instance:    flowition viewer --port <N> --control${capabilities.length === CAPABILITIES.length ? '' : '=' + capabilities.join(',')}`)
+              + (tailscaleOrigin
+                ? `  stop it and start again with control:  flowition viewer --stop && flowition viewer --port ${found.port} --tailscale-origin ${tailscaleOrigin} ${controlFlag}`
+                : `  stop it and start again with control:  ${found.pid ? `kill ${found.pid} && ` : ''}flowition viewer ${controlFlag}\n`
+                  + `  or run a second, separate instance:    flowition viewer --port <N> ${controlFlag}`))
           },
           control: flags.control,
           idleShutdown: !!flags['idle-shutdown'],
@@ -631,11 +681,11 @@ export async function main(argv) {
       }
 
       if (started.reused) {
-        announce(started.url, { port: started.port, home: home(), control: started.control, reused: true })
+        announce(started.url, { port: started.port, home: home(), control: started.control, reused: true, ...(started.tailscaleOrigin ? { tailscaleOrigin: started.tailscaleOrigin } : {}) }, started.tailscaleUrl ?? null)
         return 0
       }
       const instance = started
-      announce(instance.url, { port: instance.port, home: instance.home, control: instance.control })
+      announce(instance.url, { port: instance.port, home: instance.home, control: instance.control, ...(instance.tailscaleOrigin ? { tailscaleOrigin: instance.tailscaleOrigin } : {}) }, instance.tailscaleUrl ?? null)
 
       // SIGINT/SIGTERM close the server and exit; the library layer never calls
       // process.exit itself (parity #29).
@@ -644,7 +694,14 @@ export async function main(argv) {
       process.once('SIGTERM', stop)
       // A revoked credential is a failure exit: the server is gone and the printed URL is
       // dead. An idle shutdown or a signal is a clean one.
-      return (await stopped) === 'credential-revoked' ? 1 : 0
+      const reason = await stopped
+      // §7.1.8: EVERY exit of a tailscale-mode instance leaves the serve forward and a
+      // freed, bindable fixed port behind — Ctrl-C and --idle-shutdown included, not just
+      // `viewer --stop`. The origin printed here is the parsed canonical one from startup.
+      if (instance.tailscaleOrigin) {
+        console.error(`viewer: the tailscale serve forward to port ${instance.port} is still active — remove it (tailscale serve status, then tailscale serve reset) or the freed port serves ${instance.tailscaleOrigin} for whatever binds it next`)
+      }
+      return reason === 'credential-revoked' ? 1 : 0
     }
 
     case 'doctor': {
@@ -693,8 +750,11 @@ commands:
   rm <runId> [--purge]      move a run to the trash (recoverable for ${TRASH_TTL_DAYS} days; --purge empties the trash)
   prune [--older-than N]    trash terminal runs older than N days + purge aged trash
   viewer [--port N] [--control[=send,answer,cancel,resume,delete]] [--open] [--print-url] [--stop] [--json]
+         [--tailscale-origin https://<machine>.<tailnet>.ts.net[:port]]
                             serve the local run viewer on 127.0.0.1 (read-only unless --control);
-                            --stop stops this home's registered instance
+                            --stop stops this home's registered instance;
+                            --tailscale-origin (with a fixed --port) additionally accepts
+                            requests proxied by \`tailscale serve <port>\` from that origin
   doctor                    check adapter CLIs
   guide                     print the workflow authoring guide (for agents)
   mcp                       serve flowition as an MCP stdio server`)

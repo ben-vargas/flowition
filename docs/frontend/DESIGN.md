@@ -1550,6 +1550,43 @@ browser transport. Therefore:
    rehypeRaw→sanitize chain.
 7. **No logging of bodies or transcript content.** Access log lines are
    `method path-without-query status ms` only.
+8. **Tailnet access via Tailscale Serve — opt-in, Tailscale-specific**
+   (`--tailscale-origin https://machine.tailnet-name.ts.net`). The bind stays
+   `127.0.0.1` (rule 1 is not relaxed); Tailscale Serve terminates tailnet TLS and
+   proxies to the loopback port, and the flag teaches the request gates about exactly
+   that one path. It is **not** a generic trusted-proxy flag: the value must be a
+   canonical HTTPS `*.ts.net` origin — no credentials, path, query, or fragment — because
+   the security argument leans on Serve's specific header contract
+   (`ipn/ipnlocal/serve.go`: it deletes the known client-supplied `Tailscale-*`
+   identity/Funnel headers by name, overwrites `X-Forwarded-Proto: https` at TLS
+   termination, preserves the `.ts.net` Host to a TCP-port backend, and marks public
+   Funnel traffic with `Tailscale-Funnel-Request: ?1`). Concretely, when the flag is
+   set:
+   - The closed Host map (rule 3) gains exactly one entry: the configured `.ts.net`
+     authority, compared case-insensitively (DNS names), mapping to the configured
+     `https://` origin for the rule-5 Origin equality check. Loopback entries keep
+     their exact byte match and their `http://` origins — cross-pairs still refuse.
+   - Requests carrying the Tailscale Host must also carry exactly
+     `X-Forwarded-Proto: https`, else 403 — provenance that the request entered
+     through Serve's TLS ingress, not a plaintext alias. This is provenance, not
+     authentication: a local same-user process can forge it and is out of scope (§7.4).
+   - Any request bearing `Tailscale-Funnel-Request` — in any form — is refused before
+     even the Host gate: Funnel means the public internet, which the flag never
+     authorizes. Serve strips the client-supplied header, so through the proxy it
+     cannot be forged away.
+   - The mode demands an explicit fixed `--port` (Serve forwards to one port; silent
+     port-walking would strand the proxy) and refuses to run as a secondary instance.
+     The rendezvous record carries `tailscaleOrigin`, and reuse (§4.2.1) matches on it:
+     a policy mismatch between a live instance and the caller is a loud refusal after
+     the HMAC challenge proof — never a shadow listener with different exposure.
+   - Every other gate is unchanged and still applies to tailnet requests: bearer token
+     on all of `/api`, Origin equality, JSON content-type, `--control` + control token
+     for mutations, CSP and friends on every response. Without the flag, nothing above
+     exists — the Host map has its loopback trio and the Funnel header is inert.
+
+   Setup: `flowition viewer --port 4646 --tailscale-origin
+   https://machine.tailnet-name.ts.net` then `tailscale serve --bg 4646`. Never
+   `tailscale funnel` — the viewer refuses Funnel traffic by design.
 
 ### 7.2 The write surface
 
@@ -1661,6 +1698,10 @@ full-permission agent processes, run lifecycle.
 | Malicious/garbled run files | Parser DoS (huge lines, deep JSON) | Lossy line readers with 1 MiB per-line cap (skip+count oversize lines); chunked async search with a 2 s deadline (§5.4.7); per-record 64 KiB stream cap (§5.6.5); JSON-tree render caps (§2.6); response sizes bounded per route (§5.1) |
 | Viewer bug | Executing a workflow | Structural: no code path imports `runWorkflow` (denylist test, §11.2); resume spawns the CLI which re-validates hashes |
 | Mistaken/stolen control credential | Irreversible destruction, evidence loss | Delete is trash+purge with a 7-day window; lifecycle ops logged to an audit file outside the run (§7.3) |
+| Public internet (misconfigured `tailscale funnel`) | Reach the viewer through Tailscale's public ingress | `Tailscale-Funnel-Request` refused unconditionally in tailscale mode (§7.1.8); Serve strips the client's copy, so the marker is trustworthy through the proxy |
+| Off-tailnet network attacker | Reach the tailnet authority directly | Bind is still `127.0.0.1` — only Serve's local proxy hop reaches the listener; the `.ts.net` Host without `X-Forwarded-Proto: https` from that hop is a 403 |
+| Malicious web page (tailscale mode) | DNS rebinding / CSRF against the tailnet authority | Same closed Host map (one added entry, §7.1.8) and Origin-equality rule; a rebound name matches nothing, and the tailnet authority's only legal Origin is its exact `https://` self |
+| Tailnet peer without the URL | Connect to `https://machine…ts.net` and read/drive the viewer | Same bearer-token and control-token gates as loopback (§7.1.2) — tailnet reachability grants nothing tokenless; per the operator's model, tailnet devices are their own trusted machines |
 
 Accepted residuals (documented in-app under Settings → Security): loopback TCP metadata
 (port presence) is visible to local users; a same-user process can read the token file —
@@ -2223,8 +2264,12 @@ Implementers cannot ask; these are the answers.
    EventSource errors persist while healthz succeeds. No SharedWorker in v1.
 7. **Concurrent viewers (two `flowition viewer` processes)?** Prevented per home by the
    port-reuse protocol; a second instance on a custom port against the same home is
-   harmless (all readers are lossy; `deriveRunState`'s marker sweeps are the sanctioned
-   mutation and are same-user).
+   read-safe (all readers are lossy; `deriveRunState`'s marker sweeps are the sanctioned
+   mutation and are same-user) — though both share one `viewer.token`, so a credential
+   rotation stops both, and a `--tailscale-origin` instance refuses to start as a
+   secondary, and while its rendezvous record lives no secondary can start against it
+   (§7.1.8). (A secondary that outlived an EARLIER local primary can still be running
+   when a tailscale primary starts — it stays loopback-only and shares no policy.)
 8. **Delete while a tab watches?** Stream emits `sys/gone`; the list prunes; the cockpit
    shows "run was deleted" (§5.6.4). No tombstone.
 9. **Costs when the journal has no `cost`?** Render tokens only; never estimate prices
