@@ -327,6 +327,30 @@ graph), when args differ, or when the workflow contains constructs the import
 scanner cannot follow statically (`eval`, `Function(`, computed dynamic
 imports). Fresh runs are never affected by those constructs.
 
+### Cross-run result seeding
+
+When resume refuses because you *edited the workflow*, the completed results of the
+old run don't have to be paid for again: `flowition run new.workflow.js --seed-from
+<runId>` loads a settled source run's journal read-only and reuses its completed
+agent results as a candidate cache. Derived resume keys hash branch position +
+prompt + resolved spec — no run id, no file hash — so an unchanged `agent()` call
+matches across runs and replays instantly, while the calls you edited derive new
+keys and run fresh. Each hit is durably written into the *new* run's journal with
+`seeded` provenance (source run id and usage), so the target resumes normally even
+after the source run is deleted, and seeded results add **zero** to the new run's
+budget/spend.
+
+This is operator-authorized cache reuse, weaker than resume: key equality identifies
+the same call shape but does not pin file bytes, args, `now()`/`random()` streams, or
+world state — use it for research/pure-result agents, not for agents whose
+correctness depends on file edits or other side effects. Never seeded: `step()`
+results (durable side effects proven only against the old world), explicit-`key`
+agents (an explicit key matches even a rewritten call), `ask()` answers, provider
+sessions, steering mail, and any source result that received steering. The source
+must be settled (completed/failed/interrupted/stale — a failed run's *completed*
+agents seed fine) with a matching key version; `--seed-from` applies to fresh runs
+only and cannot combine with `--resume`.
+
 ### Budget
 
 `--budget N` sets an output-token ceiling exposed as `budget.total` /
@@ -338,7 +362,7 @@ journaled (including failed and cancelled agents) and restored on resume.
 
 | command | description |
 |---------|-------------|
-| `flowition run <file>` | Run a workflow. `--args <json>` / `--args-file <f>`, `--adapter`, `--model`, `--effort`, `--cwd`, `--concurrency N`, `--budget N`, `--resume <id>`, `--detach`, `--json` |
+| `flowition run <file>` | Run a workflow. `--args <json>` / `--args-file <f>`, `--adapter`, `--model`, `--effort`, `--cwd`, `--concurrency N`, `--budget N`, `--resume <id>`, `--seed-from <id>`, `--detach`, `--json` |
 | `flowition resume <runId>` | Continue an interrupted run: journal replay plus provider-session resume. `--concurrency`, `--budget`, `--json` |
 | `flowition runs` | List runs, newest first. `--json` |
 | `flowition status <runId>` | Snapshot: phases, per-agent state, unanswered `ask()`s, queued mail, spend. `--json` |

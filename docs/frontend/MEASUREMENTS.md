@@ -4,7 +4,21 @@ Measured 2026-07-31 on a 16-core Apple M3 Max MacBook Pro with 64 GB RAM,
 macOS 27.0 (26A5388g), Node 24.14.0, and Google Chrome 150.0.7871.187.
 These are development-machine measurements, not portable benchmarks.
 
-Measured-source SHA-256: `9aa5ffc6a7a05ff0de72d43805c7909afe17d0cee99ea722fc0e6f9d76981b80`
+Measured-source SHA-256: `b1ada0e12104ef207a5c26110499373cbfa316bdedb68a25e5ea504036f5207d`
+
+Hash rebound 2026-08-04 for cross-run result seeding (`--seed-from`) viewer support:
+`src/viewer/fold.js` gained one additive `seededFrom` annotation on the agent fold
+(a provenance string set only while `state === 'cached'`, cleared by any real
+execution; no change to any transition, timestamp, or usage path), `fold.d.ts` the
+matching `AgentView.seededFrom` declaration, and three SPA fixture builders the new
+field's `null` default. `viewer/dist` was rebuilt (`app.js` carries the shared fold,
+so its bytes change; every other asset is byte-identical) and the §3.7 built captures
+were regenerated against the new bundle — no UI component consumes the annotation
+yet, so every measured browser code path renders identical work. Server paths were
+re-validated by the root suite plus the new seed-from tests; browser rows below were
+NOT re-measured for this entry and remain measurements of the previous bundle's
+identical hot paths. The next dist-changing entry that adds seeded RENDERING
+re-measures in full.
 
 Hash rebound 2026-08-04 for durable `step()` viewer support: `src/viewer/fold.js`
 gained an additive `step` event fold (a `steps` collection beside `agents`; no change

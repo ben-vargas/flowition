@@ -379,6 +379,45 @@ seconds (until its next write to the dead engine's pipe fails), so an immediate
 resume can briefly overlap that dying child's provider session — the same
 documented at-least-once class as crash-window steering, duplication over loss.
 
+### Cross-run result seeding (`--seed-from`)
+
+Because derived agent keys hash branch position + prompt + resolved spec — no run
+id, no seed, no file hash — an unchanged `agent()` call derives the identical key
+across runs. `flowition run <edited-file> --seed-from <runId>` (`src/seed.js`)
+exploits that: it loads a settled source run's journal **read-only** (never
+`{repair:true}`; a torn tail is tolerated as an ignored record, interior corruption
+refuses) and exposes its final last-wins `status === 'completed'` agent results as a
+candidate cache for a fresh run — the recovery path for exactly the case resume
+correctly refuses, an edited workflow file.
+
+This is deliberately weaker than resume: key equality identifies the same call
+shape but pins none of what resume pins (file bytes, args, `now()`/`random()`
+streams, steering, world state), so it is operator-authorized cache reuse for
+research/pure-result agents, never a freshness guarantee. The exclusions keep
+everything session- or side-effect-shaped out: `step()` results (step keys don't
+hash the callback, and a completed step proves a side effect in the *old* world),
+`ask()` answers, provider sessions, usage baselines, steering mail, and any source
+key that ever accepted steering mail (mail isn't keyed but shaped the answer). The
+steering exclusion is source-side only: steering newly added in the *target* cannot
+retroactively invalidate a hit — the seeded result is materialized before the spawn
+handle can send, so that mail is dropped with a warning, exactly like a same-run
+cache replay. To force real execution, change the call's prompt/spec or give it an
+explicit `key`.
+Explicit `o.key` results are excluded structurally — explicit keys hash in their own
+domain, and the engine skips the seed lookup entirely when a call passes `key`.
+
+Preconditions: the source must exist, be settled (completed/failed/interrupted/
+stale — a failed run's completed agents seed fine; running/starting have a live
+writer and refuse), match `KEY_VERSION`, and not be the target itself. A bad source
+is an admission failure sealed like any other. On a hit the engine allocates a
+target index and durably appends a completed `result` record to the **target**
+journal — `usage: null` so imported spend never enters the budget aggregates, with
+the source's run id, index, and usage on a `seeded` provenance field — *before*
+returning the result, so a later resume of the target replays it from its own
+journal even after the source run is deleted. The `cached` event (and the shared
+fold's `seededFrom` annotation) distinguishes cross-run seeding from same-run
+replay; the target's `meta` records the source's run id and hashes as provenance.
+
 ## Communication & inspection
 
 A unix control socket per run accepts `status`, `send` (steer agent by index or

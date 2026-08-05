@@ -125,6 +125,12 @@ now() / random()                       deterministic; use instead of Date.now()/
   flowition resume <runId>                    # replay completed agents from the journal;
                                          # interrupted agents CONTINUE their provider
                                          # session (claude/codex/amp/droid/opencode/pi)
+  flowition run edited.workflow.js --seed-from <runId>
+                                         # you EDITED the file (so resume refuses):
+                                         # reuse the old run's completed agent results as
+                                         # a cache — unchanged calls replay at zero cost,
+                                         # edited calls run fresh. Steps, explicit-key
+                                         # agents, and steered results never seed.
   flowition status <runId> / flowition tail <runId> [-f] [--agent N]
   flowition send <runId> <agent> "msg" / flowition cancel <runId> [--agent N]
 `

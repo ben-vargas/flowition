@@ -147,6 +147,8 @@ Resume refuses — loudly, rather than silently forking history — when:
 
 To iterate on an edited workflow, start a fresh run — resume recovers an interrupted run of the *same* file. `flowition resume` restores the journaled `--adapter`/`--model`/`--effort`/`--cwd`/`--args` and rejects overrides of them; its documented invocation options are `--concurrency`, `--budget`, and `--json`.
 
+**Cross-run result seeding:** when you *edited* the workflow (so resume refuses), `flowition run <edited-file> --seed-from <oldRunId>` reuses the old run's completed agent results as a candidate cache — unchanged `agent()` calls replay instantly (derived keys don't hash the file), edited calls run fresh. Seeded hits cost zero budget, are written durably into the new run's journal (the old run can be deleted afterwards), and show as "seeded from run …" in status. Never seeded: `step()` results, explicit-`key` agents, `ask()` answers, sessions, steered results. The source must be a settled run (a failed run's completed agents seed fine); fresh runs only — it cannot combine with `--resume`. It's cache reuse, not resume: use it for research/pure-result agents, not agents whose correctness depends on side effects.
+
 ## Mid-run communication
 
 From workflow code:
@@ -169,7 +171,8 @@ Agents *inside* a run receive `FLOWITION_RUN_ID` / `FLOWITION_AGENT_INDEX` / `FL
 ```
 flowition run <file.workflow.js> [--args '<json>' | --args-file <f>]
               [--adapter a] [--model m] [--effort e] [--cwd dir]
-              [--concurrency N] [--budget N] [--resume <runId>] [--detach] [--json]
+              [--concurrency N] [--budget N] [--resume <runId>] [--seed-from <runId>]
+              [--detach] [--json]
 flowition resume <runId> [--concurrency N] [--budget N] [--json]
 flowition runs [--json]                      List runs, newest first
 flowition status <runId> [--json]            Phases, per-agent state, open ask()s, queued mail, spend

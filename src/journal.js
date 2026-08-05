@@ -27,7 +27,12 @@
 //                                         Written at turn end only when a resumable session id
 //                                         exists; a sessionless turn's deliveries are journaled by
 //                                         the engine alongside the COMPLETED result record instead
-//   result    {key, index, status, result, usage, durationMs, adapter, model}
+//   result    {key, index, status, result, usage, durationMs, adapter, model, seeded?}
+//                                       — seeded {from, index, usage} marks a cross-run
+//                                         seed hit (--seed-from): the result was imported
+//                                         from run `from` (its index/usage are provenance
+//                                         only) and the record's own usage is null so
+//                                         imported spend never enters budget aggregates
 //   step-start {key, name, args}       — durable step() callback about to execute. A
 //                                         start with no matching step-result is an
 //                                         ambiguous crash window: the callback may or
@@ -93,6 +98,11 @@ export class Journal {
       // independent counters and must never satisfy each other's lookups.
       stepResults: new Map(),
       stepStarted: new Map(), // key -> step-start entry (observability; NEVER replayed as success)
+      // Every key that ever ACCEPTED steering mail (any origin, delivered or not).
+      // Cross-run seeding (src/seed.js) excludes these conservatively: mail is not
+      // part of the resume key, so a steered result's shape can differ from what the
+      // same call would produce unsteered — key equality alone doesn't cover it.
+      mailedKeys: new Set(),
       started: new Map(),   // key -> started entry
       // key -> number of result records seen for it (E9). `results` is last-wins and
       // hides history; this is the attempt count a resumed attempt numbers itself from.
@@ -131,6 +141,7 @@ export class Journal {
           break
         }
         case 'mail': {
+          state.mailedKeys.add(e.key)
           if (!state.pendingMail.has(e.key)) state.pendingMail.set(e.key, [])
           // pre-origin journals restore as operator: possible duplicate beats loss
           state.pendingMail.get(e.key).push({ id: e.id, text: e.text, origin: e.origin ?? 'operator', ...(e.seq != null ? { seq: e.seq } : {}), ...(e.sender != null ? { sender: e.sender } : {}), ...(e.callsite != null ? { callsite: e.callsite } : {}) })

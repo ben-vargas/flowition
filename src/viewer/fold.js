@@ -200,6 +200,7 @@ function blankAgent(index) {
     attempts: 0,
     steers: [],
     cached: false,
+    seededFrom: null,
     _firstOffset: null,
     _approxPhaseIndex: null,
   }
@@ -336,6 +337,11 @@ function foldAgent(state, ev, offset) {
     agent.endedAt = finite(ev.t)
   }
   agent.cached = ev.state === 'cached'
+  // Cross-run seed provenance rides ONLY the `cached` event (src/engine.js): a hit
+  // seeded from another run, or a resume replaying such a record. Any other
+  // transition means the index is executing for real, so the annotation expires
+  // with the replay exactly like `cached` itself.
+  agent.seededFrom = ev.state === 'cached' && ev.seededFrom != null ? String(ev.seededFrom) : null
   if (own(ev, 'error')) agent.error = ev.error == null ? null : String(ev.error)
   if (own(ev, 'errorCode') || own(ev, 'code')) agent.errorCode = ev.errorCode ?? ev.code ?? null
   if (own(ev, 'retryable')) agent.retryable = ev.retryable == null ? null : Boolean(ev.retryable)

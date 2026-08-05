@@ -168,6 +168,12 @@ export interface AgentView {
     mailId?: string | null
   }[]
   cached: boolean
+  /**
+   * Cross-run seed provenance (`--seed-from`): the source runId whose completed result
+   * this cached agent reused, or null for an ordinary same-run journal replay. Set only
+   * while `state === 'cached'`; a later real execution of the index clears it.
+   */
+  seededFrom: string | null
 }
 
 /**

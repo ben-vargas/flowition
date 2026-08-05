@@ -16,6 +16,7 @@ import { getAdapter } from './adapters/index.js'
 import * as K from './keys.js'
 import { sha256, canonical, ensureDir, runDir, shortId, truncate, assertJsonValue } from './util.js'
 import { validate } from './schema.js'
+import { loadSeedSource } from './seed.js'
 
 export class WorkflowError extends Error {}
 // Per-item degradable failure — parallel()/pipeline() turn these into null.
@@ -809,6 +810,28 @@ export async function runWorkflow(opts) {
       if (norm(prior.meta.defaults) !== norm(defaults)) throw new WorkflowError('cannot resume: defaults (adapter/model/effort/cwd) differ from the original run — omit the overrides or start a fresh run')
     }
 
+    // Cross-run result seeding (--seed-from): an operator-authorized candidate
+    // cache from a settled source run, fresh runs only. Resume never takes it —
+    // seed hits are durably materialized into THIS run's journal below, so a
+    // resumed target replays them from its own journal without the source. The
+    // combination is refused resume-style (no artifacts written: the existing
+    // run's state belongs to its prior attempt); a fresh run's seed-source
+    // failure is an admission failure and leaves terminal artifacts like any
+    // other (the meta record does not exist yet, matching the unreadable-file
+    // path above).
+    let seedSource = null
+    if (opts.seedFrom != null) {
+      if (opts.resumeId) throw new WorkflowError('--seed-from applies to fresh runs only — a resumed run replays its own journal (seed hits were materialized into it when the run started)')
+      try {
+        seedSource = await loadSeedSource(opts.seedFrom, { targetRunId: runId })
+      } catch (err) {
+        const msg = String(err?.message ?? err)
+        journal.append({ type: 'end', status: 'failed', error: msg })
+        finalize({ runId, status: 'failed', error: msg })
+        throw new WorkflowError(msg)
+      }
+    }
+
     const concurrency = opts.concurrency ?? 8
     if (!Number.isInteger(concurrency) || concurrency < 1) throw new WorkflowError('concurrency must be an integer >= 1')
     // The budget is part of the run, not the invocation: restore it on resume
@@ -830,7 +853,7 @@ export async function runWorkflow(opts) {
     const seed = prior?.meta.seed ?? crypto.randomBytes(8).toString('hex')
     const createdAt = prior?.meta.createdAt ?? Date.now()
     if (!prior) {
-      journal.append({ type: 'meta', runId, workflowFile: file, fileHash, graphHash, graphDynamic: graph.dynamic, ...(opts.args !== undefined ? { args: opts.args } : {}), seed, createdAt, keyVersion: K.KEY_VERSION, defaults, budgetTotal })
+      journal.append({ type: 'meta', runId, workflowFile: file, fileHash, graphHash, graphDynamic: graph.dynamic, ...(opts.args !== undefined ? { args: opts.args } : {}), seed, createdAt, keyVersion: K.KEY_VERSION, defaults, budgetTotal, ...(seedSource ? { seedFrom: { runId: seedSource.runId, fileHash: seedSource.fileHash, graphHash: seedSource.graphHash } } : {}) })
     }
     if (prior?.repaired) events.emit({ type: 'log', source: 'engine', level: 'warn', message: 'journal had a torn final record (crash mid-write) — repaired' })
 
@@ -993,9 +1016,37 @@ export async function runWorkflow(opts) {
         // from Journal.load's completedUsage aggregate — charging it at replay
         // would double-count, and charging it ONLY at replay under-counted
         // whenever resumed control flow skipped a completed key entirely.
+        // A replayed record that was originally a cross-run seed hit keeps its
+        // provenance visible: the annotation rides the journal record.
         agentInfo.set(cached.index, { key, label, adapter: adapterName, model: spec.model ?? null, phase, phaseIndex, path })
-        events.emit({ type: 'agent', index: cached.index, key, label, adapter: adapterName, model: spec.model ?? null, state: 'cached', phase, phaseIndex, path })
+        events.emit({ type: 'agent', index: cached.index, key, label, adapter: adapterName, model: spec.model ?? null, state: 'cached', ...(cached.seeded?.from != null ? { seededFrom: cached.seeded.from, seedUsage: cached.seeded.usage ?? null } : {}), phase, phaseIndex, path })
         return cached.result
+      }
+      // Cross-run seed hit (--seed-from). Derived keys only: an explicit o.key
+      // matches even a completely rewritten call (content/position identity is
+      // void), so it never consults the seed map — and a derived key can never
+      // collide with a source explicit-key record anyway (separate hash domain,
+      // keys.js). The hit is durably materialized into THIS run's journal
+      // before it is returned — the completed record SEALS the reuse, so a
+      // later resume replays it from the target journal even after the source
+      // run is deleted. usage is null on the record: imported spend is not this
+      // run's provider spend and must never enter the budget aggregates
+      // (Journal.load reads e.usage only); the source's own numbers ride the
+      // `seeded` provenance field. Everything after the append is telemetry,
+      // best-effort by the same rule as every other sealed outcome.
+      if (seedSource && o.key == null) {
+        const hit = seedSource.results.get(key)
+        if (hit) {
+          const index = nextIndex++
+          journal.append({ type: 'result', key, index, status: 'completed', result: hit.result, usage: null, durationMs: 0, adapter: adapterName, model: spec.model ?? null, seeded: { from: seedSource.runId, index: hit.index, usage: hit.usage } })
+          try {
+            agentInfo.set(index, { key, label, adapter: adapterName, model: spec.model ?? null, phase, phaseIndex, path })
+            events.emit({ type: 'agent', index, key, label, adapter: adapterName, model: spec.model ?? null, state: 'cached', seededFrom: seedSource.runId, seedUsage: hit.usage, phase, phaseIndex, path })
+          } catch (err) {
+            try { events.emit({ type: 'log', source: 'engine', level: 'error', index, message: `agent [${index}] post-seed telemetry error (seeded result stands): ${String(err?.message ?? err)}` }) } catch { /* best effort */ }
+          }
+          return hit.result
+        }
       }
       const index = prior?.indexByKey.get(key) ?? nextIndex++
       agentInfo.set(index, { key, label, adapter: adapterName, model: spec.model ?? null, phase, phaseIndex, path })

@@ -15,7 +15,7 @@ import { GUIDE } from './guide.js'
 import { ByteTail, drainTail } from './viewer/tail.js'
 
 const booleanFlags = new Set(['json', 'detach', 'follow', 'wait', 'quiet', 'purge', 'idle-shutdown', 'open', 'print-url', 'no-viewer', 'stop'])
-const valueFlags = new Set(['args', 'args-file', 'adapter', 'model', 'effort', 'cwd', 'concurrency', 'budget', 'resume', 'run-id', 'agent', 'run', 'older-than', 'port', 'idle-timeout'])
+const valueFlags = new Set(['args', 'args-file', 'adapter', 'model', 'effort', 'cwd', 'concurrency', 'budget', 'resume', 'run-id', 'seed-from', 'agent', 'run', 'older-than', 'port', 'idle-timeout'])
 // `--control` is the one optional-value flag (DESIGN §4.2): bare enables every
 // capability, `--control=send,cancel` a subset. It never consumes the next argv token,
 // so `flowition viewer --control` cannot swallow a following option.
@@ -140,6 +140,7 @@ function collectRunOpts(flags) {
     },
     concurrency: flags.concurrency != null ? integerOption(flags.concurrency, '--concurrency', 1) : undefined,
     budgetTotal: flags.budget != null ? integerOption(flags.budget, '--budget', 0) : undefined,
+    seedFrom: flags['seed-from'] ?? undefined,
     quiet: !!flags.quiet || !!flags.json,
   }
 }
@@ -191,9 +192,21 @@ export async function main(argv) {
   switch (cmd) {
     case 'run': {
       const file = positional[0]
-      if (!file) { console.error('usage: flowition run <file.workflow.js> [--args <json>] [--adapter a] [--model m] [--effort e] [--concurrency N] [--budget N] [--resume <runId>] [--detach] [--json]'); return 1 }
+      if (!file) { console.error('usage: flowition run <file.workflow.js> [--args <json>] [--adapter a] [--model m] [--effort e] [--concurrency N] [--budget N] [--resume <runId>] [--seed-from <runId>] [--detach] [--json]'); return 1 }
       if (flags['run-id'] != null) checkRunId(flags['run-id'])
       if (flags.resume != null) checkRunId(flags.resume)
+      if (flags['seed-from'] != null) {
+        checkRunId(flags['seed-from'])
+        if (flags.resume != null) throw new WorkflowError('--seed-from cannot be combined with --resume — seeding applies to fresh runs; a resumed run replays its own journal (seed hits were materialized into it)')
+        // Pre-validate the source before a detached child is spawned: the same
+        // loader the engine runs, so a bad source fails HERE with a printed
+        // error instead of only inside the child's terminal artifacts. The
+        // foreground path lets the engine validate (admission boundary).
+        if (flags.detach) {
+          const { loadSeedSource } = await import('./seed.js')
+          try { await loadSeedSource(flags['seed-from'], { targetRunId: flags['run-id'] ?? null }) } catch (err) { throw new WorkflowError(String(err?.message ?? err)) }
+        }
+      }
       const opts = collectRunOpts(flags)
       if (flags.detach) {
         const runId = detachRun(file, rest.filter((a) => a !== file), flags.resume)
@@ -259,6 +272,7 @@ export async function main(argv) {
       for (const f of ['adapter', 'model', 'effort', 'cwd', 'args', 'args-file']) {
         if (flags[f] != null) throw new WorkflowError(`resume restores the journaled --${f}; overrides are not applied here — use \`flowition run <file> --resume ${runId} --${f} ...\` (validated by the engine) or omit the flag`)
       }
+      if (flags['seed-from'] != null) throw new WorkflowError('--seed-from applies to fresh runs only — this run\'s seed hits (if any) were materialized into its journal when it started and replay on resume')
       const concurrency = flags.concurrency != null ? integerOption(flags.concurrency, '--concurrency', 1) : undefined
       const budgetTotal = flags.budget != null ? integerOption(flags.budget, '--budget', 0) : undefined
       let prior
@@ -666,7 +680,7 @@ export async function main(argv) {
     default:
       console.log(`flowition — deterministic multi-CLI agent workflow engine (short alias: flo)
 commands:
-  run <file> [--args json] [--adapter a] [--model m] [--effort e] [--concurrency N] [--budget N] [--resume id] [--detach] [--json]
+  run <file> [--args json] [--adapter a] [--model m] [--effort e] [--concurrency N] [--budget N] [--resume id] [--seed-from id] [--detach] [--json]
   resume <runId>            continue an interrupted run (journal replay + provider-session resume)
   runs                      list runs
   status <runId> [--json]   fold the event stream into a snapshot

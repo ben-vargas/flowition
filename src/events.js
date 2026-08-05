@@ -28,7 +28,7 @@ export function renderEvent(ev) {
       const who = [ev.adapter, ev.model].filter(Boolean).join(':')
       const label = ev.label ? ` ${ev.label}` : ''
       if (ev.state === 'running') return `  · ${id}${label} (${who}) running…`
-      if (ev.state === 'cached') return `  ✓ ${id}${label} replayed from journal`
+      if (ev.state === 'cached') return `  ✓ ${id}${label} ${ev.seededFrom ? `seeded from run ${ev.seededFrom}` : 'replayed from journal'}`
       if (ev.state === 'done') return `  ✓ ${id}${label} done ${ev.durationMs != null ? fmtDuration(ev.durationMs) : ''}${ev.outputTokens ? ` ${ev.outputTokens} out-tok` : ''}`
       if (ev.state === 'failed') return `  ✗ ${id}${label} failed: ${ev.error}`
       if (ev.state === 'cancelled') return `  ⊘ ${id}${label} cancelled`
@@ -54,7 +54,10 @@ export function renderEvent(ev) {
 // fold only ever spread-merged, so `flowition status` showed a resumed-and-succeeded
 // agent still carrying its old error — and old runs on disk fold correctly too.
 const CLEARS_ERROR = new Set(['queued', 'running', 'cached', 'done'])
-const STALE_ON_TRANSITION = ['error', 'code', 'errorCode', 'retryable', 'durationMs', 'resultPreview']
+// seededFrom/seedUsage ride only `cached` events (cross-run seed provenance); a later
+// live transition means the index is executing for real and must drop them like any
+// other stale outcome. `cached` itself clears-then-remerges, so re-entry stays correct.
+const STALE_ON_TRANSITION = ['error', 'code', 'errorCode', 'retryable', 'durationMs', 'resultPreview', 'seededFrom', 'seedUsage']
 // Annotations, not transitions: they must not overwrite `state` (§6.4 step 3).
 const ANNOTATIONS = new Set(['progress', 'steered'])
 

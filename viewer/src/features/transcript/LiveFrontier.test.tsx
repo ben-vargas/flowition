@@ -36,6 +36,7 @@ function agent(overrides: Partial<AgentView> = {}): AgentView {
     cumTokens: { input: 1, output: 2 }, lastTool: null, lastOutputAt: 2, resultBytes: null,
     resultTruncated: false, toolIds: true, sessionId: 's3', attempts: 1, steers: [],
     cached: false,
+    seededFrom: null,
     ...overrides,
   }
 }

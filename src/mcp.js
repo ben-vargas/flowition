@@ -28,6 +28,7 @@ const TOOLS = [
         effort: { type: 'string' },
         cwd: { type: 'string' },
         budget: { type: 'number', minimum: 0, description: 'output-token ceiling (non-negative integer)' },
+        seedFrom: { type: 'string', minLength: 1, description: 'runId of a settled source run whose completed agent results seed this run as a cross-run cache (unchanged derived-key calls reuse them; edited calls run fresh)' },
       },
     },
   },
@@ -97,6 +98,7 @@ async function callTool(name, a) {
       if (a.effort) argv.push('--effort', a.effort)
       if (a.cwd) argv.push('--cwd', a.cwd)
       if (a.budget != null) argv.push('--budget', String(a.budget))
+      if (a.seedFrom !== undefined) argv.push('--seed-from', a.seedFrom)
       const runId = detach(argv)
       return { runId, note: 'detached; poll flowition_status / flowition_result' }
     }

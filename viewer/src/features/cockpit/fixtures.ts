@@ -72,6 +72,7 @@ const agent = (over: Partial<AgentView> & { index: number }): AgentView => ({
   attempts: 1,
   steers: [],
   cached: false,
+  seededFrom: null,
   ...over,
 })
 

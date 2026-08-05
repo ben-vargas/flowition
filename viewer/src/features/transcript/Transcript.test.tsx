@@ -60,6 +60,7 @@ function agent(index: number, overrides: Partial<AgentView> = {}): AgentView {
     attempts: 1,
     steers: [],
     cached: false,
+    seededFrom: null,
     ...overrides,
   }
 }
