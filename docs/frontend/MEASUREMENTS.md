@@ -4,7 +4,19 @@ Measured 2026-07-31 on a 16-core Apple M3 Max MacBook Pro with 64 GB RAM,
 macOS 27.0 (26A5388g), Node 24.14.0, and Google Chrome 150.0.7871.187.
 These are development-machine measurements, not portable benchmarks.
 
-Measured-source SHA-256: `b1ada0e12104ef207a5c26110499373cbfa316bdedb68a25e5ea504036f5207d`
+Measured-source SHA-256: `269d1e2934e913ed6f4947c5d0b97ff94b9bcaf9fa57d3f499dd398d0834a03e`
+
+Hash rebound 2026-08-05 for the fit-zoom meta gutter (operator-reported): `cockpit.css`
+gained `--meta-gutter` padding on `.tl-plot`, reserving room for the trailing `.bar-meta`
+so fit zoom stops growing the horizontal scrollbar it promises away (any run with a real
+span ends a lane at ~100% of the track, and the meta deliberately hangs past the bar).
+Dist delta: ONLY `app.css` (one rule); `app.js`, `index.html` and every other asset are
+byte-identical, and no JS hot path changes — the padding shrinks the `1fr` track the same
+way a narrower window does, which the measured paths already exercise. `viewer.spec.ts`
+gained one e2e test (a SLEEP-mock fixture whose lane ends at the window edge, asserting
+`.tl-scrollx` does not scroll at fit; precondition asserts the meta really hangs past the
+track so the test cannot go vacuous). Browser rows below were NOT re-measured for this
+entry and remain measurements of the previous bundle's identical hot paths.
 
 Hash rebound 2026-08-04 for cross-run result seeding (`--seed-from`) viewer support:
 `src/viewer/fold.js` gained one additive `seededFrom` annotation on the agent fold

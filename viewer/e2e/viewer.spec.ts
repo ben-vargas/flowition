@@ -36,6 +36,7 @@ const PERF_EVENTS_RUN = 'flo_browser_events_10mb'
 // §2.6's other two shapes: an object value (JSON tree) and a failure (error + Resume).
 const OBJECT_RUN = 'flo_browser_object'
 const FAILED_RUN = 'flo_browser_failed'
+const FIT_RUN = 'flo_browser_fit'
 
 function workflow(name: string, source: string): string {
   const dir = path.join(HOME, 'workflows')
@@ -1184,6 +1185,60 @@ test.describe.serial('built viewer in a real browser', () => {
     expect(cockpit.scrollW, 'cockpit+transcript: document wider than the viewport').toBeLessThanOrEqual(cockpit.innerW)
     expect(cockpit.movedTo, 'cockpit+transcript: window.scrollBy must be a no-op').toEqual({ x: 0, y: 0 })
     expect(await bounceLeaks(), 'cockpit+transcript: an outermost well without overscroll-behavior: none rubber-bands').toEqual([])
+  })
+
+  /**
+   * The FIT CONTRACT (cockpit.css `--meta-gutter`): fit zoom means the timeline needs NO
+   * horizontal scrollbar. Any run with a real span has a lane whose bar ends at ~100% of
+   * the track (the window is the min/max of agent stamps), and `.bar-meta` — the replay
+   * badge and the duration — deliberately hangs PAST the bar it describes. Without reserved
+   * room the meta poked beyond the track and `.tl-scrollx` grew a scrollbar at the default
+   * zoom (operator-reported). The gutter is plot padding, so the meta lands inside the
+   * scroller's content box, off its overflow. The fixed zooms scroll by design.
+   *
+   * TERMINAL_RUN cannot drive this: its instant mock run takes the zero-width-window guard
+   * (gantt.ts) and paints a synthetic mid-track bar whose meta never nears the edge. The
+   * fixture here SLEEPs, so its stamps open a real window and its own end IS the window's.
+   */
+  test('fit zoom leaves the timeline without a horizontal scrollbar, trailing metas included', async ({ page }) => {
+    const fit = await runWorkflow({
+      file: workflow('browser-fit', `
+export const meta = { name: 'browser fit', description: 'fit-zoom gutter fixture' }
+export default async function ({ agent }) {
+  return agent('SLEEP 400\\nECHO fit-complete', { adapter: 'mock', label: 'span' })
+}
+`),
+      runId: FIT_RUN,
+      defaults: { adapter: 'mock', cwd: process.cwd() },
+      quiet: true,
+    })
+    expect(fit.status).toBe('completed')
+
+    await page.setViewportSize({ width: 1280, height: 900 })
+    await openAuthenticated(page, FIT_RUN)
+    await expect(page.getByRole('tab', { name: 'Timeline' })).toHaveAttribute('aria-selected', 'true')
+    await expect(page.locator('.lane .bar-meta').first()).toBeVisible()
+    const well = await page.evaluate(() => {
+      const el = document.querySelector<HTMLElement>('.tl-scrollx')!
+      const track = document.querySelector<HTMLElement>('.lane .lane-track')!
+      const meta = document.querySelector<HTMLElement>('.lane .bar-meta')!
+      return {
+        scrollW: el.scrollWidth, clientW: el.clientWidth,
+        trackRight: track.getBoundingClientRect().right,
+        metaRight: meta.getBoundingClientRect().right,
+      }
+    })
+    // The precondition that lets this test fail: the meta really does hang past the track's
+    // right edge. If a window-maths change stops producing that geometry, this fails loudly
+    // instead of the scrollbar assertion going vacuous.
+    expect(
+      well.metaRight,
+      'fixture must push its meta past the track edge — a mid-track meta asserts nothing',
+    ).toBeGreaterThan(well.trackRight)
+    expect(
+      well.scrollW,
+      'fit: .tl-scrollx must not scroll horizontally — the trailing meta must land in the gutter',
+    ).toBeLessThanOrEqual(well.clientW)
   })
 
   // ---- the toast defect: a notice must expire, and must never eat a control ----

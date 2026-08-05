@@ -219,7 +219,18 @@
 .tl-plot {
   --lane-label: 168px;
   --track: minmax(350px, 1fr);
+  /* THE FIT CONTRACT: fit means NO horizontal scrollbar. The trailing `.bar-meta` (replay
+     badge, duration) deliberately hangs PAST the bar it describes (Timeline.tsx `metaLeft`),
+     so a bar that runs to ~100% of the track pushes its meta beyond the track's right edge —
+     and without reserved room, `.tl-scrollx` grows the very scrollbar fit promises away.
+     This gutter is padding on the plot, not a grid column, so the `1fr` track shrinks to
+     leave it and the meta renders into the padding box — inside the scroller's content, off
+     its overflow. 130px covers the widest common meta (`replay` badge + duration); the rare
+     `replay time unrecorded` badge may still poke out, which beats reserving a third of the
+     window for it. Fixed zooms keep the gutter too: it reads as trailing headroom there. */
+  --meta-gutter: 130px;
   min-width: min-content;
+  padding-right: var(--meta-gutter);
 }
 .tl-plot.fixed { --track: var(--track-px); width: max-content; }
 
