@@ -20,7 +20,7 @@ A workflow is a plain-JS ES module:
         agent('Review ' + a + ' for bugs.', { schema: FINDINGS, label: 'review:' + a })))
       phase('Verify')
       const verified = await pipeline(
-        findings.filter(Boolean).flatMap((f) => f.items),
+        findings.filter((f) => f !== null).flatMap((f) => f.items),
         (f) => agent('Adversarially verify: ' + f.title, { schema: VERDICT }),
       )
       return { verified }
@@ -57,10 +57,16 @@ agent(prompt, opts) -> Promise<string | object>
               enforces OpenAI's strict subset — every property must appear in
               'required'; express optional fields as nullable, e.g. {type:['string','null']}
     cwd       working directory for the agent
-    label     display label (also addressable by \`flowition send <run> <label>\`)
+    label     display label (also addressable by \`flowition send <run> <label>\`);
+              keep labels unique among live agents — duplicates overwrite the
+              steering map, and purely numeric labels lose to index lookup
+    phase     assign this agent to a named phase group, overriding the ambient
+              phase() — useful inside parallel()/pipeline() stages; observational
+              only, never part of the resume key
     key       explicit resume-cache key (must be unique per run)
   A directly-awaited failed agent throws; inside parallel()/pipeline() a failure
-  degrades that item to null (filter with .filter(Boolean)).
+  degrades that item to null. Filter with .filter((x) => x !== null), not
+  .filter(Boolean) — a schema result may legitimately be false, 0, or "".
 
 spawn(prompt, opts) -> { done: Promise, send(msg) }
   Like agent() but returns immediately with a steerable handle. send() live-injects

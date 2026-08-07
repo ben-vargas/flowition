@@ -126,8 +126,11 @@ export interface WorkflowMeta {
   /**
    * Optional phase outline for readers and authoring tools.
    *
-   * Flowition does not read it: the phase list shown by `flowition status`
-   * comes from the `phase()` calls the workflow actually makes.
+   * Execution does not consult it, and the phase list shown by `flowition
+   * status` comes from the `phase()` calls the workflow actually makes — but
+   * it is recorded in the run record, and the viewer uses it to order phases
+   * and display declared-but-unreached ones (matched to observed phases by
+   * index, so declare phases in first-entered order).
    */
   phases?: readonly WorkflowPhase[]
   /**
