@@ -1,6 +1,6 @@
 ---
 name: flowition
-description: Author and run deterministic multi-CLI agent workflows with the `flowition` CLI (short alias `flo`) — plain-JS files that orchestrate real coding-agent CLIs (claude, codex, amp, droid, opencode, pi) via agent()/spawn()/parallel()/pipeline(). Use when a task is big enough to decompose and run in parallel, when you want independent perspectives or adversarial verification before committing, when the work is too large for one context (broad audits, migrations, multi-source research, exhaustive reviews), or when you want a cross-model panel — different CLIs and model families on the same question. Covers the file shape, the toolkit, adapters and models, structured output, determinism, resume, mid-run steering, and every CLI command.
+description: Author and run deterministic multi-CLI agent workflows with the `flowition` CLI (short alias `flo`) — plain-JS files that orchestrate real coding-agent CLIs (claude, codex, amp, droid, opencode, pi) via agent()/spawn()/parallel()/pipeline(). Use when a task is big enough to decompose and run in parallel, when you want independent perspectives or adversarial verification before committing, when the work is too large for one context (broad audits, migrations, multi-source research, exhaustive reviews), or when you want a cross-model panel — different CLIs and model families on the same question. Covers the file shape, the toolkit, adapters and models, structured output, determinism, resume, mid-run steering, the browser viewer (with tailnet links), and every CLI command.
 metadata:
   type: reference
 ---
@@ -122,6 +122,8 @@ Every `agent()` runs under an adapter. Omit `adapter` to inherit the run's `--ad
 
 **The amp quirk: amp selects agent MODES, not models.** A mode bundles model + prompt + tools. On amp, `model` (or its alias `mode`) resolves against the builtin modes — low/medium/high/ultra — and any custom modes installed as amp plugins in `~/.config/amp/plugins`, matched by key or label (e.g. `'claude-fable-xhi'` or `'Claude Fable xhi'`). `effort` picks a builtin mode unless model/mode is given. `flowition doctor` lists what's discovered.
 
+**The pi quirk: always provider-qualify the model.** pi's `--model` is a *pattern* matched against a multi-provider catalog — a bare id can be ambiguous (`gpt-*` ids exist under both `openai-codex` and `opencode`) or miss entirely, failing the agent at spawn and the workflow with it. Always write `provider/id`: `{ adapter: 'pi', model: 'anthropic/claude-fable-5' }`, `'anthropic/claude-opus-5'`, `'openai-codex/gpt-5.6-sol'`. `pi --list-models` prints the catalog.
+
 **Every real CLI agent runs with FULL PERMISSIONS and no sandboxing** — flowition invokes each CLI with its most permissive flags. Agents can read, write, and execute anything the invoking user can. Write prompts accordingly, and only run workflows whose prompts you trust.
 
 ## Structured output
@@ -166,6 +168,19 @@ flowition cancel <runId> --agent 3           # cancel one agent, not the run
 
 Agents *inside* a run receive `FLOWITION_RUN_ID` / `FLOWITION_AGENT_INDEX` / `FLOWITION_BIN` and can report progress upward with `flowition post "message"` — tell them so in the prompt if you want progress reports.
 
+## Viewer (how the user monitors a run)
+
+`flowition viewer` serves a browser UI for this home's runs, loopback-only, and prints an authenticated URL — tokens ride in the `#` fragment and never cross the network. **When you launch a run for a user, hand back a clickable deep link — `<origin>/#/run/<runId>?t=<token>` — as the way to watch it; don't give them bash monitoring commands** (keep `status`/`tail` for your own programmatic checks). A foreground TTY run auto-starts a viewer and prints its deep link; detached/`--json`/MCP runs never do — get the base URL from `flowition viewer --print-url` (a live instance must exist) and substitute the `/run/<runId>` route. Read-only by default: send/answer/cancel/resume/delete return 403 unless the server was *started* with `--control[=send,answer,cancel,resume,delete]`; the control token exists only in that process. Viewer URLs are sensitive — the read token exposes every run's prompts, transcripts, and results; the control token steers full-permission agents.
+
+**Tailnet access — assume Tailscale is in use.** The viewer stays on loopback; other machines reach it through Tailscale Serve:
+
+```sh
+flowition viewer --port 4646 --tailscale-origin https://<machine>.<tailnet>.ts.net
+tailscale serve --bg 4646
+```
+
+The banner and `--print-url` then give both a local and a tailnet URL — prefer the tailnet one when handing out links; it works from any of the user's devices. A non-443 origin port must match the serve flag (`:8443` ↔ `tailscale serve --bg --https=8443 4646`). `tailscale serve` only, never `funnel` — public Funnel requests are refused, and the same tokens still apply on the tailnet path.
+
 ## CLI commands
 
 ```
@@ -182,6 +197,8 @@ flowition answer <runId> <qid> <text…>       Answer a workflow ask()
 flowition cancel <runId> [--agent N]         Cancel one agent or the whole run
 flowition post <msg…>                        Agent→operator progress (FLOWITION_* env, or --run/--agent)
 flowition result <runId> [--wait [seconds]]  Print the final result; --wait blocks (default 3600s)
+flowition viewer [--port N] [--control[=caps]] [--open] [--print-url] [--stop]
+                 [--tailscale-origin https://<machine>.<tailnet>.ts.net[:port]]
 flowition doctor                             Adapter CLIs: found, versions, capabilities, amp modes
 flowition guide                              Print the authoring contract (written for agents)
 flowition mcp                                Serve flowition as an MCP stdio server
@@ -191,7 +208,7 @@ flowition mcp                                Serve flowition as an MCP stdio ser
 
 ## Running a workflow for a user (from an agent)
 
-- **Detach long runs; never hold a foreground process.** `flowition run … --detach` prints a runId and returns immediately; monitor with `flowition status <id>` / `flowition tail <id> -f`.
+- **Detach long runs; never hold a foreground process.** `flowition run … --detach` prints a runId and returns immediately. Give the user a viewer deep link to watch it (see Viewer — prefer the tailnet URL); use `flowition status <id>` / `flowition tail <id> -f` for your own checks.
 - **Block with `flowition result <id> --wait`, never sleep-poll.** It returns the moment a result exists (waits up to 3600s by default, `--wait 300` to bound it).
 - `--json` on run/resume/status/tail/result gives machine-readable output.
 - Before launching: `node --check` the file, and confirm the ES-module situation (`"type": "module"` in the nearest package.json, or a `.mjs` filename).
