@@ -31,7 +31,7 @@ A workflow is a plain-JS ES module:
 agent(prompt, opts) -> Promise<string | object>
   Spawns a real CLI agent. Returns final text, or the validated object when opts.schema
   (a JSON Schema) is set. opts:
-    adapter   'claude' | 'codex' | 'amp' | 'droid' | 'opencode' | 'pi' | 'cursor' | 'mock'
+    adapter   'claude' | 'codex' | 'amp' | 'droid' | 'opencode' | 'pi' | 'cursor' | 'grok' | 'mock'
               (default: the run's --adapter)
     model     model id for that CLI. amp has no model flag: for amp, model (or mode)
               selects an *agent mode* — builtin low/medium/high/ultra or any custom
@@ -39,15 +39,17 @@ agent(prompt, opts) -> Promise<string | object>
               (e.g. 'claude-fable-xhi' or 'Claude Fable xhi'). \`flowition doctor\` lists them.
     mode      amp only — explicit agent-mode selector (alias of model for amp)
     effort    'none'|'minimal'|'low'|'medium'|'high'|'xhigh'|'max' — mapped per adapter
-              (on amp, effort picks a builtin mode unless model/mode is given).
+              (on amp, effort picks a builtin mode unless model/mode is given;
+              grok accepts the whole vocabulary natively via --reasoning-effort).
               cursor REJECTS effort — cursor encodes effort into the model id
               itself (e.g. 'gpt-5.6-sol-xhigh', 'claude-opus-4-8[effort=high]');
               \`cursor-agent --list-models\` lists the ids
-    system    system prompt: a native flag on claude/droid/pi (--append-system-prompt);
+    system    system prompt: a native flag on claude/droid/pi (--append-system-prompt)
+              and grok (--rules);
               amp/codex/opencode/cursor have no such flag, so flowition prepends it to the
               first turn of a fresh session as a delimited [system instructions]/[task]
               preamble (session-resume follow-up turns already carry it)
-    schema    JSON Schema forced on the final answer (native on claude/codex, prompt-
+    schema    JSON Schema forced on the final answer (native on claude/codex/grok, prompt-
               contract + validation + one corrective turn elsewhere). The built-in
               validator implements ONLY: type (incl. type arrays), required,
               properties, additionalProperties (boolean), items (single schema),
@@ -73,7 +75,7 @@ agent(prompt, opts) -> Promise<string | object>
 
 spawn(prompt, opts) -> { done: Promise, send(msg) }
   Like agent() but returns immediately with a steerable handle. send() live-injects
-  into claude/amp mid-run; for codex/droid/opencode/pi/cursor it queues and is
+  into claude/amp mid-run; for codex/droid/opencode/pi/cursor/grok it queues and is
   delivered as a session-resume follow-up turn after the current turn ends.
   Delivery is deliver-or-declare: if the provider session cannot take a follow-up
   turn, queued messages are terminally declared undeliverable (journaled done +
@@ -133,7 +135,7 @@ now() / random()                       deterministic; use instead of Date.now()/
   flowition run flow.workflow.js --detach     # background; then: flowition status/tail/result
   flowition resume <runId>                    # replay completed agents from the journal;
                                          # interrupted agents CONTINUE their provider
-                                         # session (claude/codex/amp/droid/opencode/pi/cursor)
+                                         # session (claude/codex/amp/droid/opencode/pi/cursor/grok)
   flowition run edited.workflow.js --seed-from <runId>
                                          # you EDITED the file (so resume refuses):
                                          # reuse the old run's completed agent results as

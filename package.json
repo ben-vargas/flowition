@@ -1,7 +1,7 @@
 {
   "name": "flowition",
   "version": "0.5.0",
-  "description": "Deterministic multi-CLI agent workflow engine: programmatic orchestration of claude/codex/amp/droid/opencode/pi/cursor agents with journaled resume, live steering, inspection, and an MCP surface",
+  "description": "Deterministic multi-CLI agent workflow engine: programmatic orchestration of claude/codex/amp/droid/opencode/pi/cursor/grok agents with journaled resume, live steering, inspection, and an MCP surface",
   "homepage": "https://github.com/ben-vargas/flowition#readme",
   "repository": {
     "type": "git",
@@ -38,6 +38,7 @@
     "droid",
     "opencode",
     "cursor",
+    "grok",
     "mcp",
     "deterministic",
     "resume"

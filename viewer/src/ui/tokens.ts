@@ -26,7 +26,7 @@ interface ThemeDef {
     text2: number; text3: number; queued: number; cancelled: number
   }
   status: Record<'running' | 'done' | 'cached' | 'failed' | 'stale' | 'blocked', Oklch>
-  adapters: Record<'claude' | 'codex' | 'amp' | 'droid' | 'opencode' | 'pi' | 'cursor', Oklch>
+  adapters: Record<'claude' | 'codex' | 'amp' | 'droid' | 'opencode' | 'pi' | 'cursor' | 'grok', Oklch>
   shadow: string
 }
 
@@ -60,6 +60,7 @@ export const THEMES: Record<ThemeName, ThemeDef> = {
       opencode: c(0.50, 0.13, 295), // §3: 0.58
       pi: c(0.50, 0.13, 350),       // §3: 0.60
       cursor: c(0.47, 0.11, 180),   // post-§3 adapter — gated like the rest
+      grok: c(0.48, 0.12, 260),     // post-§3 adapter — gated like the rest
     },
     shadow:
       '0 1px 1px oklch(0.21 0.015 255 / 0.05), 0 6px 16px -8px oklch(0.21 0.015 255 / 0.14)',
@@ -89,6 +90,7 @@ export const THEMES: Record<ThemeName, ThemeDef> = {
       opencode: c(0.70, 0.12, 295),
       pi: c(0.72, 0.12, 350),
       cursor: c(0.72, 0.10, 180),
+      grok: c(0.72, 0.11, 260),
     },
     shadow:
       '0 1px 1px oklch(0.05 0 0 / 0.5), 0 8px 20px -10px oklch(0.05 0 0 / 0.7)',
@@ -120,13 +122,13 @@ export const STATUS_ORDER = ['queued', 'running', 'done', 'cached', 'failed',
 export type StatusName = typeof STATUS_ORDER[number]
 
 export const ADAPTER_ORDER = ['claude', 'codex', 'amp', 'droid', 'opencode', 'pi',
-  'cursor', 'mock', 'unknown'] as const
+  'cursor', 'grok', 'mock', 'unknown'] as const
 export type AdapterName = typeof ADAPTER_ORDER[number]
 
 /** §3.2: two-letter monogram badges. NEVER a vendor's brand mark (parity #57). */
 export const ADAPTER_MONO: Record<string, string> = {
   claude: 'CL', codex: 'CX', amp: 'AM', droid: 'DR',
-  opencode: 'OC', pi: 'π', cursor: 'CS', mock: 'MK', unknown: '·',
+  opencode: 'OC', pi: 'π', cursor: 'CS', grok: 'GK', mock: 'MK', unknown: '·',
 }
 
 /** Resolve one theme's raw defs into concrete OKLCH triples per token name. */

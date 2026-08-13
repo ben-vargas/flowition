@@ -375,6 +375,7 @@ test('RunDetail retains bounded attempt scopes and derives toolIds per mixed ada
     { t: 305, type: 'agent', index: 0, key: 'mock-key', adapter: 'mock', state: 'done' },
     { t: 306, type: 'agent', index: 1, key: 'codex-key', adapter: 'codex', state: 'done' },
     { t: 307, type: 'agent', index: 2, key: 'cursor-key', adapter: 'cursor', state: 'done' },
+    { t: 308, type: 'agent', index: 3, key: 'grok-key', adapter: 'grok', state: 'done' },
   ]))
   fs.writeFileSync(path.join(dir, 'journal.jsonl'), jsonl([
     { type: 'meta', createdAt: 1, workflowFile: '/tmp/scopes.js' },
@@ -394,6 +395,7 @@ test('RunDetail retains bounded attempt scopes and derives toolIds per mixed ada
     ['mock', false],
     ['codex', true],
     ['cursor', true],
+    ['grok', true],
   ])
 })
 

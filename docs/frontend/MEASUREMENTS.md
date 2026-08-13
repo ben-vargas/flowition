@@ -4,7 +4,19 @@ Measured 2026-07-31 on a 16-core Apple M3 Max MacBook Pro with 64 GB RAM,
 macOS 27.0 (26A5388g), Node 24.14.0, and Google Chrome 150.0.7871.187.
 These are development-machine measurements, not portable benchmarks.
 
-Measured-source SHA-256: `26b1f7e218350c814284158c274e7f9c5f3ba685003f69303e0604ff51c1f668`
+Measured-source SHA-256: `497e7e3b11b25ad4e6ff727e43de4b5fa6e03707f3b0d2ed5312f38cfca46cce`
+
+Hash rebound 2026-08-13 for the grok adapter (feat/grok-adapter): the same shape as
+the cursor entry below. `src/viewer/snapshot.js` gained one entry in the
+`TOOL_ID_ADAPTERS` set (per-agent `toolIds` flag derivation — a Set membership test
+on an existing code path, no new work per request), and `viewer/dist` was rebuilt
+because the UI adapter registry (`viewer/src/ui/tokens.ts`) gained the `grok` color
+tokens, `GK` monogram and order entry plus one `.ad-grok` rule in `primitives.css`.
+No measured browser code path changes shape — the registry additions are
+constant-size lookups rendered only when a grok agent appears, and no perf fixture
+emits one. The §3.7 built captures were regenerated against the new bundle. Browser
+rows below were NOT re-measured for this entry and remain measurements of the
+previous bundle's identical hot paths.
 
 Hash rebound 2026-08-12 for the cursor adapter (feat-cursor review round 1):
 `src/viewer/snapshot.js` gained one entry in the `TOOL_ID_ADAPTERS` set (per-agent

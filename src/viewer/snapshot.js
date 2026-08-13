@@ -28,7 +28,7 @@ const QUIESCENT_STATES = new Set(['stale', 'unknown', 'corrupt-result'])
 // Every shipped CLI adapter except the deterministic mock normalizes tool calls to
 // paired transcript ids (native where available, synthesized where necessary). Keep
 // this viewer-local: src/viewer/** may not import the adapter layer (§11.2).
-const TOOL_ID_ADAPTERS = new Set(['claude', 'amp', 'codex', 'cursor', 'droid', 'opencode', 'pi'])
+const TOOL_ID_ADAPTERS = new Set(['claude', 'amp', 'codex', 'cursor', 'droid', 'grok', 'opencode', 'pi'])
 
 const own = (o, k) => Object.prototype.hasOwnProperty.call(o, k)
 const fileIdentity = (s) => s ? `${s.dev}:${s.ino}` : null

@@ -92,15 +92,16 @@ export type AdapterName =
   | 'opencode'
   | 'pi'
   | 'cursor'
+  | 'grok'
   | 'mock'
 
 /**
  * The portable effort vocabulary documented by Flowition.
  *
- * Adapters map these values to their own CLI flags or modes. Cursor accepts no
- * effort at all — it encodes effort into the model id (for example
- * `gpt-5.6-sol-xhigh`), so an `effort` on a cursor agent is rejected at
- * `agent()` time.
+ * Adapters map these values to their own CLI flags or modes. Grok accepts the
+ * whole vocabulary natively. Cursor accepts no effort at all — it encodes
+ * effort into the model id (for example `gpt-5.6-sol-xhigh`), so an `effort`
+ * on a cursor agent is rejected at `agent()` time.
  */
 export type Effort =
   | 'none'
@@ -172,8 +173,8 @@ export interface AgentOptions {
   /**
    * System instructions.
    *
-   * Claude, droid, and pi use native flags. Amp, codex, opencode, and cursor
-   * prepend these instructions only to the first turn of a fresh session.
+   * Claude, droid, pi, and grok use native flags. Amp, codex, opencode, and
+   * cursor prepend these instructions only to the first turn of a fresh session.
    */
   system?: string
   /**

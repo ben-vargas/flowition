@@ -21,8 +21,8 @@ import { contrast, hex, r2 } from './color.js'
 
 describe('§3.6 contrast gate', () => {
   it('checks every (fg, bg) token pair in BOTH themes', () => {
-    // 15 fixed + 9 status × 3 roles + 9 adapters + 5 chart + 1 well + 16 ANSI = 73.
-    expect(PAIRS).toHaveLength(73)
+    // 15 fixed + 9 status × 3 roles + 10 adapters + 5 chart + 1 well + 16 ANSI = 74.
+    expect(PAIRS).toHaveLength(74)
     for (const p of PAIRS) {
       expect(Number.isFinite(p.light), `${p.label} light`).toBe(true)
       expect(Number.isFinite(p.dark), `${p.label} dark`).toBe(true)

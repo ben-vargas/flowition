@@ -55,6 +55,7 @@
   --ad-opencode: oklch(0.5 0.13 295);
   --ad-pi: oklch(0.5 0.13 350);
   --ad-cursor: oklch(0.47 0.11 180);
+  --ad-grok: oklch(0.48 0.12 260);
   --ad-mock: var(--text-3);
   --ad-unknown: var(--text-3);
   --ad-claude-tint: color-mix(in oklab, var(--ad-claude) var(--ad-tint), var(--canvas));
@@ -64,6 +65,7 @@
   --ad-opencode-tint: color-mix(in oklab, var(--ad-opencode) var(--ad-tint), var(--canvas));
   --ad-pi-tint: color-mix(in oklab, var(--ad-pi) var(--ad-tint), var(--canvas));
   --ad-cursor-tint: color-mix(in oklab, var(--ad-cursor) var(--ad-tint), var(--canvas));
+  --ad-grok-tint: color-mix(in oklab, var(--ad-grok) var(--ad-tint), var(--canvas));
   --ad-mock-tint: color-mix(in oklab, var(--ad-mock) var(--ad-tint), var(--canvas));
   --ad-unknown-tint: color-mix(in oklab, var(--ad-unknown) var(--ad-tint), var(--canvas));
 
@@ -117,6 +119,7 @@
   --ad-opencode: oklch(0.7 0.12 295);
   --ad-pi: oklch(0.72 0.12 350);
   --ad-cursor: oklch(0.72 0.1 180);
+  --ad-grok: oklch(0.72 0.11 260);
   --ad-mock: var(--text-3);
   --ad-unknown: var(--text-3);
   --ad-claude-tint: color-mix(in oklab, var(--ad-claude) var(--ad-tint), var(--canvas));
@@ -126,6 +129,7 @@
   --ad-opencode-tint: color-mix(in oklab, var(--ad-opencode) var(--ad-tint), var(--canvas));
   --ad-pi-tint: color-mix(in oklab, var(--ad-pi) var(--ad-tint), var(--canvas));
   --ad-cursor-tint: color-mix(in oklab, var(--ad-cursor) var(--ad-tint), var(--canvas));
+  --ad-grok-tint: color-mix(in oklab, var(--ad-grok) var(--ad-tint), var(--canvas));
   --ad-mock-tint: color-mix(in oklab, var(--ad-mock) var(--ad-tint), var(--canvas));
   --ad-unknown-tint: color-mix(in oklab, var(--ad-unknown) var(--ad-tint), var(--canvas));
 
