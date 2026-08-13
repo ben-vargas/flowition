@@ -9,8 +9,8 @@
 //
 // Tool ids (DESIGN §8 E11): `tool.id` and `tool-result.toolUseId` join a call to its
 // result WITHOUT relying on emission order — the only correct pairing when a provider
-// runs tools in parallel. Ids are OPAQUE and ADAPTER-SCOPED: claude/amp, codex and
-// opencode carry the protocol's own id; droid and pi have no id in their wire format,
+// runs tools in parallel. Ids are OPAQUE and ADAPTER-SCOPED: claude/amp, codex,
+// opencode and cursor carry the protocol's own id; droid and pi have no id in their wire format,
 // so the parser synthesizes one and pairs the halves FIFO (the only information those
 // protocols give). Synthesized ids are prefixed with the caller's `idSeed` (the turn
 // ordinal — a parser instance lives for exactly one turn) so a multi-turn transcript
@@ -313,6 +313,82 @@ class DroidJsonlParser {
   }
 }
 
+class CursorJsonlParser {
+  // cursor-agent -p --output-format stream-json. The terminal `result` event's
+  // `result` field concatenates EVERY assistant text of the turn with no
+  // separator, so the LAST assistant message is preferred (in schema-prompt mode
+  // it is the JSON payload); m.result is only a fallback for a turn that never
+  // emitted an assistant event. Thinking arrives as per-delta events and is
+  // passed through per delta (like pi) — the 'completed' subtype carries no text.
+  constructor() { this.lastText = null; this.sawTerminal = false; this.terminalRequired = true }
+  push(m) {
+    const out = []
+    if (!isRecord(m)) return out
+    if (m.type === 'system' && m.subtype === 'init') {
+      if (typeof m.session_id === 'string') out.push({ k: 'session', id: m.session_id, model: m.model })
+      return out
+    }
+    // the user event is cursor echoing the prompt back — nothing to surface
+    if (m.type === 'user') return out
+    if (m.type === 'assistant' && isRecord(m.message) && Array.isArray(m.message.content)) {
+      for (const b of m.message.content) {
+        if (isRecord(b) && b.type === 'text' && typeof b.text === 'string') { this.lastText = b.text; out.push({ k: 'text', text: b.text }) }
+      }
+      return out
+    }
+    if (m.type === 'thinking') {
+      if (m.subtype === 'delta' && typeof m.text === 'string' && m.text) out.push({ k: 'reasoning', text: m.text })
+      return out
+    }
+    if (m.type === 'tool_call') {
+      // m.tool_call is a one-key wrapper whose key names the tool (shellToolCall,
+      // readToolCall, …) — derived generically, never an exhaustive list. call_id
+      // is a wire string (it can contain a literal newline) stable across the
+      // started/completed pair.
+      const wrap = isRecord(m.tool_call) ? m.tool_call : {}
+      const key = Object.keys(wrap)[0]
+      const call = isRecord(wrap[key]) ? wrap[key] : {}
+      const id = wireId(m.call_id)
+      if (m.subtype === 'started') {
+        const name = typeof key === 'string' ? key.replace(/ToolCall$/, '') : 'tool'
+        out.push({ k: 'tool', name, input: JSON.stringify(call.args ?? {}).slice(0, 2000), ...(id !== undefined ? { id } : {}) })
+      } else if (m.subtype === 'completed') {
+        // call.result wraps a success/failure-style variant object next to scalar
+        // siblings (isBackground) — any record variant other than `success` is an error
+        const res = isRecord(call.result) ? call.result : null
+        const variant = res == null ? undefined : Object.hasOwn(res, 'success') ? 'success' : Object.keys(res).find((v) => isRecord(res[v]))
+        out.push({
+          k: 'tool-result',
+          output: variant === undefined ? '' : JSON.stringify(res[variant] ?? '').slice(0, 4000),
+          isError: res != null && !Object.hasOwn(res, 'success'),
+          ...(id !== undefined ? { toolUseId: id } : {}),
+        })
+      }
+      return out
+    }
+    if (m.type === 'result') {
+      this.sawTerminal = true
+      const u = isRecord(m.usage) ? m.usage : {}
+      // camelCase usage keys (unlike claude's snake_case); no cost field
+      out.push({
+        k: 'usage',
+        input: tokens(u.inputTokens) + tokens(u.cacheReadTokens) + tokens(u.cacheWriteTokens),
+        output: tokens(u.outputTokens),
+      })
+      out.push({
+        k: 'result',
+        text: this.lastText ?? (typeof m.result === 'string' ? m.result : ''),
+        // anything other than an explicit success subtype (including a missing one
+        // on a malformed event) is an error — never cache malformed output as success
+        isError: !!m.is_error || m.subtype !== 'success',
+      })
+      return out
+    }
+    return out
+  }
+  finish() { return [] }
+}
+
 // opts.idSeed — namespace for ids this parser has to synthesize (droid/pi). The
 // caller passes the turn ordinal; protocols with their own ids ignore it.
 export function makeParser(protocol, opts = {}) {
@@ -320,6 +396,7 @@ export function makeParser(protocol, opts = {}) {
     case 'claude-stream': return new ClaudeStreamParser(opts)
     case 'claude-stream-eof': return new ClaudeStreamParser({ ...opts, turnEnd: true })
     case 'codex-jsonl': return new CodexJsonlParser(opts)
+    case 'cursor-jsonl': return new CursorJsonlParser(opts)
     case 'droid-jsonl': return new DroidJsonlParser(opts)
     case 'opencode-jsonl': return new OpencodeJsonlParser(opts)
     case 'pi-jsonl': return new PiJsonlParser(opts)

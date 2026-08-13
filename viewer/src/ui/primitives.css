@@ -213,6 +213,8 @@ kbd {
                border-color: color-mix(in oklab, var(--ad-opencode) 26%, var(--canvas)); }
 .ad-pi       { background: var(--ad-pi-tint);       color: var(--ad-pi);
                border-color: color-mix(in oklab, var(--ad-pi) 26%, var(--canvas)); }
+.ad-cursor   { background: var(--ad-cursor-tint);   color: var(--ad-cursor);
+               border-color: color-mix(in oklab, var(--ad-cursor) 26%, var(--canvas)); }
 .ad-mock     { background: var(--ad-mock-tint);     color: var(--ad-mock);
                border-color: color-mix(in oklab, var(--ad-mock) 26%, var(--canvas)); }
 .ad-unknown  { background: var(--ad-unknown-tint);  color: var(--ad-unknown);

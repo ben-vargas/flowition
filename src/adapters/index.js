@@ -22,7 +22,7 @@ const env = (n) => process.env[`FLOWITION_${n.toUpperCase()}_BIN`]
 const claudeUserMessage = (text) =>
   JSON.stringify({ type: 'user', message: { role: 'user', content: [{ type: 'text', text }] } })
 
-// amp, codex, and opencode have no system/append-system flag (verified) —
+// amp, codex, opencode, and cursor have no system/append-system flag (verified) —
 // spec.system would be silently discarded. Prepend it to the prompt of the
 // FIRST turn of a fresh session as a delimited preamble; resume turns (schema
 // correction, queued-mail follow-ups, cross-run session continuation) carry it
@@ -283,7 +283,32 @@ const pi = {
   },
 }
 
-const ADAPTERS = { claude, codex, amp, droid, opencode, pi, mock }
+// cursor encodes reasoning effort INTO the model id (gpt-5.6-sol-xhigh,
+// claude-opus-4-8[effort=high]) — there is no effort flag, so spec.effort is
+// rejected at agent() time rather than silently dropped (mirroring amp's
+// closed-vocabulary rejection).
+const cursor = {
+  name: 'cursor',
+  protocol: 'cursor-jsonl',
+  bin: () => env('cursor') || 'cursor-agent',
+  caps: { steer: 'turn', resume: true, schema: 'prompt', selfSession: false, acceptsModel: true },
+  validateSpec(spec) {
+    if (spec.effort != null) {
+      return `cursor has no effort flag — encode effort in the model id instead (e.g. model: 'gpt-5.6-sol-xhigh' or 'claude-opus-4-8[effort=high]'); \`cursor-agent --list-models\` lists ids`
+    }
+    return null
+  },
+  build({ spec, prompt, mode, sessionId }) {
+    prompt = systemPreamble(spec, prompt, mode)
+    const argv = ['-p']
+    if (mode === 'resume') argv.push('--resume', sessionId)
+    argv.push('--output-format', 'stream-json', '--force')
+    if (spec.model) argv.push('--model', spec.model)
+    return { argv, stdin: prompt, keepOpen: false, tempFiles: [] }
+  },
+}
+
+const ADAPTERS = { claude, codex, amp, droid, opencode, pi, cursor, mock }
 
 export function getAdapter(name) {
   const a = ADAPTERS[name]

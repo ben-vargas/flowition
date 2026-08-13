@@ -4,7 +4,18 @@ Measured 2026-07-31 on a 16-core Apple M3 Max MacBook Pro with 64 GB RAM,
 macOS 27.0 (26A5388g), Node 24.14.0, and Google Chrome 150.0.7871.187.
 These are development-machine measurements, not portable benchmarks.
 
-Measured-source SHA-256: `03fc640baa2ccafa75e6257ca373fdbf9a5968b4658ec9f9b8cb80a116234d19`
+Measured-source SHA-256: `26b1f7e218350c814284158c274e7f9c5f3ba685003f69303e0604ff51c1f668`
+
+Hash rebound 2026-08-12 for the cursor adapter (feat-cursor review round 1):
+`src/viewer/snapshot.js` gained one entry in the `TOOL_ID_ADAPTERS` set (per-agent
+`toolIds` flag derivation — a Set membership test on an existing code path, no new
+work per request), and `viewer/dist` was rebuilt because the UI adapter registry
+(`viewer/src/ui/tokens.ts`) gained the `cursor` color tokens, monogram and order
+entry plus one `.ad-cursor` rule in `primitives.css`. No measured browser code path
+changes shape — the registry additions are constant-size lookups rendered only when
+a cursor agent appears, and no perf fixture emits one. The §3.7 built captures were
+regenerated against the new bundle. Browser rows below were NOT re-measured for this
+entry and remain measurements of the previous bundle's identical hot paths.
 
 Hash rebound 2026-08-05 for tailnet access (`--tailscale-origin`): `src/viewer/http.js`
 gained a strict `*.ts.net` origin parser, an optional third entry in the closed

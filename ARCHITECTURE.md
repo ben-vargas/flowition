@@ -1,7 +1,7 @@
 # flowition — architecture
 
 Flowition is a deterministic multi-agent workflow engine. A workflow is a plain-JS module
-that composes real coding-agent CLIs — **claude, codex, amp, droid, opencode, pi** —
+that composes real coding-agent CLIs — **claude, codex, amp, droid, opencode, pi, cursor** —
 with programmatic control flow. Flowition is both *invokable by* agents (CLI with `--json`,
 `--detach`, and an MCP stdio server) and an *invoker of* agents (each `agent()` call
 spawns a real CLI process); agents inside a run can call back into flowition (`flowition post`,
@@ -208,6 +208,7 @@ Each adapter declares capabilities and builds argv per turn:
 | droid    | droid-jsonl       | turn  | `droid exec -s <sid>`       | prompt       |
 | opencode | opencode-jsonl    | turn  | `opencode run --session <id>`| prompt      |
 | pi       | pi-jsonl          | turn  | `pi --session-id <uuid>` (flowition-assigned) | prompt |
+| cursor   | cursor-jsonl      | turn  | `cursor-agent -p --resume <sid>` | prompt  |
 
 Parsers normalize each CLI's JSONL into: `session`, `text`, `reasoning`, `tool`,
 `tool-result`, `usage`, `result`, `error` (+ `turn-end` for amp, which runs turns
@@ -215,15 +216,19 @@ with stdin open but only flushes its `result` event at stdin EOF — flowition c
 on `assistant stop_reason=end_turn` instead).
 
 `spec.system` rides a native flag where the CLI has one (claude/droid/pi:
-`--append-system-prompt`); amp, codex, and opencode have none, so their builders
+`--append-system-prompt`); amp, codex, opencode, and cursor have none, so their builders
 prepend a delimited `[system instructions] … [task]` preamble to the prompt of
 the first turn of a fresh session only — resume turns (schema correction,
 queued-mail follow-ups, cross-run continuation) continue a session that already
 carries it and never repeat the preamble.
 
+`spec.effort` maps to a native flag or mode per adapter — except cursor, which
+encodes effort into the model id itself (`gpt-5.6-sol-xhigh`) and has no flag:
+its `validateSpec` rejects `effort` at `agent()` time rather than dropping it.
+
 **Steering semantics.** `steer: 'live'` (claude, amp): user messages are injected as
 stream-json lines on the running process's stdin; an outstanding-message counter
-decides when stdin closes. `steer: 'turn'` (codex, droid, opencode, pi): mail queues
+decides when stdin closes. `steer: 'turn'` (codex, droid, opencode, pi, cursor): mail queues
 in the AgentJob; when the current turn ends, queued mail is delivered as a
 session-resume follow-up turn. Either way `agent()` resolves only after all injected
 messages are consumed, so steered guidance is always reflected in the returned result —
@@ -453,7 +458,7 @@ steer their agents — the "invoked by agents" half of the loop.
 
 Deliberately out of scope for this phase: every adapter runs with its most permissive
 flags (`--dangerously-skip-permissions`, `--dangerously-bypass-approvals-and-sandbox`,
-`--skip-permissions-unsafe`, `--auto`). The adapter layer is where per-mode sandbox
+`--skip-permissions-unsafe`, `--auto`, `--force`). The adapter layer is where per-mode sandbox
 policies would slot in later (a per-provider sandbox matrix is the
 reference design).
 

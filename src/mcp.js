@@ -23,7 +23,7 @@ const TOOLS = [
       properties: {
         file: { type: 'string', description: 'absolute path to a .workflow.js file' },
         args: { description: 'JSON args exposed to the workflow' },
-        adapter: { type: 'string', description: 'default adapter: claude|codex|amp|droid|opencode|pi' },
+        adapter: { type: 'string', description: 'default adapter: claude|codex|amp|droid|opencode|pi|cursor' },
         model: { type: 'string' },
         effort: { type: 'string' },
         cwd: { type: 'string' },

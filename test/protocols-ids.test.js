@@ -161,6 +161,46 @@ test('E11 codex: both halves of a completed command are synthesized from the ite
 
 // ── opencode: part.id ────────────────────────────────────────────────────────
 
+test('E11 cursor: call_id pairs started to completed, newline and all', () => {
+  const parser = makeParser('cursor-jsonl')
+  // observed on the wire: call_id concatenates two ids with a literal newline —
+  // it is still one opaque string and must ride through untouched
+  const gnarly = 'call_q7t123\nfc_056789'
+  const a = parser.push({
+    type: 'tool_call', subtype: 'started', call_id: gnarly,
+    tool_call: { shellToolCall: { args: { command: 'ls', workingDirectory: '/tmp' }, description: 'list' } },
+  })
+  assert.deepEqual(a, [{ k: 'tool', name: 'shell', input: JSON.stringify({ command: 'ls', workingDirectory: '/tmp' }), id: gnarly }])
+  // a second call opens before the first completes — ids keep them apart
+  const b = parser.push({
+    type: 'tool_call', subtype: 'started', call_id: 'call_other',
+    tool_call: { readToolCall: { args: { path: 'a.txt' } } },
+  })
+  assert.equal(b[0].name, 'read', 'the tool name is derived from the wrapper key, not a hard-coded list')
+  assert.equal(b[0].id, 'call_other')
+  // completions arrive out of order; the id — not the position — pairs them
+  const bDone = parser.push({
+    type: 'tool_call', subtype: 'completed', call_id: 'call_other',
+    tool_call: { readToolCall: { args: { path: 'a.txt' }, result: { success: { content: 'hello' } } } },
+  })
+  assert.equal(bDone[0].toolUseId, 'call_other')
+  assert.equal(bDone[0].isError, false)
+  assert.equal(bDone[0].output, JSON.stringify({ content: 'hello' }))
+  const aDone = parser.push({
+    type: 'tool_call', subtype: 'completed', call_id: gnarly,
+    tool_call: { shellToolCall: { args: { command: 'ls' }, result: { failure: { exitCode: 1, stderr: 'boom' }, isBackground: false } } },
+  })
+  assert.equal(aDone[0].toolUseId, gnarly)
+  // a non-success result variant is an error; the scalar isBackground sibling is not the variant
+  assert.equal(aDone[0].isError, true)
+  assert.equal(aDone[0].output, JSON.stringify({ exitCode: 1, stderr: 'boom' }))
+
+  // an id-less event still parses — the field is simply absent
+  const bare = makeParser('cursor-jsonl')
+  assert.equal('id' in bare.push({ type: 'tool_call', subtype: 'started', tool_call: { shellToolCall: { args: {} } } })[0], false)
+  assert.equal('toolUseId' in bare.push({ type: 'tool_call', subtype: 'completed', tool_call: { shellToolCall: { args: {}, result: { success: {} } } } })[0], false)
+})
+
 test('E11 opencode: the part id joins the call to its result', () => {
   const parser = makeParser('opencode-jsonl')
   const out = parser.push({
