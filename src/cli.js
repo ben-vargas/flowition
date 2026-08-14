@@ -685,13 +685,15 @@ export async function main(argv) {
         return 0
       }
       const instance = started
-      announce(instance.url, { port: instance.port, home: instance.home, control: instance.control, ...(instance.tailscaleOrigin ? { tailscaleOrigin: instance.tailscaleOrigin } : {}) }, instance.tailscaleUrl ?? null)
-
       // SIGINT/SIGTERM close the server and exit; the library layer never calls
-      // process.exit itself (parity #29).
+      // process.exit itself (parity #29). Install BEFORE announce: tests (and a
+      // fast Ctrl-C) can SIGTERM the moment "viewer: http" hits stderr, and a
+      // handler registered after that print loses the race — Linux then reports
+      // code=null signal=SIGTERM and skips the tailscale serve-teardown reminder.
       const stop = () => { instance.close().then(() => finish(), () => finish()) }
       process.once('SIGINT', stop)
       process.once('SIGTERM', stop)
+      announce(instance.url, { port: instance.port, home: instance.home, control: instance.control, ...(instance.tailscaleOrigin ? { tailscaleOrigin: instance.tailscaleOrigin } : {}) }, instance.tailscaleUrl ?? null)
       // A revoked credential is a failure exit: the server is gone and the printed URL is
       // dead. An idle shutdown or a signal is a clean one.
       const reason = await stopped
