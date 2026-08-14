@@ -25,7 +25,7 @@ test('grok fresh turn: streaming-messages-json, yolo pair, prompt via 0600 scrat
   const pf = b.tempFiles[0]
   assert.deepEqual(b.argv, [...BASE,
     '--model', 'grok-4', '--reasoning-effort', 'xhigh', '--rules', 'be terse',
-    '--cwd', '/tmp/work', '--prompt-file', pf])
+    '--prompt-file', pf])
   assert.equal(b.stdin, null)
   assert.equal(b.keepOpen, false)
   assert.deepEqual(b.tempFiles, [pf])
@@ -53,6 +53,7 @@ test('grok never starts the TUI or leaks the prompt: --prompt-file last, no -p, 
   assert.ok(!b.argv.includes('--session-id'))
   assert.ok(!b.argv.includes('-s'))
   assert.ok(!b.argv.includes('--system-prompt-override'))
+  assert.ok(!b.argv.includes('--cwd'))
   // the prompt appears in NO argv element — only the scratch path does
   for (const a of b.argv) assert.ok(!a.includes('secret prompt text'), a)
 })
@@ -110,4 +111,17 @@ test('grok maps every flowition effort to itself — grok accepts the whole voca
   const dir = scratch()
   const b = grok.build({ spec: { effort: 'xhigh' }, prompt: 'x', mode: 'fresh', sessionId: null, scratch: dir })
   assert.equal(b.argv[b.argv.indexOf('--reasoning-effort') + 1], 'xhigh')
+})
+
+test('grok omits --cwd — spawn cwd is enough, and a relative spec.cwd must not double-resolve', () => {
+  // grok 1.0.3 resolves --cwd against process cwd, so passing 'packages/app'
+  // after AgentJob already spawn()s there would look for packages/app/packages/app
+  const dir = scratch()
+  const b = grok.build({
+    spec: { cwd: 'packages/app' },
+    prompt: 'x', mode: 'fresh', sessionId: null, scratch: dir,
+  })
+  assert.ok(!b.argv.includes('--cwd'))
+  assert.ok(!b.argv.includes('packages/app'))
+  assert.deepEqual(b.argv, [...BASE, '--prompt-file', b.tempFiles[0]])
 })

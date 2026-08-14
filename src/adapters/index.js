@@ -316,7 +316,10 @@ const cursor = {
 // --yolo is a clap alias of --always-approve (combining them exits 2), so the
 // yolo argv is the maximal valid pair. --rules APPENDS to grok's system prompt
 // (--system-prompt-override would wipe its agent/tool instructions) and is
-// rebuilt per invocation, so it rides every turn, fresh and resumed.
+// rebuilt per invocation, so it rides every turn, fresh and resumed. Never
+// pass --cwd: AgentJob already spawn()s with cwd: spec.cwd, and grok 1.0.3
+// resolves --cwd against process cwd, so a relative spec.cwd (e.g.
+// 'packages/app') would double-resolve to packages/app/packages/app.
 const grok = {
   name: 'grok',
   protocol: 'claude-stream',
@@ -330,7 +333,6 @@ const grok = {
     if (spec.model) argv.push('--model', spec.model)
     if (spec.effort) argv.push('--reasoning-effort', this.mapEffort(spec.effort))
     if (spec.system) argv.push('--rules', spec.system)
-    if (spec.cwd) argv.push('--cwd', spec.cwd)
     if (spec.schema && this.caps.schema === 'native') argv.push('--json-schema', JSON.stringify(spec.schema))
     // prompt via 0600 scratch file, never argv (E2BIG + /proc/*/cmdline leakage);
     // --prompt-file also triggers headless mode, so the TUI can never start
