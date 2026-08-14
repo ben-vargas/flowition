@@ -4,7 +4,14 @@ Measured 2026-07-31 on a 16-core Apple M3 Max MacBook Pro with 64 GB RAM,
 macOS 27.0 (26A5388g), Node 24.14.0, and Google Chrome 150.0.7871.187.
 These are development-machine measurements, not portable benchmarks.
 
-Measured-source SHA-256: `497e7e3b11b25ad4e6ff727e43de4b5fa6e03707f3b0d2ed5312f38cfca46cce`
+Measured-source SHA-256: `6262df115f0075c07b179ad05163ac10bf86e2e4ba27df5d7aea831bd9be3706`
+
+Hash rebound 2026-08-13 for the Node 18 double-pane composition-test timeout:
+`viewer/src/features/transcript/Transcript.test.tsx` gained only a test-local 40-second
+deadline and its Actions timing rationale. No product source, fixture, built artifact,
+browser owner, performance assertion, or budget changed, so the browser rows below were
+not re-measured. The same push's real-server measurements remained within every budget;
+only this deliberate source-binding gate rejected the stale hash.
 
 Hash rebound 2026-08-13 for the grok adapter (feat/grok-adapter): the same shape as
 the cursor entry below. `src/viewer/snapshot.js` gained one entry in the
