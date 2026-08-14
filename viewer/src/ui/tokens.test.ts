@@ -83,7 +83,7 @@ describe('tokens.css', () => {
     expect(THEMES.dark.adapters).toEqual({
       claude: [0.72, 0.12, 40], codex: [0.72, 0.10, 220], amp: [0.78, 0.11, 85],
       droid: [0.74, 0.12, 130], opencode: [0.70, 0.12, 295], pi: [0.72, 0.12, 350],
-      cursor: [0.72, 0.10, 180],
+      cursor: [0.72, 0.10, 180], grok: [0.72, 0.11, 260],
     })
   })
 })

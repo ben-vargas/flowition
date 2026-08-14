@@ -9,7 +9,7 @@
 //
 // Tool ids (DESIGN §8 E11): `tool.id` and `tool-result.toolUseId` join a call to its
 // result WITHOUT relying on emission order — the only correct pairing when a provider
-// runs tools in parallel. Ids are OPAQUE and ADAPTER-SCOPED: claude/amp, codex,
+// runs tools in parallel. Ids are OPAQUE and ADAPTER-SCOPED: claude/amp/grok, codex,
 // opencode and cursor carry the protocol's own id; droid and pi have no id in their wire format,
 // so the parser synthesizes one and pairs the halves FIFO (the only information those
 // protocols give). Synthesized ids are prefixed with the caller's `idSeed` (the turn
@@ -54,7 +54,8 @@ class ToolIds {
 //                      Only opencode legitimately completes at clean EOF.
 
 class ClaudeStreamParser {
-  // Claude Code stream-json — also spoken by amp (-x --stream-json) and droid (exec -o stream-json).
+  // Claude Code stream-json — also spoken by amp (-x --stream-json), droid (exec -o stream-json),
+  // and grok (--output-format streaming-messages-json).
   // opts.turnEnd: emit a synthetic turn-end on assistant stop_reason=end_turn — needed for CLIs
   // (amp) that run turns with stdin open but only flush the result event at stdin EOF.
   constructor(opts = {}) { this.lastText = null; this.turnEnd = !!opts.turnEnd; this.sawTerminal = false; this.terminalRequired = true }

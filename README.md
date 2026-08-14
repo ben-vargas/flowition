@@ -8,7 +8,7 @@ for agent workflows.
 
 Deterministic multi-CLI agent workflow engine. Write a plain-JS file that
 orchestrates real coding-agent CLIs — **claude, codex, amp, droid, opencode, pi,
-cursor** — with programmatic control flow, then run it, watch it, steer it mid-run, and
+cursor, grok** — with programmatic control flow, then run it, watch it, steer it mid-run, and
 resume it after an interruption.
 
 ```js
@@ -38,7 +38,7 @@ anything you did not write.
 
 ## Why flowition
 
-- **Seven CLI families, one DSL.** Every `agent()` call picks its adapter;
+- **Eight CLI families, one DSL.** Every `agent()` call picks its adapter;
   schemas, steering, resume, transcripts, and budgets behave uniformly across all of them.
 - **Mid-run communication is first-class.** Steer a running agent from another
   terminal (`flowition send`), from workflow code (`spawn()` handles, `sendTo()`); the
@@ -63,6 +63,7 @@ anything you did not write.
   [droid](https://factory.ai) (Factory),
   [opencode](https://opencode.ai),
   [cursor-agent](https://cursor.com/cli) (Cursor),
+  [grok](https://x.ai) (Grok Build CLI),
   and pi.
   You only need the ones your workflows reference; `flowition doctor` reports which
   are found and what each supports.
@@ -311,6 +312,7 @@ global `npm i -g flowition` alone cannot provide this editor resolution.
 | opencode | turn     | `opencode run --session <id>`  | prompt      |
 | pi       | turn     | `pi --session-id <uuid>`       | prompt      |
 | cursor   | turn     | `cursor-agent -p --resume <sid>` | prompt    |
+| grok     | turn     | `grok --resume <sid>`          | native      |
 
 *Live* steering injects your message into the running process's stdin. *Turn*
 steering queues it and delivers it as a session-resume follow-up turn when the
@@ -322,6 +324,10 @@ One cursor quirk: cursor encodes reasoning effort into the model id itself
 flag, so `effort` on a cursor agent is rejected at `agent()` time;
 `cursor-agent --list-models` lists the ids.
 
+One grok quirk: grok 1.0.3 `--reasoning-effort` accepts only
+`low|medium|high|xhigh`. flowition maps `none`/`minimal` → `low` and
+`max` → `xhigh`; omitted effort passes `--reasoning-effort high`.
+
 One amp quirk: amp selects *agent modes* (bundled model + prompt + tools), not
 models. On amp, `model`/`mode` resolves against the builtin modes
 (low/medium/high/ultra) and any custom modes installed as amp plugins, by key
@@ -329,7 +335,7 @@ or label; `flowition doctor` lists what's discovered.
 
 ### Structured output
 
-`schema` uses the CLI's native mechanism where one exists (claude
+`schema` uses the CLI's native mechanism where one exists (claude and grok
 `--json-schema`, codex `--output-schema`) and an appended output-contract block
 plus loose JSON parsing elsewhere. All modes re-validate client-side; a failure
 triggers one corrective follow-up turn in the same session before the agent
@@ -441,6 +447,7 @@ control socket, and result; the layout is documented in
 permissive flags — `--dangerously-skip-permissions` (claude),
 `--dangerously-bypass-approvals-and-sandbox` (codex),
 `--skip-permissions-unsafe` (droid), `--auto` (opencode), `--force` (cursor),
+`--always-approve --permission-mode bypassPermissions` (grok),
 and the equivalent non-interactive modes of amp and pi. Agents can read, write, and execute
 anything the invoking user can, in the workflow's `cwd` and beyond.
 

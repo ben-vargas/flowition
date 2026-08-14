@@ -175,3 +175,82 @@ test('opencode emits text once and counts cache writes as input', () => {
   }), [{ k: 'usage', input: 60, output: 9, cost: 0.25 }])
   assert.deepEqual(parser.finish(), [{ k: 'result', text: 'hello' }])
 })
+
+test('grok streaming-messages-json rides claude-stream: init, blocks, wire-id pairing, result', () => {
+  // doc-derived grok wire lines — Anthropic Messages stream-json, snake_case usage
+  const p = makeParser('claude-stream')
+  const sid = '0198b1c2-1234-7abc-8def-0123456789ab'
+  assert.deepEqual(p.push({ type: 'system', subtype: 'init', session_id: sid, model: 'grok-4', uuid: 'line-1' }),
+    [{ k: 'session', id: sid, model: 'grok-4' }])
+  assert.deepEqual(p.push({
+    type: 'assistant', uuid: 'line-2',
+    message: {
+      role: 'assistant',
+      content: [
+        { type: 'thinking', thinking: 'plan it' },
+        { type: 'text', text: 'working' },
+        { type: 'tool_use', id: 'toolu_g1', name: 'bash', input: { command: 'ls' } },
+      ],
+    },
+  }), [
+    { k: 'reasoning', text: 'plan it' },
+    { k: 'text', text: 'working' },
+    { k: 'tool', name: 'bash', input: '{"command":"ls"}', id: 'toolu_g1' },
+  ])
+  // tool_result pairs by the wire tool_use_id, never by order
+  assert.deepEqual(p.push({
+    type: 'user', uuid: 'line-3',
+    message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_g1', content: 'a.txt', is_error: false }] },
+  }), [{ k: 'tool-result', output: 'a.txt', isError: false, toolUseId: 'toolu_g1' }])
+  assert.equal(p.sawTerminal, false)
+  assert.deepEqual(p.push({
+    type: 'result', subtype: 'success', is_error: false, result: 'done', uuid: 'line-4',
+    usage: { input_tokens: 10, cache_read_input_tokens: 20, cache_creation_input_tokens: 5, output_tokens: 7 },
+    total_cost_usd: 0.12,
+    structured_output: { ok: true },
+  }), [
+    { k: 'usage', input: 35, output: 7, cost: 0.12 },
+    { k: 'result', text: 'done', structured: { ok: true }, isError: false },
+  ])
+  assert.equal(p.sawTerminal, true)
+})
+
+test('grok error subtypes, contentless schema turns, and unknown blocks are handled', () => {
+  // schema-retry exhaustion is an error result, not a success with no payload
+  const err = makeParser('claude-stream')
+  const errOut = err.push({ type: 'result', subtype: 'error_max_structured_output_retries', is_error: true, usage: {} })
+  assert.equal(errOut.at(-1).isError, true)
+  assert.equal(err.sawTerminal, true)
+
+  // a contentless schema turn (init then result only) still captures the session —
+  // capture must not depend on an assistant frame ever arriving
+  const bare = makeParser('claude-stream')
+  assert.deepEqual(bare.push({ type: 'system', subtype: 'init', session_id: 'sid-schema', model: 'grok-4' }),
+    [{ k: 'session', id: 'sid-schema', model: 'grok-4' }])
+  const bareOut = bare.push({ type: 'result', subtype: 'success', result: '{"ok":true}', structured_output: { ok: true }, usage: {} })
+  assert.deepEqual(bareOut.at(-1), { k: 'result', text: '{"ok":true}', structured: { ok: true }, isError: false })
+
+  // inline backend web-search blocks and stray uuid fields are ignored silently —
+  // accepted v1 transcript-fidelity limitation, never a throw or a bogus event
+  const odd = makeParser('claude-stream')
+  assert.deepEqual(odd.push({
+    type: 'assistant', uuid: 'x',
+    message: {
+      role: 'assistant',
+      content: [
+        { type: 'server_tool_use', id: 'srv1', name: 'web_search', input: { query: 'q' } },
+        { type: 'web_search_tool_result', tool_use_id: 'srv1', content: [] },
+        { type: 'text', text: 'searched' },
+      ],
+    },
+  }), [{ k: 'text', text: 'searched' }])
+  assert.doesNotThrow(() => odd.push({ type: 'system', subtype: 'compact_boundary', uuid: 'y' }))
+
+  // a stream truncated before result stays non-terminal (terminalRequired refusal)
+  const cut = makeParser('claude-stream')
+  cut.push({ type: 'system', subtype: 'init', session_id: 'sid-cut' })
+  cut.push({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: 'partial' }] } })
+  assert.equal(cut.sawTerminal, false)
+  assert.equal(cut.terminalRequired, true)
+  assert.deepEqual(cut.finish(), [])
+})

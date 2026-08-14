@@ -1,7 +1,7 @@
 // AgentJob — one logical agent() call, possibly spanning multiple provider turns:
 //   turn 1..n: initial prompt → [schema-corrective turn] → [queued-mail follow-up turns]
 // Live-steer adapters (claude, amp, mock) receive injected user messages on stdin
-// mid-process; turn-steer adapters (codex, droid, opencode, pi, cursor) get queued mail
+// mid-process; turn-steer adapters (codex, droid, opencode, pi, cursor, grok) get queued mail
 // delivered via a session-resume follow-up turn. Session ids, accepted steering
 // messages, and cumulative-usage baselines are journaled, so an interrupted agent
 // can be continued (not restarted) on `flowition resume` without losing steering.
@@ -457,7 +457,7 @@ export class AgentJob {
         throw new AgentError('truncated', `process exited (code ${code}${signal ? `, signal ${signal}` : ''}) with ${outstanding} injected message(s) unanswered — refusing stale result`, { retryable: signal != null })
       }
       // Refuse results synthesized from partial output. Protocols with an explicit
-      // completion event (codex/droid/pi/claude/amp/cursor) must have shown it regardless
+      // completion event (codex/droid/pi/claude/amp/cursor/grok) must have shown it regardless
       // of exit code; EOF-terminated protocols (opencode) additionally need exit 0.
       if (turnResult != null && parser.sawTerminal === false && (parser.terminalRequired || code !== 0)) {
         throw new AgentError('truncated', `process exited (code ${code}${signal ? `, signal ${signal}` : ''}) before the protocol's completion event — refusing partial result`, { retryable: signal != null })
@@ -521,7 +521,7 @@ export class AgentJob {
           this.cumBase = cum
           this.journal.append({ type: 'usage-cum', key: this.key, cum })
         } else {
-          // Per-event report (claude/amp/droid/opencode/pi/cursor/mock): journal the
+          // Per-event report (claude/amp/droid/opencode/pi/cursor/grok/mock): journal the
           // job's RUNNING totals after every event — one line per usage event,
           // an accepted volume — so Journal.load's cumTrack chaining charges
           // crash-window spend (tokens reported after the last result record)
