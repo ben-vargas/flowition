@@ -320,18 +320,22 @@ const cursor = {
 // pass --cwd: AgentJob already spawn()s with cwd: spec.cwd, and grok 1.0.3
 // resolves --cwd against process cwd, so a relative spec.cwd (e.g.
 // 'packages/app') would double-resolve to packages/app/packages/app.
+// --reasoning-effort accepts only low|medium|high|xhigh (verified 1.0.3);
+// omitted effort defaults to high (grok/cursor default). Always pass the
+// flag so a missing spec.effort cannot silently pick up a future CLI default.
+const GROK_EFFORT = { none: 'low', minimal: 'low', max: 'xhigh' }
 const grok = {
   name: 'grok',
   protocol: 'claude-stream',
   bin: () => env('grok') || 'grok',
   caps: { steer: 'turn', resume: true, schema: 'native', selfSession: false, acceptsModel: true },
-  mapEffort: (e) => e, // grok natively accepts none|minimal|low|medium|high|xhigh|max
+  mapEffort: (e) => GROK_EFFORT[e] ?? e ?? 'high',
   build({ spec, prompt, mode, sessionId, scratch }) {
     const argv = ['--output-format', 'streaming-messages-json', '--always-approve',
       '--permission-mode', 'bypassPermissions']
     if (mode === 'resume') argv.push('--resume', sessionId)
     if (spec.model) argv.push('--model', spec.model)
-    if (spec.effort) argv.push('--reasoning-effort', this.mapEffort(spec.effort))
+    argv.push('--reasoning-effort', this.mapEffort(spec.effort))
     if (spec.system) argv.push('--rules', spec.system)
     if (spec.schema && this.caps.schema === 'native') argv.push('--json-schema', JSON.stringify(spec.schema))
     // prompt via 0600 scratch file, never argv (E2BIG + /proc/*/cmdline leakage);

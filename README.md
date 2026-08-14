@@ -324,6 +324,10 @@ One cursor quirk: cursor encodes reasoning effort into the model id itself
 flag, so `effort` on a cursor agent is rejected at `agent()` time;
 `cursor-agent --list-models` lists the ids.
 
+One grok quirk: grok 1.0.3 `--reasoning-effort` accepts only
+`low|medium|high|xhigh`. flowition maps `none`/`minimal` → `low` and
+`max` → `xhigh`; omitted effort passes `--reasoning-effort high`.
+
 One amp quirk: amp selects *agent modes* (bundled model + prompt + tools), not
 models. On amp, `model`/`mode` resolves against the builtin modes
 (low/medium/high/ultra) and any custom modes installed as amp plugins, by key

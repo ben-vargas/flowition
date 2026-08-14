@@ -40,7 +40,8 @@ agent(prompt, opts) -> Promise<string | object>
     mode      amp only — explicit agent-mode selector (alias of model for amp)
     effort    'none'|'minimal'|'low'|'medium'|'high'|'xhigh'|'max' — mapped per adapter
               (on amp, effort picks a builtin mode unless model/mode is given;
-              grok accepts the whole vocabulary natively via --reasoning-effort).
+              grok maps onto --reasoning-effort low|medium|high|xhigh —
+              none/minimal→low, max→xhigh — and omitted effort defaults to high).
               cursor REJECTS effort — cursor encodes effort into the model id
               itself (e.g. 'gpt-5.6-sol-xhigh', 'claude-opus-4-8[effort=high]');
               \`cursor-agent --list-models\` lists the ids

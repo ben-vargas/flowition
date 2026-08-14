@@ -98,10 +98,12 @@ export type AdapterName =
 /**
  * The portable effort vocabulary documented by Flowition.
  *
- * Adapters map these values to their own CLI flags or modes. Grok accepts the
- * whole vocabulary natively. Cursor accepts no effort at all — it encodes
- * effort into the model id (for example `gpt-5.6-sol-xhigh`), so an `effort`
- * on a cursor agent is rejected at `agent()` time.
+ * Adapters map these values to their own CLI flags or modes. Grok's CLI
+ * accepts only `low|medium|high|xhigh`; `none`/`minimal` map to `low`, `max`
+ * maps to `xhigh`, and omitted effort defaults to `high`. Cursor accepts no
+ * effort at all — it encodes effort into the model id (for example
+ * `gpt-5.6-sol-xhigh`), so an `effort` on a cursor agent is rejected at
+ * `agent()` time.
  */
 export type Effort =
   | 'none'
@@ -167,7 +169,8 @@ export interface AgentOptions {
   /**
    * Portable reasoning-effort level, mapped by the selected adapter.
    *
-   * Cursor rejects this option — encode effort in the cursor model id instead.
+   * Grok defaults omitted effort to `high`. Cursor rejects this option —
+   * encode effort in the cursor model id instead.
    */
   effort?: Effort
   /**

@@ -9,11 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- `grok` adapter for the Grok Build CLI: `claude-stream` protocol, turn steering via `--resume`, native `--json-schema`, identity `--reasoning-effort`, `--rules` on every turn, and a 0600 `--prompt-file`. Yolo argv is `--always-approve --permission-mode bypassPermissions`. Viewer gets a GK badge.
+- `grok` adapter for the Grok Build CLI: `claude-stream` protocol, turn steering via `--resume`, native `--json-schema`, `--reasoning-effort` mapped onto grok 1.0.3's `low|medium|high|xhigh` (omitted defaults to `high`), `--rules` on every turn, and a 0600 `--prompt-file`. Yolo argv is `--always-approve --permission-mode bypassPermissions`. Viewer gets a GK badge.
 
 ### Fixed
 
 - Grok no longer passes `--cwd`. `AgentJob` already spawn()s with `spec.cwd`, and grok 1.0.3 resolves `--cwd` against process cwd, so a relative `agent({ cwd: 'packages/app' })` double-resolved to `packages/app/packages/app`.
+- Grok `--reasoning-effort` no longer identity-maps the portable vocabulary. grok 1.0.3 accepts only `low|medium|high|xhigh`; `none`/`minimal` map to `low`, `max` to `xhigh`, and omitted effort now passes `--reasoning-effort high`.
 
 ## [0.5.0] — 2026-08-12
 

@@ -226,6 +226,8 @@ carries it and never repeat the preamble.
 `spec.effort` maps to a native flag or mode per adapter — except cursor, which
 encodes effort into the model id itself (`gpt-5.6-sol-xhigh`) and has no flag:
 its `validateSpec` rejects `effort` at `agent()` time rather than dropping it.
+Grok's `--reasoning-effort` accepts only `low|medium|high|xhigh`; the adapter
+maps `none`/`minimal` → `low`, `max` → `xhigh`, and omitted effort → `high`.
 
 **Steering semantics.** `steer: 'live'` (claude, amp): user messages are injected as
 stream-json lines on the running process's stdin; an outstanding-message counter

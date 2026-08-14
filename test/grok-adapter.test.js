@@ -1,6 +1,6 @@
 // grok adapter: argv construction, prompt-file delivery (never argv/stdin),
 // the two-flag yolo pair, --rules on every turn, native schema alongside the
-// streaming format, bin override, and the identity effort map.
+// streaming format, bin override, and the grok 1.0.3 effort map (omitted → high).
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
@@ -36,9 +36,9 @@ test('grok fresh turn: streaming-messages-json, yolo pair, prompt via 0600 scrat
   assert.equal(fs.readFileSync(pf, 'utf8'), 'do the thing')
   assert.equal(fs.statSync(pf).mode & 0o777, 0o600)
 
-  // no options → just the base flags and the prompt file
+  // no options → base flags, default --reasoning-effort high, and the prompt file
   const bare = grok.build({ spec: {}, prompt: 'x', mode: 'fresh', sessionId: null, scratch: dir })
-  assert.deepEqual(bare.argv, [...BASE, '--prompt-file', bare.tempFiles[0]])
+  assert.deepEqual(bare.argv, [...BASE, '--reasoning-effort', 'high', '--prompt-file', bare.tempFiles[0]])
 })
 
 test('grok never starts the TUI or leaks the prompt: --prompt-file last, no -p, no positional, no --yolo', () => {
@@ -66,7 +66,8 @@ test('grok resume turn: --resume <sid>, --rules still present, fresh prompt file
     prompt: 'follow up', mode: 'resume', sessionId: sid, scratch: dir,
   })
   assert.deepEqual(b.argv, [...BASE, '--resume', sid,
-    '--model', 'grok-4', '--rules', 'be terse', '--prompt-file', b.tempFiles[0]])
+    '--model', 'grok-4', '--reasoning-effort', 'high', '--rules', 'be terse',
+    '--prompt-file', b.tempFiles[0]])
   // the resume turn's file carries only the follow-up text (grok rebuilds the
   // system prompt per invocation — the session does not accumulate --rules)
   assert.equal(fs.readFileSync(b.tempFiles[0], 'utf8'), 'follow up')
@@ -79,8 +80,8 @@ test('grok schema turn: --json-schema AND the explicit streaming format coexist'
   const dir = scratch()
   const schema = { type: 'object', properties: { ok: { type: 'boolean' } }, required: ['ok'] }
   const b = grok.build({ spec: { schema }, prompt: 'x', mode: 'fresh', sessionId: null, scratch: dir })
-  assert.deepEqual(b.argv, [...BASE, '--json-schema', JSON.stringify(schema),
-    '--prompt-file', b.tempFiles[0]])
+  assert.deepEqual(b.argv, [...BASE, '--reasoning-effort', 'high',
+    '--json-schema', JSON.stringify(schema), '--prompt-file', b.tempFiles[0]])
   const i = b.argv.indexOf('--output-format')
   assert.equal(b.argv[i + 1], 'streaming-messages-json')
 })
@@ -104,13 +105,23 @@ test('FLOWITION_GROK_BIN overrides the grok executable', () => {
   }
 })
 
-test('grok maps every flowition effort to itself — grok accepts the whole vocabulary', () => {
-  for (const e of ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']) {
-    assert.equal(grok.mapEffort(e), e)
-  }
+test('grok maps the portable vocabulary onto grok 1.0.3 --reasoning-effort; omitted defaults to high', () => {
+  // grok 1.0.3 accepts only low|medium|high|xhigh; none/minimal collapse to
+  // the lowest accepted rung, max to the highest. Omitted effort is high —
+  // grok's own default, and cursor's.
+  assert.deepEqual(
+    ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'].map((e) => grok.mapEffort(e)),
+    ['low', 'low', 'low', 'medium', 'high', 'xhigh', 'xhigh'],
+  )
+  assert.equal(grok.mapEffort(undefined), 'high')
+  assert.equal(grok.mapEffort(null), 'high')
   const dir = scratch()
-  const b = grok.build({ spec: { effort: 'xhigh' }, prompt: 'x', mode: 'fresh', sessionId: null, scratch: dir })
-  assert.equal(b.argv[b.argv.indexOf('--reasoning-effort') + 1], 'xhigh')
+  const omitted = grok.build({ spec: {}, prompt: 'x', mode: 'fresh', sessionId: null, scratch: dir })
+  assert.equal(omitted.argv[omitted.argv.indexOf('--reasoning-effort') + 1], 'high')
+  const none = grok.build({ spec: { effort: 'none' }, prompt: 'x', mode: 'fresh', sessionId: null, scratch: dir })
+  assert.equal(none.argv[none.argv.indexOf('--reasoning-effort') + 1], 'low')
+  const max = grok.build({ spec: { effort: 'max' }, prompt: 'x', mode: 'fresh', sessionId: null, scratch: dir })
+  assert.equal(max.argv[max.argv.indexOf('--reasoning-effort') + 1], 'xhigh')
 })
 
 test('grok omits --cwd — spawn cwd is enough, and a relative spec.cwd must not double-resolve', () => {
@@ -123,5 +134,5 @@ test('grok omits --cwd — spawn cwd is enough, and a relative spec.cwd must not
   })
   assert.ok(!b.argv.includes('--cwd'))
   assert.ok(!b.argv.includes('packages/app'))
-  assert.deepEqual(b.argv, [...BASE, '--prompt-file', b.tempFiles[0]])
+  assert.deepEqual(b.argv, [...BASE, '--reasoning-effort', 'high', '--prompt-file', b.tempFiles[0]])
 })
