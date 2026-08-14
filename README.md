@@ -11,7 +11,7 @@ orchestrates real coding-agent CLIs — **claude, codex, amp, droid, opencode, p
 cursor, grok** — with programmatic control flow, then run it, watch it, steer it mid-run, and
 resume it after an interruption.
 
-![flowition viewer — Timeline of a completed 9-agent run](docs/screenshots/viewer-timeline.png)
+![flowition viewer — Timeline Gantt and run inbox for a completed 9-agent run](docs/screenshots/viewer-timeline-inbox.png)
 
 ```js
 // review.workflow.js
@@ -116,10 +116,10 @@ flowition resume <runId>                 # replay finished agents; continue inte
 
 `flowition viewer` starts the v1 browser UI for the runs under
 `$FLOWITION_HOME/runs` (default `~/.flowition/runs`). It binds loopback only and
-prints an authenticated URL. Selecting an agent opens its transcript in the
-inbox:
+prints an authenticated URL. The Agents tab groups the run by phase; selecting
+a row opens that agent's transcript:
 
-![flowition viewer — selected agent inbox with transcript](docs/screenshots/viewer-inbox.png)
+![flowition viewer — Agents/Phases view with a selected agent's transcript](docs/screenshots/viewer-phases-agent.png)
 
 ```sh
 flowition viewer                         # read-only; Ctrl-C stops it
