@@ -128,6 +128,12 @@ function dataApi(run: RunDetail, pages: Record<number, Record<string, unknown>[]
   }
 }
 
+// This integration renders two virtual transcripts plus the full cockpit. In the complete
+// suite, Node 18 GHA has measured the first test at 17.8s when green and 20.8–21.6s when
+// the global 20s limit wins (for example Actions run 31758047258). Keep the extra headroom
+// local to that deliberately heavier composition test; it is not a product performance gate.
+const DOUBLE_PANE_COMPOSITION_TIMEOUT_MS = 40_000
+
 describe('transcript route composition', () => {
   it('renders two live panes from one run snapshot and exposes the shared compare pin', async () => {
     const run = detail([agent(0), agent(1)])
@@ -169,7 +175,7 @@ describe('transcript route composition', () => {
 
     fireEvent.keyDown(screen.getByRole('separator', { name: 'Resize transcript panel' }), { key: 'ArrowLeft' })
     expect(JSON.parse(localStorage.getItem('flowition.transcript.split.width')!)).toBe(584)
-  })
+  }, DOUBLE_PANE_COMPOSITION_TIMEOUT_MS)
 
   it('selects execution attempts without conflating them with provider turns', async () => {
     const run = detail([agent(0, { attempts: 2 })])
