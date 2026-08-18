@@ -297,6 +297,12 @@ export function seedFoldState(detail: RunDetail): FoldState {
       phases: clone(s.phases ?? []),
       logs: clone(s.logs ?? []),
       mail: clone(s.mail ?? []).map(stripMail),
+      // Archived per-attempt agents are event-derived facts frozen at the attempt
+      // boundary — the §6.4 J join never wrote to them, so unlike the live agents below
+      // there is nothing to strip, and unlike the current scope there is nothing the SSE
+      // stream will ever fold onto them. Absence is meaningful (pre-archival snapshot)
+      // and is preserved rather than backfilled.
+      ...(s.agents ? { agents: clone(s.agents) } : {}),
     }))
     : [{
       phases: clone(detail.phases ?? []),

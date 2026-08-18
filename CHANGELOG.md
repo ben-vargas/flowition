@@ -5,6 +5,16 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- Attempt-scoped Timeline in the viewer cockpit. The fold now archives each agent's per-attempt view into the closing attempt scope when a resume opens a new one (`AttemptScope.agents`, archived before the round-11 clock clear), and selecting an earlier attempt in the lineage strip renders that attempt's real execution bars on its own `[start, end)` window — no `replay` badges for agents that actually executed there, replay ticks kept for agents that were cache hits in that attempt, and no now-line on a closed attempt. Snapshots from before archiving degrade to an explicit "no per-attempt agent timing recorded" state instead of showing the current attempt's lanes under an earlier attempt's label.
+
+### Fixed
+
+- Viewer Timeline no longer ignores the attempt selector: with "showing attempt 1" selected after a resume, the Gantt previously still rendered attempt 2's state (every replayed lane a collapsed `replay` tick at the replay instant).
+
 ## [0.6.0] — 2026-08-13
 
 ### Added

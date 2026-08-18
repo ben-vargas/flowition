@@ -614,3 +614,97 @@ describe('ruler and zoom', () => {
     expect(stepZoom(60_000, -1)).toBe(60_000)
   })
 })
+
+/**
+ * The attempt window (§6.4 step 1a, amended: attempt-scoped Timeline). `options.window` is
+ * the seam the Cockpit clamps an ARCHIVED attempt's chart with: the axis measures the
+ * attempt's own `[start, end)`, and a lane whose every timestamp predates it — an agent the
+ * attempt never re-entered, whose clock still dates an earlier execution — gets NO geometry
+ * rather than a bar clamped onto the left edge (the same refusal the truncated edge makes).
+ */
+describe('the attempt window (§6.4 step 1a amended)', () => {
+  const W_START = T0
+  const W_END = T0 + 100_000
+  const base = STALE_RUN.agents[0]!
+  const detail: RunDetail = {
+    ...STALE_RUN,
+    state: 'interrupted',
+    startedAt: W_START,
+    endedAt: W_END,
+    agents: [
+      // Executed inside the attempt: a real bar, measured against the attempt's own span.
+      {
+        ...base, index: 0, state: 'done', displayState: 'done',
+        queuedAt: T0 + 10_000, startedAt: T0 + 20_000, endedAt: T0 + 60_000,
+        waitMs: 10_000, durationMs: 40_000, lastOutputAt: null,
+      },
+      // Settled before the attempt began and never re-entered: every timestamp it carries
+      // is another attempt's, so this window may draw none of them.
+      {
+        ...base, index: 1, state: 'done', displayState: 'done',
+        queuedAt: T0 - 50_000, startedAt: T0 - 40_000, endedAt: T0 - 30_000,
+        waitMs: 10_000, durationMs: 10_000, lastOutputAt: null,
+      },
+      // A cache hit replayed IN the attempt keeps its replay tick…
+      {
+        ...base, index: 2, state: 'cached', displayState: 'cached', cached: true,
+        queuedAt: null, startedAt: null, endedAt: T0 + 30_000,
+        waitMs: null, durationMs: null, usage: null, lastOutputAt: null,
+      },
+      // …one replayed before it does not get a tick clamped to the window's edge.
+      {
+        ...base, index: 3, state: 'cached', displayState: 'cached', cached: true,
+        queuedAt: null, startedAt: null, endedAt: T0 - 20_000,
+        waitMs: null, durationMs: null, usage: null, lastOutputAt: null,
+      },
+    ],
+  }
+  const model = ganttModel(detail, { now: NOW, window: { start: W_START, end: W_END } })
+
+  it('clamps the axis to the window, not to the agents’ extent', () => {
+    expect(model.start).toBe(W_START)
+    expect(model.end).toBe(W_END)
+    expect(model.spanMs).toBe(100_000)
+    // A closed attempt has no "now" whatever the wall clock says.
+    expect(model.live).toBe(false)
+    expect(model.nowPct).toBeNull()
+  })
+
+  it('lays an in-window execution out on the attempt’s own span', () => {
+    const inside = lane(model, 0)
+    expect(inside.preWindow).toBe(false)
+    expect(inside.waitLeft).toBeCloseTo(10, 6)
+    expect(inside.waitWidth).toBeCloseTo(10, 6)
+    expect(inside.execLeft).toBeCloseTo(20, 6)
+    expect(inside.execWidth).toBeCloseTo(40, 6)
+    expect(inside.durationMs).toBe(40_000)
+  })
+
+  it('refuses geometry for a lane whose clock predates the window', () => {
+    const before = lane(model, 1)
+    expect(before.preWindow).toBe(true)
+    expect(before.waitLeft).toBeNull()
+    expect(before.waitWidth).toBeNull()
+    expect(before.execLeft).toBeNull()
+    expect(before.execWidth).toBeNull()
+    expect(before.notch).toBeNull()
+    // Not a truncation: the end IS recorded, it just belongs to another attempt's axis.
+    expect(before.truncated).toBe(false)
+  })
+
+  it('marks an in-window replay and refuses one from before the window', () => {
+    const replayed = lane(model, 2)
+    expect(replayed.preWindow).toBe(false)
+    expect(replayed.tick).toBeCloseTo(30, 6)
+    const carried = lane(model, 3)
+    expect(carried.preWindow).toBe(true)
+    expect(carried.tick).toBeNull()
+  })
+
+  it('sets preWindow on no lane when no window is clamped', () => {
+    const free = ganttModel(detail, { now: NOW })
+    expect(free.lanes.every((l) => !l.preWindow)).toBe(true)
+    // The free axis spans the agents' own extent instead.
+    expect(free.start).toBeLessThanOrEqual(T0 - 50_000)
+  })
+})

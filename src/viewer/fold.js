@@ -92,6 +92,38 @@ function exposeScope(state) {
   state.mail = scope.mail
 }
 
+/**
+ * Snapshot every agent's per-attempt view into the scope a `resumed` event is closing
+ * (§6.4 step 1a, amended: attempt-scoped Timeline).
+ *
+ * Agents themselves stay UNSCOPED — same identity, same lifetime totals — but their clock
+ * fields expire with the execution they date (the round-11 amendment), so once the next
+ * attempt's events start clearing them the closed attempt's timeline is unrecoverable.
+ * This archive is taken AT the resume boundary, which in byte order is strictly before any
+ * of the new attempt's agent events, so it is exactly what the agents looked like when the
+ * attempt ended: archive-before-clear.
+ *
+ * The copies are event-derived facts only — the fold never sees the journal, so the
+ * journal-joined lifetime fields (`usage`, `attempts`, `sessionId`, …) hold whatever the
+ * event stream carried at the boundary and the §6.4 J join never touches an archive.
+ * An agent still `queued`/`running` at the boundary was definitionally stranded by that
+ * attempt's end, so its archived `displayState` is `orphaned` — a pure fact about the
+ * closed attempt, unlike the live post-pass, which needs the run state.
+ */
+function archiveAgents(state) {
+  return Object.values(state._agentByIndex)
+    .sort((a, b) => a.index - b.index)
+    .map((agent) => {
+      const copy = { ...agent, steers: agent.steers.map((s) => ({ ...s })) }
+      delete copy._firstOffset
+      delete copy._approxPhaseIndex
+      copy.displayState = agent.state === 'queued' || agent.state === 'running'
+        ? 'orphaned'
+        : agent.state
+      return copy
+    })
+}
+
 function openAttempt(state, ev) {
   const firstEmpty = state.attemptSpans.length === 0
     && state.attemptScopes.length === 1
@@ -100,6 +132,7 @@ function openAttempt(state, ev) {
     && state.attemptScopes[0].mail.length === 0
   if (firstEmpty) state._scope = 0
   else {
+    currentScope(state).agents = archiveAgents(state)
     state.attemptScopes.push(blankScope())
     state._scope = state.attemptScopes.length - 1
   }
@@ -676,6 +709,12 @@ export function materializeFold(raw, runState, caps = deriveCaps(raw?.run)) {
     })),
     logs: scope.logs.map((l) => ({ ...l })),
     mail: scope.mail.map((m) => ({ ...m })),
+    // Archived per-attempt agent snapshots exist only on CLOSED scopes; absence on an old
+    // fold state (or the current scope) is meaningful — the UI degrades honestly rather
+    // than backfilling — so the key is carried through, never invented.
+    ...(Array.isArray(scope.agents)
+      ? { agents: scope.agents.map((a) => ({ ...a, steers: (a.steers ?? []).map((s) => ({ ...s })) })) }
+      : {}),
   }))
   return {
     run: state.run ? { ...state.run } : null,

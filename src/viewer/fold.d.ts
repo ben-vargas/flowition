@@ -272,6 +272,9 @@ export interface RunDetail extends Omit<RunSummary, 'agents'> {
     mailTotal: number
     logs: LogView[]
     logTotal: number
+    /** Archived per-attempt agent snapshots — see {@link AttemptScope.agents}. Absent on
+     *  the current scope and on snapshots written before attempts were archived. */
+    agents?: AgentView[]
   }[]
   /** §6.5's debug row: events whose `type` the fold does not recognize. */
   unknownEvents?: number
@@ -296,6 +299,21 @@ export interface AttemptScope {
   phases: PhaseView[]
   logs: LogView[]
   mail: MailView[]
+  /**
+   * Per-attempt agent snapshots, archived when a `started`/`resumed` run event CLOSES this
+   * scope (§6.4 step 1a as amended for the attempt-scoped Timeline). Agents themselves stay
+   * unscoped; what expires with an attempt is their CLOCK (the round-11 amendment), and this
+   * archive is taken at the resume boundary — before any of the next attempt's events clear
+   * it — so an earlier attempt's Timeline can draw the real bars.
+   *
+   * Present only on scopes closed by a fold that archives (and never on the current scope —
+   * the top-level `agents` ARE the current attempt). Absent on old snapshots: the UI must
+   * degrade to an explicit "no per-attempt agent timing recorded" state, never backfill.
+   * Values are event-derived facts as they stood at the boundary; the §6.4 J journal join
+   * never touches an archive, and an agent left `queued`/`running` at the boundary is
+   * archived with `displayState: 'orphaned'` — the closed attempt stranded it, by definition.
+   */
+  agents?: AgentView[]
 }
 
 /**

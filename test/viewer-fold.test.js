@@ -169,6 +169,49 @@ test('§6.4 resumed runs clear terminal latch and isolate attempt phases/logs/ma
   assert.deepEqual(state.attemptSpans.map((s) => s.state), ['started', 'failed', 'resumed'])
 })
 
+test('§6.4 step 1a (amended): a resume archives the closing scope\'s agents before the clear', () => {
+  const state = fold(null, records([
+    { t: 1, type: 'run', state: 'started', engine: '0.2.0' },
+    { t: 2, type: 'agent', index: 0, key: 'k0', label: 'worker', adapter: 'mock', state: 'queued' },
+    { t: 3, type: 'agent', index: 0, state: 'running', waitMs: 1, stallMs: 1000 },
+    { t: 4, type: 'agent', index: 0, state: 'progress', tool: 'grep', lastOutputAt: 4 },
+    { t: 5, type: 'agent', index: 0, state: 'done', durationMs: 2, resultPreview: 'ok' },
+    { t: 6, type: 'agent', index: 1, key: 'k1', adapter: 'mock', state: 'running' },
+    { t: 7, type: 'run', state: 'failed', error: 'boom' },
+    { t: 100, type: 'run', state: 'resumed' },
+    { t: 101, type: 'agent', index: 0, key: 'k0', adapter: 'mock', state: 'cached' },
+  ]))
+  // The archive is taken AT the resume record — in byte order, strictly before any of the
+  // new attempt's agent events reset the clocks (round 11) — so it is the attempt's own
+  // timestamps, not the replay's.
+  const archived = state.attemptScopes[0].agents
+  assert.equal(archived.length, 2)
+  assert.equal(archived[0].state, 'done')
+  assert.equal(archived[0].queuedAt, 2)
+  assert.equal(archived[0].startedAt, 3)
+  assert.equal(archived[0].endedAt, 5)
+  assert.equal(archived[0].waitMs, 1)
+  assert.equal(archived[0].durationMs, 2)
+  assert.equal(archived[0].lastOutputAt, 4)
+  assert.equal(archived[0].cached, false)
+  assert.ok(!('_firstOffset' in archived[0]), 'private fold fields never leak into an archive')
+  // An agent the closing attempt left running was stranded by that attempt's end — an
+  // event-stream fact, so the fold may state it without knowing the run state.
+  assert.equal(archived[1].state, 'running')
+  assert.equal(archived[1].displayState, 'orphaned')
+  // The archive is a copy: the cached replay that follows does not disturb it…
+  assert.equal(state.agents[0].state, 'cached')
+  assert.equal(state.agents[0].endedAt, 101)
+  assert.equal(state.agents[0].startedAt, null)
+  assert.equal(state.attemptScopes[0].agents[0].startedAt, 3)
+  // …the CURRENT scope carries none (the top-level agents ARE the current attempt)…
+  assert.equal(state.attemptScopes[1].agents, undefined)
+  // …and the materialized projection ships it, never invents one.
+  const view = materializeFold(state, 'running')
+  assert.equal(view.attemptScopes[0].agents[0].endedAt, 5)
+  assert.equal(view.attemptScopes[1].agents, undefined)
+})
+
 test('§6.4 post-pass orphans live-looking agents and abandons terminal questions', () => {
   const raw = fold(null, records([
     { t: 1, type: 'run', state: 'started', engine: '0.2.0' },
@@ -390,6 +433,10 @@ test('RunDetail retains bounded attempt scopes and derives toolIds per mixed ada
   assert.equal(detail.attemptScopes[0].logs.length, 200)
   assert.equal(detail.attemptScopes[0].logs[0].message, 'old-5')
   assert.deepEqual(detail.attemptScopes[0].mail.map((m) => m.message), ['old mail'])
+  // The first attempt started no agents, and its archive SAYS so — an empty archive is a
+  // recorded fact, distinct from the absent key an old snapshot degrades on.
+  assert.deepEqual(detail.attemptScopes[0].agents, [])
+  assert.equal(detail.attemptScopes[1].agents, undefined, 'the current scope is the top-level agents')
   assert.deepEqual(detail.phases.map((p) => p.title), ['new phase'])
   assert.deepEqual(detail.agents.map((a) => [a.adapter, a.toolIds]), [
     ['mock', false],
@@ -397,6 +444,38 @@ test('RunDetail retains bounded attempt scopes and derives toolIds per mixed ada
     ['cursor', true],
     ['grok', true],
   ])
+})
+
+test('RunDetail ships the archived attempt agents the SPA seeds its fold from', async (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'flo-view-scope-agents-'))
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }))
+  fs.writeFileSync(path.join(dir, 'events.jsonl'), jsonl([
+    { t: 1, type: 'run', state: 'started', engine: '0.2.0' },
+    { t: 2, type: 'agent', index: 0, key: 'k0', adapter: 'mock', state: 'queued' },
+    { t: 3, type: 'agent', index: 0, state: 'running', waitMs: 1 },
+    { t: 5, type: 'agent', index: 0, state: 'done', durationMs: 2 },
+    { t: 6, type: 'run', state: 'interrupted' },
+    { t: 100, type: 'run', state: 'resumed', engine: '0.2.0' },
+    { t: 101, type: 'agent', index: 0, key: 'k0', adapter: 'mock', state: 'cached' },
+  ]))
+  fs.writeFileSync(path.join(dir, 'journal.jsonl'), jsonl([
+    { type: 'meta', createdAt: 1, workflowFile: '/tmp/archive.js' },
+  ]))
+  const detail = await new SnapshotStore({
+    deriveState: async () => ({ state: 'running' }),
+  }).get(dir)
+  // The CURRENT view is the replay (round 11: the clock did not survive the re-entry)…
+  assert.equal(detail.agents[0].state, 'cached')
+  assert.equal(detail.agents[0].startedAt, null)
+  assert.equal(detail.agents[0].endedAt, 101)
+  // …and the archived scope is attempt 1 as it stood when the attempt ended.
+  const archived = detail.attemptScopes[0].agents[0]
+  assert.equal(archived.state, 'done')
+  assert.equal(archived.queuedAt, 2)
+  assert.equal(archived.startedAt, 3)
+  assert.equal(archived.endedAt, 5)
+  assert.equal(archived.waitMs, 1)
+  assert.equal(archived.cached, false)
 })
 
 test('snapshot cursor crosses complete oversize event records exactly once', async (t) => {

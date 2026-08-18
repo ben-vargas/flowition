@@ -4,7 +4,29 @@ Measured 2026-07-31 on a 16-core Apple M3 Max MacBook Pro with 64 GB RAM,
 macOS 27.0 (26A5388g), Node 24.14.0, and Google Chrome 150.0.7871.187.
 These are development-machine measurements, not portable benchmarks.
 
-Measured-source SHA-256: `6262df115f0075c07b179ad05163ac10bf86e2e4ba27df5d7aea831bd9be3706`
+Measured-source SHA-256: `38347eb576477eb06d122c8f0fc3d2f770b133b3d61ef104293d554bc7163c07`
+
+Hash rebound 2026-08-18 for the attempt-scoped Timeline (feat/attempt-scoped-timeline):
+`src/viewer/fold.js` archives each agent's per-attempt view into the closing attempt
+scope when a `resumed` event opens a new one — an O(agents) copy performed once per
+resume event, on a code path no perf fixture's mix exercises more than once per run —
+and `src/viewer/snapshot.js` / `viewer/src/state/runStore.ts` carry the archived
+`agents` key through their existing attemptScopes maps (a conditional spread on an
+already-iterated list). `viewer/dist` was rebuilt for the cockpit change: selecting an
+earlier attempt now hands the Timeline that scope's archived agents and its own
+`[start, end)` window (the pre-existing `GanttOptions.window` seam). The measured hot
+paths — snapshot assembly for runs without resumes, SSE folding, transcript paging —
+change neither shape nor allocation profile: the archive runs only when a resume record
+is folded, and the wire grows only for runs that carry closed scopes. Browser rows
+below were NOT re-measured for this entry and remain measurements of the previous
+bundle's identical hot paths. The perf pool ran green on this tree under the
+concurrent root suite (final verification run: 533/533). During earlier, loaded runs on
+the measuring machine, P2's steady-state request 4/5 intermittently exceeded its 120 ms
+budget (127.6–140.4 ms; other requests 77–116 ms) — and did so IDENTICALLY on the
+unmodified base tree (125.5 ms, verified via stash before/after), so the spike is
+machine load on the request the jittered quiescent-TTL expiry batch lands on (see the
+2026-08-05 entry), not this change: the P2 mix contains no resumed runs, so the archive
+code path never executes in it.
 
 Hash rebound 2026-08-13 for the Node 18 double-pane composition-test timeout:
 `viewer/src/features/transcript/Transcript.test.tsx` gained only a test-local 40-second

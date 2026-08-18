@@ -85,6 +85,7 @@ function detailFrom(events: Record<string, unknown>[], state: RunState = 'runnin
     attemptSpans: p.attemptSpans,
     attemptScopes: p.attemptScopes.map((s) => ({
       phases: s.phases, mail: s.mail, mailTotal: s.mail.length, logs: s.logs, logTotal: s.logs.length,
+      ...(s.agents ? { agents: s.agents } : {}),
     })),
     unknownEvents: p.unknownEvents,
   }
@@ -142,6 +143,44 @@ describe('§6.4 the fold, through the SPA import', () => {
     // Questions are NOT scoped: a re-ask upserts on its deterministic qid.
     expect(state.questions).toHaveLength(1)
     expect(state.questions[0]!.askedAt).toBe(10)
+  })
+
+  it('a resume archives the closing scope’s agents before the round-11 clear (§6.4 step 1a, amended)', () => {
+    const state = fold(null, records([
+      { t: 1, type: 'run', state: 'started', engine: ENGINE },
+      { t: 2, type: 'agent', index: 0, key: 'k0', label: 'worker', adapter: 'mock', state: 'queued' },
+      { t: 3, type: 'agent', index: 0, state: 'running', waitMs: 1, stallMs: 1000 },
+      { t: 4, type: 'agent', index: 0, state: 'progress', tool: 'grep', lastOutputAt: 4 },
+      { t: 5, type: 'agent', index: 0, state: 'done', durationMs: 2, resultPreview: 'ok' },
+      { t: 6, type: 'agent', index: 1, key: 'k1', adapter: 'mock', state: 'running' },
+      { t: 7, type: 'run', state: 'failed', error: 'boom' },
+      { t: 100, type: 'run', state: 'resumed' },
+      { t: 101, type: 'agent', index: 0, key: 'k0', adapter: 'mock', state: 'cached' },
+    ]))
+    // The archive is the attempt's own clock, frozen at the resume boundary.
+    const archived = state.attemptScopes[0]!.agents!
+    expect(archived).toHaveLength(2)
+    expect(archived[0]).toMatchObject({
+      index: 0, key: 'k0', label: 'worker', state: 'done', cached: false,
+      queuedAt: 2, startedAt: 3, endedAt: 5, waitMs: 1, durationMs: 2, lastOutputAt: 4,
+    })
+    // An agent the closing attempt left running was stranded BY that attempt's end — a
+    // pure event-stream fact, unlike the live post-pass, so the fold may state it.
+    expect(archived[1]!.state).toBe('running')
+    expect(archived[1]!.displayState).toBe('orphaned')
+    // Private fold fields never leak into the archive.
+    expect('_firstOffset' in archived[0]!).toBe(false)
+    // The archive is a COPY: the replay that follows does not disturb it.
+    expect(state.agents[0]!.state).toBe('cached')
+    expect(state.agents[0]!.endedAt).toBe(101)
+    expect(state.agents[0]!.startedAt).toBeNull()
+    expect(state.attemptScopes[0]!.agents![0]!.startedAt).toBe(3)
+    // The CURRENT scope carries none — the top-level agents ARE the current attempt.
+    expect(state.attemptScopes[1]!.agents).toBeUndefined()
+    // …and the materialized projection ships the archive without inventing one.
+    const view = materializeFold(state, 'running')
+    expect(view.attemptScopes[0]!.agents![0]!.endedAt).toBe(5)
+    expect(view.attemptScopes[1]!.agents).toBeUndefined()
   })
 
   it('openQuestions is zeroed and questions abandoned on a terminal run (M6)', () => {
@@ -479,5 +518,59 @@ describe('seedFoldState — snapshot-then-tail (§9.3)', () => {
     const again = materializeFold(fold(seedFoldState(detail), []), 'running')
     expect(again.agents[0]!.phaseIndex).toBe(0)
     expect(again.agents[0]!.phaseApproximate).toBe(true)
+  })
+
+  it('archived attempt agents survive the seed round trip — server and client folds agree', () => {
+    const events = [
+      { t: 1, type: 'run', state: 'started', engine: ENGINE },
+      { t: 2, type: 'agent', index: 0, key: 'k0', adapter: 'mock', state: 'queued' },
+      { t: 3, type: 'agent', index: 0, state: 'running', waitMs: 1 },
+      { t: 5, type: 'agent', index: 0, state: 'done', durationMs: 2 },
+      { t: 6, type: 'run', state: 'failed', error: 'boom' },
+      { t: 100, type: 'run', state: 'resumed' },
+    ]
+    // The snapshot carries the archive (the wire shape `snapshot.js` ships)…
+    const detail = detailFrom(events)
+    expect(detail.attemptScopes![0]!.agents).toHaveLength(1)
+    // …and seeding neither drops it nor lets the next materialize invent a second one.
+    const seeded = materializeFold(fold(seedFoldState(detail), []), 'running')
+    expect(seeded.attemptScopes[0]!.agents).toEqual(detail.attemptScopes![0]!.agents)
+    expect(seeded.attemptScopes[1]!.agents).toBeUndefined()
+  })
+
+  it('a resume folded over a seeded snapshot archives the seeded agents client-side', () => {
+    const detail = detailFrom([
+      ...prefix,
+      { t: 8, type: 'agent', index: 0, state: 'done', durationMs: 5 },
+      { t: 9, type: 'run', state: 'failed', error: 'nope' },
+    ], 'failed')
+    const resumed = fold(seedFoldState(detail), records([
+      { t: 100, type: 'run', state: 'resumed' },
+      { t: 101, type: 'agent', index: 0, key: 'k0', adapter: 'mock', state: 'cached' },
+    ], detail.offsets.events))
+    const archived = resumed.attemptScopes[0]!.agents!
+    // The clock is the events stream's and survives the client-side archive. (The
+    // journal-derived fields were stripped at seeding — §6.4 J owns them and never
+    // writes to an archive — so a client-closed scope archives the EVENT facts only.)
+    expect(archived.find((a) => a.index === 0)).toMatchObject({
+      state: 'done', startedAt: 6, endedAt: 8, queuedAt: 4,
+    })
+    expect(resumed.agents[0]!.state).toBe('cached')
+    expect(resumed.agents[0]!.startedAt).toBeNull()
+    expect(resumed.attemptScopes).toHaveLength(2)
+  })
+
+  it('an old snapshot with no archived agents seeds an honest absence, never a fabrication', () => {
+    const detail = detailFrom([
+      { t: 1, type: 'run', state: 'started', engine: ENGINE },
+      { t: 2, type: 'agent', index: 0, key: 'k0', adapter: 'mock', state: 'done' },
+      { t: 3, type: 'run', state: 'failed' },
+      { t: 4, type: 'run', state: 'resumed' },
+    ])
+    // Model the pre-archival wire: the scope exists, the `agents` key does not.
+    delete (detail.attemptScopes![0] as Record<string, unknown>)['agents']
+    const seeded = materializeFold(fold(seedFoldState(detail), []), 'running')
+    expect(seeded.attemptScopes).toHaveLength(2)
+    expect(seeded.attemptScopes[0]!.agents).toBeUndefined()
   })
 })

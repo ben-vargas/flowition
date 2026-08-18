@@ -343,6 +343,10 @@ export class SnapshotStore {
         mailTotal: scope.mail.length,
         logs: scope.logs.slice(-DETAIL_TAIL_RECORDS),
         logTotal: scope.logs.length,
+        // Archived per-attempt agent snapshots (closed scopes only). The key is carried
+        // through, never invented: an old events file whose fold predates archiving has
+        // none, and the SPA renders that absence honestly.
+        ...(scope.agents ? { agents: scope.agents } : {}),
       })),
       unknownEvents: projected.unknownEvents,
     }
