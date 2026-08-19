@@ -24,6 +24,10 @@ export interface TextItem extends TimelineBase {
 export interface ReasoningItem extends TimelineBase {
   kind: 'reasoning'
   text: string
+  // The episode contains at least one engine-marked {redacted:true} record (an observed
+  // CLI redaction). Legacy empty-text records from pre-marker journals leave this false —
+  // the cause of their emptiness was never recorded, so the UI must not assert one.
+  redacted: boolean
 }
 
 export interface ToolResult {

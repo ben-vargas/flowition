@@ -1,6 +1,6 @@
 // Stateful parsers that normalize each CLI's JSONL stream into flowition events:
 //   {k:'session', id, model?}       provider session/thread id
-//   {k:'text'|'reasoning', text}
+//   {k:'text'|'reasoning', text}    reasoning may carry redacted:true — see below
 //   {k:'tool', name, input?, id?} {k:'tool-result', name?, output?, isError?, toolUseId?}
 //   {k:'usage', input, output, cost?, cumulative?}
 //   {k:'result', text, structured?, isError?}            (one per completed turn)
@@ -15,6 +15,15 @@
 // protocols give). Synthesized ids are prefixed with the caller's `idSeed` (the turn
 // ordinal — a parser instance lives for exactly one turn) so a multi-turn transcript
 // never reuses an id across attempts.
+
+// Empty-reasoning policy (uniform across every parser): a FINAL reasoning block whose
+// text is empty is emitted as {k:'reasoning', text:'', redacted:true} — Claude Code
+// ≥2.1 headless redacts thinking to a signature-only block, and the transcript must
+// still record that reasoning happened (the viewer's Thinking… liveness reads it)
+// without inventing text. An empty INCREMENTAL payload (pi/cursor deltas, opencode
+// part snapshots) is dropped instead: a later event carries the block's text if there
+// is any, so an empty one is mid-stream noise, not an observable redaction.
+const reasoning = (text) => text ? { k: 'reasoning', text } : { k: 'reasoning', text: '', redacted: true }
 
 const isRecord = (v) => v !== null && typeof v === 'object' && !Array.isArray(v)
 const tokens = (v) => typeof v === 'number' && Number.isFinite(v) ? v : 0
@@ -70,7 +79,7 @@ class ClaudeStreamParser {
       for (const b of m.message.content) {
         if (!isRecord(b)) continue
         if (b.type === 'text' && typeof b.text === 'string') { this.lastText = b.text; out.push({ k: 'text', text: b.text }) }
-        else if (b.type === 'thinking' && typeof b.thinking === 'string') out.push({ k: 'reasoning', text: b.thinking })
+        else if (b.type === 'thinking' && typeof b.thinking === 'string') out.push(reasoning(b.thinking))
         else if (b.type === 'tool_use' && typeof b.name === 'string') out.push({ k: 'tool', name: b.name, input: JSON.stringify(b.input ?? {}), ...(wireId(b.id) !== undefined ? { id: b.id } : {}) })
       }
       if (typeof m.session_id === 'string') out.unshift({ k: 'session', id: m.session_id })
@@ -124,7 +133,7 @@ class CodexJsonlParser {
     if (m.type === 'item.completed' && isRecord(m.item)) {
       const it = m.item
       if (it.type === 'agent_message' && typeof it.text === 'string') { this.lastMsg = it.text; out.push({ k: 'text', text: this.lastMsg }) }
-      else if (it.type === 'reasoning' && typeof it.text === 'string') out.push({ k: 'reasoning', text: it.text })
+      else if (it.type === 'reasoning' && typeof it.text === 'string') out.push(reasoning(it.text))
       else if (it.type === 'command_execution' && typeof it.command === 'string') {
         // codex reports a completed tool as ONE item — both halves are synthesized
         // from its id, so the pair joins even though it never streamed separately
@@ -187,7 +196,9 @@ class OpencodeJsonlParser {
       }
     } else if (type === 'reasoning') {
       const text = part.text ?? m.text
-      if (typeof text === 'string') out.push({ k: 'reasoning', text })
+      // parts are cumulative snapshots, never final blocks — an empty one is
+      // "not filled yet", so it is dropped rather than marked redacted
+      if (typeof text === 'string' && text) out.push({ k: 'reasoning', text })
     } else if (type === 'tool' || type === 'tool_use') {
       const st = isRecord(part.state) ? part.state : isRecord(m.state) ? m.state : null
       if (st?.status === 'completed' || st?.status === 'error') {
@@ -228,7 +239,7 @@ class PiJsonlParser {
       if (ev.type === 'text_delta') {
         const text = ev.delta ?? ev.text
         if (typeof text === 'string') this.cur += text
-      } else if (ev.type === 'thinking_delta' && typeof ev.delta === 'string') out.push({ k: 'reasoning', text: ev.delta })
+      } else if (ev.type === 'thinking_delta' && typeof ev.delta === 'string' && ev.delta) out.push({ k: 'reasoning', text: ev.delta })
       else if (ev.type === 'error') { this.err = JSON.stringify(ev).slice(0, 500); out.push({ k: 'error', message: this.err }) }
       return out
     }
@@ -283,7 +294,7 @@ class DroidJsonlParser {
       this.lastText = m.text
       return [{ k: 'text', text: m.text }]
     }
-    if (m.type === 'reasoning' && typeof m.text === 'string' && m.text) return [{ k: 'reasoning', text: m.text }]
+    if (m.type === 'reasoning' && typeof m.text === 'string') return [reasoning(m.text)]
     if (m.type === 'tool_use' || m.type === 'tool_call') {
       const name = m.name ?? m.toolName ?? 'tool'
       return [{ k: 'tool', name, input: JSON.stringify(m.input ?? m.parameters ?? {}).slice(0, 2000), id: this.ids.begin(wireId(m.id, m.tool_use_id, m.toolCallId), name) }]

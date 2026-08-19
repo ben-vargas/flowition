@@ -2,6 +2,9 @@
 // kinds: meta, text, reasoning, tool, tool-result, mail-in, mail-out, status, raw, attempt
 //   meta        {index, label, adapter, model, prompt, attempt}  — once per attempt; the
 //               prompt is capped at 32 KiB with an explicit "… [+N chars]" marker (E10)
+//   reasoning   {text, redacted?}           — redacted:true marks a final reasoning block
+//               whose text the provider CLI withheld (Claude Code ≥2.1 headless emits
+//               signature-only thinking blocks); the reasoning still happened
 //   tool        {name, input, id?}          — id present when the adapter has tool ids (E11)
 //   tool-result {name?, output, isError, toolUseId?}  — joins its call by toolUseId → id,
 //               so parallel tool calls pair correctly instead of positionally

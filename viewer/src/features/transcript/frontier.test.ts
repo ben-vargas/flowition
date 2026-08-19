@@ -28,7 +28,7 @@ describe('§3.6 frontier summary', () => {
 
   it('never emits provider text — a text or reasoning item says only what is happening', () => {
     const text: TimelineItem = { ...base, kind: 'text', text: 'SECRET TOKEN sk-abc' }
-    const reasoning: TimelineItem = { ...base, kind: 'reasoning', text: 'SECRET TOKEN sk-abc' }
+    const reasoning: TimelineItem = { ...base, kind: 'reasoning', text: 'SECRET TOKEN sk-abc', redacted: false }
     const say = (latest: TimelineItem) =>
       frontierAnnouncement({ agent: 'a', state: 'running', live: true, latest })!
     expect(say(text)).toBe('a: writing')
@@ -136,7 +136,7 @@ describe('§3.6 frontier summary', () => {
         toolId: BODY, result, approximate: false, command: BODY, files: [BODY] },
       { ...base, kind: 'orphan-result', name: NAME, toolUseId: BODY, result },
       { ...base, kind: 'text', text: BODY },
-      { ...base, kind: 'reasoning', text: BODY },
+      { ...base, kind: 'reasoning', text: BODY, redacted: false },
       { ...base, kind: 'prompt', text: BODY, truncated: false },
       { ...base, kind: 'mail', direction: 'in', text: BODY, origin: null, delivery: null },
       { ...base, kind: 'mail', direction: 'out', text: BODY, origin: null, delivery: null },

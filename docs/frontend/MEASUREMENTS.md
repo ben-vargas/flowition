@@ -4,7 +4,28 @@ Measured 2026-07-31 on a 16-core Apple M3 Max MacBook Pro with 64 GB RAM,
 macOS 27.0 (26A5388g), Node 24.14.0, and Google Chrome 150.0.7871.187.
 These are development-machine measurements, not portable benchmarks.
 
-Measured-source SHA-256: `a019a6f03fbb239caed8602bf7205aa8b61ba79257f9e82d633254ecb3fe45e6`
+Measured-source SHA-256: `1637a9c724674d66fb23a931f8d4529e5537874a07a82a6022786f76c71209f5`
+
+Hash rebound 2026-08-18 (sixth rebind, fix/empty-reasoning-rendering round 2) for the
+redaction-cause split: `toItems.ts` now carries the record-level `redacted` flag onto
+the projected reasoning item (one boolean property per reasoning record plus an OR in
+the existing coalesce branch — same shape and allocation count as before), `types.ts`
+declares it, and `ReasoningCard` picks between two static strings on the textless row
+("text withheld by the CLI" for engine-marked episodes, "no reasoning text recorded"
+for unmarked legacy empties); `viewer/dist` was rebuilt for the card change and the
+transcript test files pin both wordings. No measured hot path changes shape or
+allocation profile — the projection loop gains one scalar write per reasoning record;
+budgets and browser rows below are untouched and were not re-measured.
+
+Hash rebound 2026-08-18 (fifth rebind, fix/empty-reasoning-rendering) for redacted
+reasoning: `viewer/src/features/transcript/Cards.tsx` gained a textless branch in
+`ReasoningCard` (an early return on an already-computed string — a render-path branch
+selecting a smaller static row, no new model work), `transcript.css` one static rule,
+and the transcript test files the cases that pin it; `viewer/dist` was rebuilt for the
+card change. `toItems.ts`, the stores, and every measured server path are byte-identical
+— the projection already coalesced empty reasoning records; only their rendering
+changed. No measured hot path changes shape or allocation profile; budgets and browser
+rows below are untouched and were not re-measured.
 
 Hash rebound 2026-08-18 (fourth rebind, PR review) for the per-attempt capability
 verdict: `src/viewer/fold.js` stamps each attempt scope's opening-event engine onto the
