@@ -325,6 +325,16 @@ test('§6.4 step 1a (amended): each scope keeps its own opening event\'s engine;
   const projected = materializeFold(state, 'running')
   assert.equal(projected.attemptScopes[0].engine, null)
   assert.equal(projected.attemptScopes[1].engine, '0.6.0')
+
+  // A terminal-only stub attempt (N14) never runs `openAttempt` — its scope still records
+  // a verdict (`null`: nothing wrote a version) rather than masquerading as a pre-field
+  // archive and inheriting an upgraded resume's run-level caps.
+  const stubbed = fold(null, records([
+    { t: 1, type: 'run', state: 'failed', error: 'module load' },
+    { t: 100, type: 'run', state: 'resumed', engine: '0.7.0' },
+  ]))
+  assert.equal(stubbed.attemptScopes[0].engine, null)
+  assert.equal(stubbed.attemptScopes[1].engine, '0.7.0')
 })
 
 test('a cold re-fold backfills earlier-attempt archives for runs recorded before archiving existed', async (t) => {
@@ -340,7 +350,7 @@ test('a cold re-fold backfills earlier-attempt archives for runs recorded before
     { t: 3, type: 'agent', index: 0, state: 'running', waitMs: 1 },
     { t: 5, type: 'agent', index: 0, state: 'done', durationMs: 2 },
     { t: 6, type: 'run', state: 'interrupted' },
-    { t: 100, type: 'run', state: 'resumed', engine: '0.2.0' },
+    { t: 100, type: 'run', state: 'resumed', engine: '0.6.0' },
     { t: 101, type: 'agent', index: 0, key: 'k0', adapter: 'mock', state: 'cached' },
   ]
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'flo-view-backfill-'))
@@ -361,6 +371,10 @@ test('a cold re-fold backfills earlier-attempt archives for runs recorded before
   // …and is exactly what a fold that had been running live would have recorded.
   const direct = materializeFold(fold(null, records(events)), 'running')
   assert.deepEqual(archived, direct.attemptScopes[0].agents)
+  // The per-scope engine crosses the SNAPSHOT WIRE too, each scope keeping its own —
+  // dropping the serializer's carry cannot leave this green.
+  assert.equal(detail.attemptScopes[0].engine, '0.2.0')
+  assert.equal(detail.attemptScopes[1].engine, '0.6.0')
 })
 
 test('§6.4 post-pass orphans live-looking agents and abandons terminal questions', () => {

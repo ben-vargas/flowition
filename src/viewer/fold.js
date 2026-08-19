@@ -216,6 +216,15 @@ function foldRun(state, ev) {
     if (!state._attemptOpen) {
       const t = state._createdAt ?? finite(ev.t) ?? 0
       if (state.attemptSpans.length === 0) state.attemptSpans.push({ state: 'started', t })
+      // A terminal-only stub attempt (N14) never ran `openAttempt`, so without this its
+      // scope would reach an archive with `engine` ABSENT — the pre-field-archive marker —
+      // and a later resume under an upgraded engine would hand the stub the new run-level
+      // caps. The stub's verdict is its own events': the terminal record's version, or
+      // `null` where none was written. `undefined` guard, not `??=`: a recorded `null`
+      // is a verdict and must not be re-stamped by a second terminal record.
+      if (currentScope(state).engine === undefined) {
+        currentScope(state).engine = typeof ev.engine === 'string' ? ev.engine : null
+      }
     }
     merged.endedAt = finite(ev.t)
     merged.error = ev.error ?? null

@@ -4,7 +4,20 @@ Measured 2026-07-31 on a 16-core Apple M3 Max MacBook Pro with 64 GB RAM,
 macOS 27.0 (26A5388g), Node 24.14.0, and Google Chrome 150.0.7871.187.
 These are development-machine measurements, not portable benchmarks.
 
-Measured-source SHA-256: `063290c87af0a088ddc2a8bcc7029e2dafc7130ba51921d921e5b67103fc022a`
+Measured-source SHA-256: `a019a6f03fbb239caed8602bf7205aa8b61ba79257f9e82d633254ecb3fe45e6`
+
+Hash rebound 2026-08-18 (fourth rebind, PR review) for the per-attempt capability
+verdict: `src/viewer/fold.js` stamps each attempt scope's opening-event engine onto the
+scope — one property write inside `openAttempt` (once per `started`/`resumed` record)
+plus an `undefined` guard on the terminal-only stub path — and `src/viewer/snapshot.js`,
+`viewer/src/fold/index.ts` and `viewer/src/state/runStore.ts` carry the `engine` key
+through their existing attemptScopes maps (a conditional spread on an already-iterated
+list, same shape as the `agents` carry). `src/viewer/fold.d.ts` gained the field
+declaration and `viewer/dist` was rebuilt for the Cockpit/Timeline consumption
+(`deriveCaps` on attempt selection — a user interaction, not a hot path). No measured
+hot path changes shape or allocation profile: the P2 mix contains no resumed runs, so
+none of this rebind's changes execute in it beyond the once-per-run `openAttempt` write.
+Budgets and browser rows below are untouched and were not re-measured.
 
 Hash rebound 2026-08-18 (third rebind, review round 3) for the attempt-scoped Timeline:
 `src/viewer/fold.js` now records byte-order attempt participation on every agent — one
