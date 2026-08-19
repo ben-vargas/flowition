@@ -230,8 +230,27 @@ Grok's `--reasoning-effort` accepts only `low|medium|high|xhigh`; the adapter
 maps `none`/`minimal` → `low`, `max` → `xhigh`, and omitted effort → `high`.
 
 **Steering semantics.** `steer: 'live'` (claude, amp): user messages are injected as
-stream-json lines on the running process's stdin; an outstanding-message counter
-decides when stdin closes. `steer: 'turn'` (codex, droid, opencode, pi, cursor, grok): mail queues
+stream-json lines on the running process's stdin, and when stdin closes is
+protocol-specific because the two CLIs consume mid-turn messages differently
+(issue #3). claude emits ONE `result` per TURN: a message injected mid-turn is
+coalesced into the running turn and never gets a result of its own, so the
+parsed terminal result settles the whole outstanding count — it answers the
+initial prompt and every message injected before it was parsed — and closes
+stdin immediately (per-message accounting deadlocked here: outstanding stuck
+above zero, stdin never closed, the CLI correctly waited for EOF while the
+engine waited for exit). A steer landing after the result finds stdin closed
+and queues for a `--resume` follow-up turn. amp does NOT coalesce: a message
+sent without `steer: true` (flowition never sets it) while the agent is busy is
+queued and run as its own turn, each closing with its own
+`stop_reason=end_turn`, and amp exits only once the assistant is done AND stdin
+is closed (owner's manual appendix, checked 2026-08-18) — so a per-message
+counter of `turn-end` events decides when stdin closes, and a message buffered
+at EOF still runs before exit. If a live-steer process exits with messages
+still counted outstanding but a valid result that post-dates every injection,
+the result is accepted and the unanswered messages are requeued for a
+follow-up turn (a possible duplicate delivery beats discarding a completed
+turn); the `truncated` refusal is reserved for true early death — no result,
+or an injection after the last result. `steer: 'turn'` (codex, droid, opencode, pi, cursor, grok): mail queues
 in the AgentJob; when the current turn ends, queued mail is delivered as a
 session-resume follow-up turn. Either way `agent()` resolves only after all injected
 messages are consumed, so steered guidance is always reflected in the returned result —

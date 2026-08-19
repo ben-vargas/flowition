@@ -5,6 +5,14 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- A claude agent that consumed a live mid-turn steer no longer hangs on teardown (#3). The claude CLI emits ONE `result` per turn — a user message injected mid-turn is coalesced into the running turn and never gets a result of its own — but `AgentJob` counted one expected result per injected message, so `outstanding` stuck above zero, stdin never closed, and the CLI (correctly) waited for EOF while the engine waited for exit: a deadlock only the 30-minute stall SIGKILL broke, after which the already-valid result was discarded as `truncated … refusing stale result` and the whole agent re-ran. A parsed terminal result now settles the whole outstanding count and closes stdin immediately (on error results too — the turn is over either way); a steer landing after the result queues for a `--resume` follow-up turn instead.
+- A live-steer process that exits with messages still counted outstanding but a valid result post-dating every injection now has that result accepted, with the unanswered messages requeued for a follow-up turn, instead of the finished turn being refused as `truncated` and expensively re-run. True early death — no result yet, or an injection after the last result — still refuses.
+- amp's per-message `turn-end` accounting is documented as intentionally unchanged: amp does not share claude's coalescing (a message sent without `steer: true` while the agent is busy is queued and run as its own turn, and amp exits only once the assistant is done AND stdin is closed — owner's manual appendix, checked 2026-08-18), now pinned by fake-CLI regression tests either way.
+
 ## [0.7.0] — 2026-08-18
 
 ### Added
