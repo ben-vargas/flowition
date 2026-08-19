@@ -4,7 +4,7 @@ Measured 2026-07-31 on a 16-core Apple M3 Max MacBook Pro with 64 GB RAM,
 macOS 27.0 (26A5388g), Node 24.14.0, and Google Chrome 150.0.7871.187.
 These are development-machine measurements, not portable benchmarks.
 
-Measured-source SHA-256: `1ef7c30125b05fec213f5df582d9e386becfddd6aa867e2278a5f2911769026e`
+Measured-source SHA-256: `063290c87af0a088ddc2a8bcc7029e2dafc7130ba51921d921e5b67103fc022a`
 
 Hash rebound 2026-08-18 (third rebind, review round 3) for the attempt-scoped Timeline:
 `src/viewer/fold.js` now records byte-order attempt participation on every agent — one

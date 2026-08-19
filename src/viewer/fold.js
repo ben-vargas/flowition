@@ -182,6 +182,12 @@ function openAttempt(state, ev) {
     state.attemptScopes.push(blankScope())
     state._scope = state.attemptScopes.length - 1
   }
+  // The scope's capability verdict is its OWN opening event's engine, not the run's:
+  // `run.engine` is a merge that every later `resumed` overwrites, so after an upgrade the
+  // run-level caps describe the newest attempt only. `null` records that this attempt's
+  // engine wrote no version (pre-E4/E6 — caps unsupported, the honest verdict); the key is
+  // ABSENT only on archives built before it existed, where consumers fall back to run caps.
+  currentScope(state).engine = typeof ev.engine === 'string' ? ev.engine : null
   state._lastPhaseIndex = null
   state._attemptOpen = true
   state.attemptSpans.push({ state: ev.state, t: finite(ev.t) ?? 0 })
@@ -768,6 +774,9 @@ export function materializeFold(raw, runState, caps = deriveCaps(raw?.run)) {
     ...(Array.isArray(scope.agents)
       ? { agents: scope.agents.map((a) => ({ ...a, steers: (a.steers ?? []).map((s) => ({ ...s })) })) }
       : {}),
+    // The scope's own opening-event engine (see `openAttempt`): absent only where the fold
+    // state predates the field, carried verbatim otherwise — same rule as `agents`.
+    ...(scope.engine !== undefined ? { engine: scope.engine } : {}),
   }))
   return {
     run: state.run ? { ...state.run } : null,

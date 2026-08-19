@@ -289,6 +289,8 @@ export interface RunDetail extends Omit<RunSummary, 'agents'> {
      *  the current scope, and on snapshots no archiving fold ever built (a server re-fold
      *  of an old run's events reconstructs them; an old server's snapshot JSON cannot). */
     agents?: AgentView[]
+    /** The attempt's own opening-event engine — see {@link AttemptScope.engine}. */
+    engine?: string | null
   }[]
   /** §6.5's debug row: events whose `type` the fold does not recognize. */
   unknownEvents?: number
@@ -334,6 +336,18 @@ export interface AttemptScope {
    * closed attempt stranded it, by definition.
    */
   agents?: AgentView[]
+  /**
+   * The engine version from THIS scope's opening `started`/`resumed` event. Run-level
+   * `caps` derive from `run.engine`, which every later resume overwrites — so after an
+   * upgrade they describe only the newest attempt, and an archived attempt rendered under
+   * them would claim queue waits and progress ticks its own engine could not emit (and
+   * suppress the older-engine notice that says so). Consumers derive an archived attempt's
+   * caps from this field via `deriveCaps({ engine })` instead. `null` means the opening
+   * event carried no version (an older engine — caps honestly unsupported); the key is
+   * absent only on archives built before the field existed, where the run-level caps are
+   * the only verdict available and consumers fall back to them.
+   */
+  engine?: string | null
 }
 
 /**

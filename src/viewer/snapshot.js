@@ -351,6 +351,10 @@ export class SnapshotStore {
         // renders that absence honestly (its own degraded state exists for clients seeded
         // from an old server's snapshot JSON, which no re-fold can repair client-side).
         ...(scope.agents ? { agents: scope.agents } : {}),
+        // The scope's own opening-event engine — what the archived Timeline derives its
+        // capability verdict from, so an upgrade mid-lineage cannot claim queue/progress
+        // support for an attempt recorded by an engine that could not emit either.
+        ...(scope.engine !== undefined ? { engine: scope.engine } : {}),
       })),
       unknownEvents: projected.unknownEvents,
     }

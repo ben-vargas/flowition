@@ -294,6 +294,9 @@ export function seedFoldState(detail: RunDetail): FoldState {
       // stream will ever fold onto them. Absence is meaningful (pre-archival snapshot)
       // and is preserved rather than backfilled.
       ...(s.agents ? { agents: clone(s.agents) } : {}),
+      // Same absence-is-meaningful rule for the scope's opening-event engine: carried
+      // verbatim (null included — "this attempt's engine wrote no version"), never invented.
+      ...(s.engine !== undefined ? { engine: s.engine } : {}),
     }))
     : [{
       phases: clone(detail.phases ?? []),

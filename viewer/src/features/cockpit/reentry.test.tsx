@@ -72,6 +72,7 @@ const foldDetail = (events: Record<string, unknown>[], state: RunState = 'runnin
     attemptScopes: m.attemptScopes.map((s) => ({
       phases: s.phases, logs: s.logs, logTotal: s.logs.length, mail: s.mail, mailTotal: s.mail.length,
       ...(s.agents ? { agents: s.agents } : {}),
+      ...(s.engine !== undefined ? { engine: s.engine } : {}),
     })),
     resumeCount: m.resumeCount,
     caps: m.caps,
@@ -298,6 +299,55 @@ describe('the Timeline on an earlier attempt (§6.4 step 1a, amended)', () => {
     const bar = document.querySelector<HTMLElement>('.lane-track .bar')!
     expect(parseFloat(bar.style.left)).toBeCloseTo((0 / 3_100) * 100, 1)
     expect(parseFloat(bar.style.width)).toBeCloseTo((3_000 / 3_100) * 100, 1)
+  })
+
+  it('derives an earlier attempt’s capability verdict from its own engine, not the resume’s', async () => {
+    // Attempt 1 was recorded by an engine that wrote no version on its run event
+    // (pre-E4/E6 — no queue events, no progress ticks); the resume runs an upgraded
+    // engine, whose version overwrites `run.engine` and flips the RUN-level caps to
+    // supported. The archived attempt must render under its OWN verdict: the
+    // older-engine notice, not a claim of queue data its engine could not emit.
+    const UPGRADED: Record<string, unknown>[] = [
+      { t: T0, type: 'run', state: 'started', concurrency: 2 },
+      { t: T0, type: 'agent', index: 0, key: 'k0', label: 'retried', adapter: 'claude', state: 'running' },
+      { t: T0 + 3_000, type: 'agent', index: 0, state: 'done', durationMs: 3_000 },
+      { t: T0 + 3_100, type: 'run', state: 'completed' },
+      { t: T0 + 3_500_000, type: 'run', state: 'resumed', engine: '0.2.0' },
+      { t: T0 + 3_599_000, type: 'agent', index: 0, key: 'k0', adapter: 'claude', state: 'cached' },
+    ]
+    const detail = foldDetail(UPGRADED)
+    expect(detail.caps?.queueEvents).toBe('supported')
+    expect(detail.attemptScopes![0]!.engine).toBeNull()
+    render(
+      <>
+        <IconSprite />
+        <Cockpit runId={detail.runId} storeApi={fixedApi(detail)} />
+      </>,
+    )
+    await screen.findByRole('tablist')
+
+    // The current attempt renders under the run-level verdict — no notice.
+    expect(screen.queryByText(/Recorded by an older engine/)).toBeNull()
+
+    // Attempt 1 renders under its own: the notice is back for the attempt whose engine
+    // could not record queue waits, exactly as if the run had never been upgraded.
+    fireEvent.click(screen.getAllByRole('radio')[0]!)
+    expect(screen.getByText(/Recorded by an older engine/)).toBeTruthy()
+
+    // An archive from before the field existed cannot say — only there does the
+    // run-level verdict stand in (today's behavior, the sole verdict available).
+    cleanup()
+    const preField = foldDetail(UPGRADED)
+    delete (preField.attemptScopes![0] as Record<string, unknown>)['engine']
+    render(
+      <>
+        <IconSprite />
+        <Cockpit runId={preField.runId} storeApi={fixedApi(preField)} />
+      </>,
+    )
+    await screen.findByRole('tablist')
+    fireEvent.click(screen.getAllByRole('radio')[0]!)
+    expect(screen.queryByText(/Recorded by an older engine/)).toBeNull()
   })
 
   it('a multi-resume lane with no events in the shown attempt leaks no other attempt’s metadata', async () => {

@@ -87,6 +87,7 @@ function detailFrom(events: Record<string, unknown>[], state: RunState = 'runnin
     attemptScopes: p.attemptScopes.map((s) => ({
       phases: s.phases, mail: s.mail, mailTotal: s.mail.length, logs: s.logs, logTotal: s.logs.length,
       ...(s.agents ? { agents: s.agents } : {}),
+      ...(s.engine !== undefined ? { engine: s.engine } : {}),
     })),
     unknownEvents: p.unknownEvents,
   }
@@ -658,6 +659,33 @@ describe('seedFoldState — snapshot-then-tail (§9.3)', () => {
     // other is either a field the two folds would archive differently (the parity above
     // breaks) or a field the seed deletes and nothing restores.
     expect(Object.keys(ARCHIVED_AGENT_BLANKS).sort()).toEqual([...JOURNAL_DERIVED_FIELDS].sort())
+  })
+
+  it('a scope’s opening-event engine survives the seed round trip; absence stays absent', () => {
+    const detail = detailFrom([
+      { t: 1, type: 'run', state: 'started' }, // an older engine: no version on the event
+      { t: 2, type: 'agent', index: 0, key: 'k0', adapter: 'mock', state: 'done' },
+      { t: 3, type: 'run', state: 'failed' },
+      { t: 100, type: 'run', state: 'resumed', engine: ENGINE }, // resumed after an upgrade
+    ])
+    // The wire carries each scope's own verdict: `null` recorded for attempt 1, the
+    // upgraded version for attempt 2 — while run-level caps describe only the latter.
+    expect(detail.attemptScopes![0]!.engine).toBeNull()
+    expect(detail.attemptScopes![1]!.engine).toBe(ENGINE)
+    const seeded = materializeFold(fold(seedFoldState(detail), []), 'running')
+    expect(seeded.attemptScopes[0]!.engine).toBeNull()
+    expect(seeded.attemptScopes[1]!.engine).toBe(ENGINE)
+
+    // A pre-field archive (old server's snapshot JSON) keeps the key ABSENT through
+    // seeding — the fallback-to-run-caps case, distinct from a recorded `null`.
+    const old = detailFrom([
+      { t: 1, type: 'run', state: 'started', engine: ENGINE },
+      { t: 2, type: 'run', state: 'failed' },
+      { t: 3, type: 'run', state: 'resumed', engine: ENGINE },
+    ])
+    delete (old.attemptScopes![0] as Record<string, unknown>)['engine']
+    const reseeded = materializeFold(fold(seedFoldState(old), []), 'running')
+    expect('engine' in reseeded.attemptScopes[0]!).toBe(false)
   })
 
   it('an old snapshot with no archived agents seeds an honest absence, never a fabrication', () => {

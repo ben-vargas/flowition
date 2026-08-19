@@ -19,6 +19,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore
 import type { ReactNode } from 'react'
 import { api, getToken, subscribeToken } from '../../api/client.js'
 import type { LogView, RunDetail, RunState } from '../../api/types.js'
+import { deriveCaps } from '../../fold/index.js'
 import {
   createRunStore,
   type RunSnapshot,
@@ -172,9 +173,19 @@ export function Cockpit(props: CockpitProps) {
       const located = archivedAttempt(
         detail.attemptSpans ?? [], shownScope, now, detail.createdAt ?? null, honesty,
       )
+      // The capability verdict is per attempt, not per run: `run.engine` is overwritten
+      // by every resume, so after an upgrade `detail.caps` describes the newest attempt
+      // only — rendered under an earlier one it would claim queue waits and progress
+      // ticks that attempt's engine could not emit, and suppress the older-engine notice
+      // that says so. The archived scope carries its own opening event's engine; `null`
+      // there is a recorded fact (no version written → caps honestly unsupported), and
+      // only an absent key — an archive from before the field existed — falls back to
+      // the run-level caps, the sole verdict available there.
+      const scopeEngine = scopes[shownScope]?.engine
       return {
         ordinal: located?.ordinal ?? shownScope + 1,
         agents: scopes[shownScope]?.agents ?? null,
+        caps: scopeEngine !== undefined ? deriveCaps({ engine: scopeEngine }) : null,
         window: located && located.endedAt != null
           ? { start: located.startedAt, end: located.endedAt }
           : null,

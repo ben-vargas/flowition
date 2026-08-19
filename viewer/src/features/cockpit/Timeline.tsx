@@ -13,7 +13,7 @@
 
 import { useCallback } from 'react'
 import type { CSSProperties } from 'react'
-import type { AgentView, RunDetail, RunState } from '../../api/types.js'
+import type { AgentView, Caps, RunDetail, RunState } from '../../api/types.js'
 import { fmtDuration } from '../../format/fmt.js'
 import { Icon } from '../../ui/Icon.js'
 import { AdapterBadge, StatusGlyph } from '../../ui/Status.js'
@@ -40,6 +40,12 @@ export interface TimelineAttempt {
   /** 1-based attempt number, counted exactly as the lineage strip counts it. */
   ordinal: number
   agents: AgentView[] | null
+  /**
+   * The attempt's OWN capability verdict, derived from its scope's opening-event engine —
+   * never the run's, which every resume overwrites (`AttemptScope.engine`). `null` means
+   * the archive predates the field and the run-level caps are the only verdict there is.
+   */
+  caps: Caps | null
   /** The attempt's own `[start, end)`, or `null` when the spans cannot locate it. */
   window: { start: number; end: number } | null
   state: RunState
@@ -72,6 +78,12 @@ export function Timeline(props: TimelineProps) {
       ...detail,
       agents: attempt.agents,
       ...(attempt.window ? { startedAt: attempt.window.start, endedAt: attempt.window.end } : {}),
+      // The spread above would hand the archived attempt the CURRENT run's caps — after a
+      // mid-lineage engine upgrade that claims queue waits and progress ticks this
+      // attempt's engine could not emit, and hides the older-engine notice that says so.
+      // The attempt's own verdict (from its scope's opening-event engine) wins; only an
+      // archive that predates the field keeps the run-level caps, the sole verdict left.
+      ...(attempt.caps ? { caps: attempt.caps } : {}),
     }
     : null
   const honesty = archivedDetail

@@ -1388,6 +1388,21 @@ events are common — G10).
    every-timestamp-predates-the-window inference only as the fallback for records that
    predate the field (an old server's snapshot JSON); a server re-fold of any events file
    reconstructs the flag exactly, per the determinism ruling above.
+
+   **AMENDED further (2026-08-18, PR review) — the capability verdict is
+   per attempt.** `run.engine` is a merge every later `resumed` overwrites, so after a
+   mid-lineage engine upgrade the run-level `caps` describe the newest attempt only;
+   rendered under an earlier attempt they would claim queue waits and progress ticks that
+   attempt's engine could not emit, and suppress the "recorded by an older engine" notice
+   whose own contract says the verdict comes from the engine version, never from field
+   presence. Each scope therefore records its OWN opening `started`/`resumed` event's
+   engine as `AttemptScope.engine` — `null` where the event wrote no version (an older
+   engine: caps honestly unsupported) — and an archived attempt's Timeline derives its
+   caps from that field via `deriveCaps({ engine })`, not from the run's. The key is
+   absent only on archives built before the field existed, where the run-level caps are
+   the only verdict available and the consumer falls back to them — the same
+   absence-is-meaningful rule `agents` and `inAttempt` follow, repaired by any server
+   re-fold of the events file.
 2. **phase** events: append `{phaseIndex: ev.phaseIndex ?? scope-local ordinal, title}`
    to the current attempt scope; identity is `phaseIndex`, not title (titles repeat
    legally — Sol-10).

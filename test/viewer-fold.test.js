@@ -305,6 +305,28 @@ test('§6.4 step 1a (amended): participation is byte-order truth, not a timestam
   assert.equal(second.find((a) => a.index === 1).endedAt, 100)
 })
 
+test('§6.4 step 1a (amended): each scope keeps its own opening event\'s engine; resumes do not rewrite it', () => {
+  const state = fold(null, records([
+    { t: 1, type: 'run', state: 'started' }, // pre-E4/E6 engine: run events wrote no version
+    { t: 2, type: 'agent', index: 0, key: 'k0', adapter: 'mock', state: 'running' },
+    { t: 3, type: 'run', state: 'interrupted' },
+    { t: 100, type: 'run', state: 'resumed', engine: '0.6.0' }, // resumed after an upgrade
+    { t: 101, type: 'agent', index: 0, key: 'k0', adapter: 'mock', state: 'cached' },
+  ]))
+  // `run.engine` is a merge the resume overwrote, so run-level caps claim support…
+  assert.equal(state.run.engine, '0.6.0')
+  assert.equal(deriveCaps(state.run).queueEvents, 'supported')
+  // …but each scope holds its OWN opening event's verdict: attempt 1 recorded `null`
+  // (no version written — caps honestly unsupported), attempt 2 the upgraded engine.
+  assert.equal(state.attemptScopes[0].engine, null)
+  assert.equal(deriveCaps({ engine: state.attemptScopes[0].engine }).queueEvents, 'unsupported')
+  assert.equal(state.attemptScopes[1].engine, '0.6.0')
+  // The field survives materialization; `null` is carried, never dropped to absence.
+  const projected = materializeFold(state, 'running')
+  assert.equal(projected.attemptScopes[0].engine, null)
+  assert.equal(projected.attemptScopes[1].engine, '0.6.0')
+})
+
 test('a cold re-fold backfills earlier-attempt archives for runs recorded before archiving existed', async (t) => {
   // Reclassified in review: this is reconstruction, not fabrication. The fold is
   // deterministic over the events log, so replaying a pre-change run's events.jsonl
