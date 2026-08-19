@@ -118,6 +118,58 @@ test('claude: a steer landing after the terminal result queues and rides a --res
     assert.ok(journal.some((e) => e.type === 'mail-done' && e.id === mail.id && !e.dropped))
   }))
 
+// PR #5 review (Codex bot P1 on src/agent-proc.js:436): a steer accepted AFTER
+// the child generated its terminal result but BEFORE the parent parsed that
+// stdout line is counted into liveSeqAtResult, outstanding zeroes, endStdin
+// fires, and the success path journals mail-done — the bot read that as a
+// silently lost steer. Probed against the real CLI (2026-08-18, claude
+// 2.1.235, stream-json in/out): NOT lost — claude drains user messages
+// buffered on stdin before EOF, answering each as its own turn with its own
+// result, then exits 0 (in-the-wild match: flo_3a015a87 agent 0). The second
+// result arrives before 'close' and overwrites turnResult, so the steer's
+// answer wins (last-answer-wins, same as amp multi-turn) and mail-done is
+// accurate. This test pins that implicit drain-at-EOF CLI contract: if a
+// future claude CLI starts DISCARDING buffered input at EOF, update
+// fake-claude.js to match — and the engine then needs a real requeue for
+// raced steers instead of mail-done. The fake HOLDS the raced message until
+// stdin EOF, so passing requires the engine to close stdin promptly on the
+// result-1 parse: under the pre-fix per-result accounting outstanding stays
+// above zero, endStdin never fires, turn 2 never runs, and the small stallMs
+// below bounds that failure to seconds instead of the hang guard.
+test('claude: a steer raced past an already-generated terminal result is drained at EOF as its own turn — its result wins (pins CLI drain-at-EOF contract, PR #5 review)', { timeout: 30_000 }, () =>
+  withKnobs({ FAKE_TURN_MS: 200, FAKE_RACE_STEER: 1 }, async () => {
+    const { job, transcript, journal } = mkJob({ spec: { stallMs: 3000 } })
+    const done = settle(job.execute())
+    await until(() => journal.some((e) => e.type === 'session'))
+    const child = job.child
+    // accepted live before result 1 is parsed: liveSeq counts it, result 1
+    // (generated without it) snapshots liveSeqAtResult, outstanding zeroes,
+    // endStdin fires — exactly the window the review flagged
+    assert.equal(job.send('raced steer'), 'live')
+    const r = await finish(job, done)
+    assert.notEqual(r, HUNG, 'execute() hung draining a raced steer at EOF')
+    assert.ok(r.ok, r.err?.message)
+    // result 1 reached the transcript WITHOUT reflecting the steer (steers:0,
+    // the original prompt), and BOTH results were parsed (one usage-cum
+    // journal record each) — the pin requires a result that did not reflect
+    // the message followed by one that did, not any single steer-reflecting
+    // result
+    assert.ok(transcript.some((e) => e.kind === 'text' && /^turn:1 resumed:false steers:0 msg:review the branch/.test(e.text)))
+    assert.equal(journal.filter((e) => e.type === 'usage-cum').length, 2)
+    // the FINAL answer is turn 2's — the drained steer's own result arrived
+    // before 'close' and overwrote result 1, with no follow-up spawn or requeue
+    assert.match(r.ok.text, /^turn:2 resumed:false steers:0 msg:raced steer/)
+    assert.ok(!transcript.some((e) => e.kind === 'status' && /follow-up turn|requeued/.test(e.text)))
+    assert.equal(job.mailQueue.length, 0)
+    // the steer's mail is journaled delivered — not dropped, not stranded
+    const mail = journal.find((e) => e.type === 'mail')
+    assert.ok(journal.some((e) => e.type === 'mail-done' && e.id === mail.id && !e.dropped))
+    // the child exited cleanly at EOF and was reaped
+    await until(() => child.exitCode != null || child.signalCode != null)
+    assert.equal(child.exitCode, 0)
+    assert.equal(job.child, null)
+  }))
+
 test('claude: true early death with an unanswered injection still refuses as truncated', { timeout: 30_000 }, () =>
   withKnobs({ FAKE_TURN_MS: 2000, FAKE_DIE_MID_TURN: 1 }, async () => {
     const { job, journal } = mkJob({ spec: { schema: SHIP } })
