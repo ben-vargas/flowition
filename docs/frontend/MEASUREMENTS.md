@@ -4,7 +4,18 @@ Measured 2026-07-31 on a 16-core Apple M3 Max MacBook Pro with 64 GB RAM,
 macOS 27.0 (26A5388g), Node 24.14.0, and Google Chrome 150.0.7871.187.
 These are development-machine measurements, not portable benchmarks.
 
-Measured-source SHA-256: `d5bca2a4796c2a4e6ba4e374d8d48b1ea74c7d5521d0d4d753626fa5e8c5de5e`
+Measured-source SHA-256: `1637a9c724674d66fb23a931f8d4529e5537874a07a82a6022786f76c71209f5`
+
+Hash rebound 2026-08-18 (sixth rebind, fix/empty-reasoning-rendering round 2) for the
+redaction-cause split: `toItems.ts` now carries the record-level `redacted` flag onto
+the projected reasoning item (one boolean property per reasoning record plus an OR in
+the existing coalesce branch — same shape and allocation count as before), `types.ts`
+declares it, and `ReasoningCard` picks between two static strings on the textless row
+("text withheld by the CLI" for engine-marked episodes, "no reasoning text recorded"
+for unmarked legacy empties); `viewer/dist` was rebuilt for the card change and the
+transcript test files pin both wordings. No measured hot path changes shape or
+allocation profile — the projection loop gains one scalar write per reasoning record;
+budgets and browser rows below are untouched and were not re-measured.
 
 Hash rebound 2026-08-18 (fifth rebind, fix/empty-reasoning-rendering) for redacted
 reasoning: `viewer/src/features/transcript/Cards.tsx` gained a textless branch in

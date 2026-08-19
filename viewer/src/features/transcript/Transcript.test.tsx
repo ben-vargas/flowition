@@ -235,6 +235,24 @@ describe('transcript route composition', () => {
     expect(view.container.querySelector('.reason button')).toBeNull()
   })
 
+  it('renders an old journal of unmarked empty reasoning without asserting a redaction', async () => {
+    // Pre-marker journals hold plain {kind:'reasoning', text:''} with no recorded cause;
+    // the row stays compact and non-expandable but claims nothing, and Thinking… holds.
+    const run = detail([agent(0)])
+    const view = render(<TranscriptRoute runId="run-1" agentIndex={0} dataApi={dataApi(run, {
+      0: [
+        { t: 1, kind: 'meta', attempt: 1, prompt: 'think' },
+        { t: 2, kind: 'reasoning', text: '' },
+        { t: 3, kind: 'reasoning', text: '' },
+      ],
+    })} />)
+    await screen.findByText('Thinking…')
+    expect(screen.getByText('no reasoning text recorded')).toBeTruthy()
+    expect(screen.queryByText('text withheld by the CLI')).toBeNull()
+    expect(view.container.querySelectorAll('.reason')).toHaveLength(1)
+    expect(view.container.querySelector('.reason button')).toBeNull()
+  })
+
   it('uses the narrow replacement while keeping compare in the stacked-selector state', async () => {
     vi.stubGlobal('matchMedia', (query: string) => ({
       matches: query.includes('max-width: 899px'),

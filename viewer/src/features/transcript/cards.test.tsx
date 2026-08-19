@@ -211,16 +211,16 @@ describe('transcript cards (§2.5.1)', () => {
   })
 
   it('reasoning is collapsed with a one-line preview', () => {
-    const item: ReasoningItem = { id: 'r', kind: 'reasoning', text: 'line one\nline two', t: 1, o: 1, attempt: 1 }
+    const item: ReasoningItem = { id: 'r', kind: 'reasoning', text: 'line one\nline two', redacted: false, t: 1, o: 1, attempt: 1 }
     const view = render(<ReasoningCard item={item} expanded={false} onExpanded={() => {}} />)
     expect(view.container.querySelector('.prev')?.textContent).toBe('line one line two')
     expect(screen.getByText('2 lines')).toBeTruthy()
     expect(view.container.querySelector('.reason .prose')).toBeNull()
   })
 
-  it('textless reasoning renders as a compact non-expandable redaction row', () => {
-    // Claude ≥2.1 headless redacts thinking; old journals hold {kind:'reasoning', text:''}
-    const item: ReasoningItem = { id: 'r', kind: 'reasoning', text: '', t: 1, o: 1, attempt: 1 }
+  it('an engine-marked redaction renders as a compact non-expandable redaction row', () => {
+    // Claude ≥2.1 headless redacts thinking; the engine marks these records redacted:true
+    const item: ReasoningItem = { id: 'r', kind: 'reasoning', text: '', redacted: true, t: 1, o: 1, attempt: 1 }
     const view = render(<ReasoningCard item={item} expanded={false} onExpanded={() => {}} />)
     expect(screen.getByText('text withheld by the CLI')).toBeTruthy()
     expect(view.container.querySelector('button')).toBeNull()
@@ -228,10 +228,20 @@ describe('transcript cards (§2.5.1)', () => {
     expect(screen.queryByText(/line/)).toBeNull()
   })
 
-  it('whitespace-only reasoning is treated as textless, not an expandable blank', () => {
-    const item: ReasoningItem = { id: 'r', kind: 'reasoning', text: '\n \n', t: 1, o: 1, attempt: 1 }
+  it('an unmarked textless item renders compactly without asserting a cause', () => {
+    // old journals hold plain {kind:'reasoning', text:''} — no recorded cause, no claim
+    const item: ReasoningItem = { id: 'r', kind: 'reasoning', text: '', redacted: false, t: 1, o: 1, attempt: 1 }
     const view = render(<ReasoningCard item={item} expanded={false} onExpanded={() => {}} />)
-    expect(screen.getByText('text withheld by the CLI')).toBeTruthy()
+    expect(screen.getByText('no reasoning text recorded')).toBeTruthy()
+    expect(screen.queryByText('text withheld by the CLI')).toBeNull()
+    expect(view.container.querySelector('button')).toBeNull()
+    expect(view.container.querySelector('[aria-expanded]')).toBeNull()
+  })
+
+  it('whitespace-only reasoning is treated as textless, not an expandable blank', () => {
+    const item: ReasoningItem = { id: 'r', kind: 'reasoning', text: '\n \n', redacted: false, t: 1, o: 1, attempt: 1 }
+    const view = render(<ReasoningCard item={item} expanded={false} onExpanded={() => {}} />)
+    expect(screen.getByText('no reasoning text recorded')).toBeTruthy()
     expect(view.container.querySelector('button')).toBeNull()
   })
 

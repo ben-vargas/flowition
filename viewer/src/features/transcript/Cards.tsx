@@ -115,17 +115,20 @@ export function ReasoningCard({ item, expanded, onExpanded }: { item: ReasoningI
   const lines = lineCount(item.text)
   const preview = item.text.replaceAll('\n', ' ').trim()
   if (!preview) {
-    // Claude Code ≥2.1 headless redacts thinking to signature-only blocks; the engine
-    // now records them as {kind:'reasoning', text:'', redacted:true}, and old journals
-    // already hold plain empty-text records. Both mean the same thing: the model DID
-    // reason here — the row stays for the honest record (and it still drives the
-    // Thinking… indicator) — but there is nothing to expand, so no disclosure.
+    // The model DID reason here — the row stays for the honest record (and it still
+    // drives the Thinking… indicator) — but there is nothing to expand, so no
+    // disclosure. The wording tracks what the transcript actually attests: an
+    // engine-marked {redacted:true} record is an observed CLI redaction (Claude Code
+    // ≥2.1 headless withholds thinking as signature-only blocks); an unmarked empty
+    // record (pre-marker journals) has no recorded cause, so no cause is claimed.
     return (
       <section className="reason redacted">
         <div className="reason-h">
           <Icon name="reasoning" size={14} className="dim" />
           <span className="lbl">reasoning</span>
-          <span className="prev trunc">text withheld by the CLI</span>
+          <span className="prev trunc">
+            {item.redacted ? 'text withheld by the CLI' : 'no reasoning text recorded'}
+          </span>
         </div>
       </section>
     )
