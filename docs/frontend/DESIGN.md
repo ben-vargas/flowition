@@ -1347,6 +1347,62 @@ events are common — G10).
    selector. **Agents are not scoped** — they are keyed by index and legitimately
    continue across attempts. **Questions are not scoped** — `qid` is deterministic
    (src/engine.js:1108–1110) and re-asks upsert (step 4).
+
+   **AMENDED for the attempt-scoped Timeline (2026-08-18): agents stay unscoped, but a
+   closing scope archives them.** "Agents are not scoped" remains the ruling for identity
+   and lifetime totals — index 3 in attempt 2 is the same agent. But the round-11
+   amendment below expires an agent's CLOCK with the execution it dates, so once the next
+   attempt's events land, the closed attempt's timeline is unrecoverable from the live
+   agents. Therefore, when a `started`/`resumed` run event closes a scope, the fold
+   snapshots every agent's per-attempt view into the closing scope as
+   `AttemptScope.agents` — public fields only, and an agent still `queued`/`running` at
+   the boundary is archived with `displayState: 'orphaned'` (the closing attempt stranded
+   it: an event-stream fact, decidable inside the pure fold, unlike the live step-8
+   post-pass). The archive is what lets the Timeline draw an EARLIER attempt's real
+   execution bars on that attempt's own `[start, end)` window instead of the current
+   attempt's replay ticks. The current scope never carries the field — the top-level
+   `agents` ARE the current attempt — and the §6.4 J join never touches an archive; its
+   two-home fields (`durationMs`, `usage`, …) are archived BLANK (`ARCHIVED_AGENT_BLANKS`
+   in the fold), because a server fold holds the event stream's answer for them while a
+   seeded client fold holds the stripped blanks, and the blank is the only value on which
+   a scope closed client-side and the same scope closed by a server re-fold can be
+   byte-identical. Because the fold is deterministic over the events log, a server re-fold
+   of a run recorded BEFORE this amendment reconstructs the archives for its earlier
+   attempts exactly as a live fold would have recorded them — replay of recorded facts,
+   not fabrication, and it happens naturally the first time a cold `SnapshotStore`
+   re-reads such a run's `events.jsonl`. The archive is genuinely absent only where no
+   fold with this amendment ever saw the events — e.g. a client seeded from an old
+   server's snapshot JSON — and there the Timeline renders an explicit "this run recorded
+   no per-attempt agent timing for attempt N" state (§6.5 degradation), never a guess.
+
+   **AMENDED further (2026-08-18, round 3) — participation is byte-order truth.** The
+   resume boundary is a byte position in the events file, not a millisecond: a closing
+   attempt's terminal or cached event can share the `resumed` event's `t`, and the next
+   attempt's first agent events can land in that same millisecond too, so no timestamp
+   comparison can decide which side of the boundary an event fell on. The fold therefore
+   records the fact explicitly. Every agent carries `inAttempt` — set by ANY event for
+   its index (annotations included), reset for all agents when a `started`/`resumed` run
+   event opens a new scope — and the archive freezes it, so `inAttempt: false` on an
+   archived record marks a lane carried over from an earlier attempt. The Timeline's
+   pre-window refusal reads this flag first and keeps the strict
+   every-timestamp-predates-the-window inference only as the fallback for records that
+   predate the field (an old server's snapshot JSON); a server re-fold of any events file
+   reconstructs the flag exactly, per the determinism ruling above.
+
+   **AMENDED further (2026-08-18, PR review) — the capability verdict is
+   per attempt.** `run.engine` is a merge every later `resumed` overwrites, so after a
+   mid-lineage engine upgrade the run-level `caps` describe the newest attempt only;
+   rendered under an earlier attempt they would claim queue waits and progress ticks that
+   attempt's engine could not emit, and suppress the "recorded by an older engine" notice
+   whose own contract says the verdict comes from the engine version, never from field
+   presence. Each scope therefore records its OWN opening `started`/`resumed` event's
+   engine as `AttemptScope.engine` — `null` where the event wrote no version (an older
+   engine: caps honestly unsupported) — and an archived attempt's Timeline derives its
+   caps from that field via `deriveCaps({ engine })`, not from the run's. The key is
+   absent only on archives built before the field existed, where the run-level caps are
+   the only verdict available and the consumer falls back to them — the same
+   absence-is-meaningful rule `agents` and `inAttempt` follow, repaired by any server
+   re-fold of the events file.
 2. **phase** events: append `{phaseIndex: ev.phaseIndex ?? scope-local ordinal, title}`
    to the current attempt scope; identity is `phaseIndex`, not title (titles repeat
    legally — Sol-10).
@@ -1391,6 +1447,16 @@ events are common — G10).
      `t`: the mark lands where the replay happened. It is not a duration boundary —
      `durationMs` stays cleared, no bar is drawn for a cache hit, and its figure remains the
      journal's replayed lifetime.
+
+     **AMENDED for the attempt-scoped Timeline (2026-08-18) — archive before clear.** The
+     clear above is exactly what makes a closed attempt's timeline unrecoverable from the
+     live agents, so the step-1a amendment's archive is taken at the `started`/`resumed`
+     boundary, into the CLOSING scope, with the old attempt's clocks still intact. The
+     ordering is structural rather than careful: the fold runs in byte order (G10), and the
+     run event that opens the new scope precedes every one of the new attempt's agent
+     events in the file, so no clear can have run when the archive is copied. The clear
+     itself then proceeds exactly as specified above — nothing about the live agents'
+     behaviour changes.
 4. **question**: upsert `{qid, question, askedAt}` (a re-ask after resume updates
    `askedAt`, never duplicates — qids are unique per run, src/engine.js:1113).
    **answer**: mark answered; take `value` when present (E7), set `replayed` flag when
@@ -2106,7 +2172,7 @@ home — using the real writers' formats.
 | `test/retention.test.js` | E13: refuse-live (against a real running mock run), **resume-vs-delete race (delete loses)**, symlink refusal, artifact-less refusal, containment, traversal, trash+purge |
 | `test/viewer-tail.test.js` | tail.js: torn tail, multibyte across chunk boundary, shrink/rotate reset, missing file, huge line cap, **bounded 1 MiB chunk reads (§5.6.6)** |
 | `test/viewer-cursor.test.js` | cursor round-trip, lenient parse, unknown keys |
-| `test/viewer-fold.test.js` | §6.4 normative cases: G11 clearing, steered-as-annotation, resumed-run latch clearing, **attempt scopes (resume-replayed phases/logs/mail don't duplicate; re-asked question upserts — M5)**, **openQuestions zeroed + abandoned on terminal runs (M6)**, **caps from engine version: zero-agent new run reports supported, no older-engine copy (M2)**, terminal-without-started stub attempt (N14), unknown states/types, incremental == batch equivalence |
+| `test/viewer-fold.test.js` | §6.4 normative cases: G11 clearing, steered-as-annotation, resumed-run latch clearing, **attempt scopes (resume-replayed phases/logs/mail don't duplicate; re-asked question upserts — M5)**, **attempt agent archiving on resume (archive-before-clear; wire + seed parity — attempt-scoped Timeline)**, **openQuestions zeroed + abandoned on terminal runs (M6)**, **caps from engine version: zero-agent new run reports supported, no older-engine copy (M2)**, terminal-without-started stub attempt (N14), unknown states/types, incremental == batch equivalence |
 | `test/viewer-summaries.test.js` | cache hit/miss, settled/quiescent/live tiers, **run.lock invalidates a settled verdict (attached-resume regression — M1/Sol-5)**, end-first meta:null journals (B3), (dev,ino) recreation invalidation, vanished-dir pruning, pagination cursors incl. stable createdAt (M16), unfiltered listing (custom run-ids + bare dirs appear) |
 | `test/viewer-http.test.js` | security matrix: Host×Origin×token×control-token×method×content-type (each failing dimension → exact code); static traversal + symlink escape; CSP headers present; **dist has zero inline script/style (B1)**; 405/404 envelopes; read-only default 403s; cancel body validation (N5) |
 | `test/viewer-reuse.test.js` | §4.2.1: challenge proof round-trip; **spoofed-healthz fixture — a fake listener returning the app+homeHash shape must not be reused and must never see the token (Sol-2)**; rendezvous file lifecycle; `--open` bootstrap file is 0600 and argv is token-free |

@@ -26,6 +26,7 @@
  */
 
 export {
+  ARCHIVED_AGENT_BLANKS,
   CAP_VERSIONS,
   FIRST_VIEWER_EVENT_VERSION,
   TOOL_IDS_VERSION,
@@ -39,7 +40,7 @@ export {
   terminalOrStale,
 } from '../../../src/viewer/fold.js'
 
-import { createFoldState, fold } from '../../../src/viewer/fold.js'
+import { ARCHIVED_AGENT_BLANKS, createFoldState, fold } from '../../../src/viewer/fold.js'
 
 import type {
   AgentView,
@@ -119,7 +120,10 @@ const clone = <T,>(v: T): T => (v == null ? v : JSON.parse(JSON.stringify(v)) as
  * The `AgentView` fields `applyJournalJoin` owns — §6.4 J's whole output, and therefore
  * everything a `sys/reset` on the journal stream has to be able to take back. Exported so
  * `journalJoin.ts`'s `JournalFacts` and this list cannot drift apart unnoticed (a test
- * pins the two against each other).
+ * pins the two against each other). The blanks themselves live with the shared fold
+ * (`ARCHIVED_AGENT_BLANKS`), because the archive rule depends on them: an attempt-scope
+ * archive keeps exactly these fields blank on BOTH folds, which is what makes a scope
+ * closed client-side identical to one closed by a server re-fold (pinned by test too).
  */
 export const JOURNAL_DERIVED_FIELDS = Object.freeze([
   'attempts', 'usage', 'attemptUsage', 'durationMs', 'resultPreview',
@@ -183,19 +187,6 @@ export function mailSignature(mail: {
   if (mail.mailId != null) return `id:${mail.mailId}`
   return `sig:${mail.at ?? 0}|${mail.dir ?? ''}|${mail.agent ?? ''}|${mail.message ?? ''}`
 }
-
-const BLANK_JOURNAL: Record<string, unknown> = Object.freeze({
-  attempts: 0,
-  usage: null,
-  attemptUsage: null,
-  durationMs: null,
-  resultPreview: null,
-  resultBytes: null,
-  resultTruncated: false,
-  sessionId: null,
-  liveTokens: null,
-  cumTokens: null,
-})
 
 /**
  * Take the journal's contribution back out of one seeded `MailView`.
@@ -297,6 +288,15 @@ export function seedFoldState(detail: RunDetail): FoldState {
       phases: clone(s.phases ?? []),
       logs: clone(s.logs ?? []),
       mail: clone(s.mail ?? []).map(stripMail),
+      // Archived per-attempt agents are event-derived facts frozen at the attempt
+      // boundary — the §6.4 J join never wrote to them, so unlike the live agents below
+      // there is nothing to strip, and unlike the current scope there is nothing the SSE
+      // stream will ever fold onto them. Absence is meaningful (pre-archival snapshot)
+      // and is preserved rather than backfilled.
+      ...(s.agents ? { agents: clone(s.agents) } : {}),
+      // Same absence-is-meaningful rule for the scope's opening-event engine: carried
+      // verbatim (null included — "this attempt's engine wrote no version"), never invented.
+      ...(s.engine !== undefined ? { engine: s.engine } : {}),
     }))
     : [{
       phases: clone(detail.phases ?? []),
@@ -338,7 +338,9 @@ export function seedFoldState(detail: RunDetail): FoldState {
     //
     // `steers[].origin` is the same rule reached through `stripSteers` above rather than
     // through this list, because it is a field on an ARRAY member, not on the agent.
-    for (const field of JOURNAL_DERIVED_FIELDS) seeded[field] = BLANK_JOURNAL[field]
+    for (const field of JOURNAL_DERIVED_FIELDS) {
+      seeded[field] = (ARCHIVED_AGENT_BLANKS as Record<string, unknown>)[field]
+    }
     byIndex[agent.index] = seeded
   }
   state._agentByIndex = byIndex

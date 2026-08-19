@@ -71,6 +71,8 @@ const foldDetail = (events: Record<string, unknown>[], state: RunState = 'runnin
     attemptSpans: m.attemptSpans,
     attemptScopes: m.attemptScopes.map((s) => ({
       phases: s.phases, logs: s.logs, logTotal: s.logs.length, mail: s.mail, mailTotal: s.mail.length,
+      ...(s.agents ? { agents: s.agents } : {}),
+      ...(s.engine !== undefined ? { engine: s.engine } : {}),
     })),
     resumeCount: m.resumeCount,
     caps: m.caps,
@@ -219,5 +221,193 @@ describe('the Agents table renders the absence rather than the previous attempt'
     expect(wait.textContent!.trim()).toBe('')
     expect(wait.querySelector('.absent')!.getAttribute('title'))
       .toBe('no queue event was recorded for this attempt')
+  })
+})
+
+/**
+ * FOLD → COCKPIT for the attempt SELECTOR (§6.4 step 1a, amended: attempt-scoped Timeline).
+ *
+ * The dishonest surface this closes: the lineage strip said "showing attempt 1" while the
+ * Timeline still drew attempt 2 — every replayed lane a `replay` tick at the replay instant
+ * — because the Gantt was never handed the selection. The fold now archives each closing
+ * scope's agents at the resume boundary (before the round-11 clear), and these cases walk
+ * the whole path: events → shared fold → snapshot shape → cockpit → the lane on screen.
+ */
+describe('the Timeline on an earlier attempt (§6.4 step 1a, amended)', () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(NOW)
+    window.location.hash = '#/'
+    resetRouteForTests()
+  })
+  afterEach(() => {
+    cleanup()
+    vi.useRealTimers()
+  })
+
+  const REPLAYED = [
+    ...ATTEMPT_ONE,
+    { t: T0 + 3_599_000, type: 'agent', index: 0, key: 'k0', adapter: 'claude', state: 'cached' },
+  ]
+
+  it('renders attempt 1’s real execution bar — no replay badge — and returns honestly', async () => {
+    const detail = foldDetail(REPLAYED)
+    render(
+      <>
+        <IconSprite />
+        <Cockpit runId={detail.runId} storeApi={fixedApi(detail)} />
+      </>,
+    )
+    await screen.findByRole('tablist')
+
+    // The CURRENT attempt is unchanged from today: the lane is a replay tick.
+    expect(document.querySelector('.badge.replay')).not.toBeNull()
+    expect(document.querySelector('.lane-track .exec:not(.c)')).toBeNull()
+
+    // Select attempt 1 through the lineage strip.
+    fireEvent.click(screen.getAllByRole('radio')[0]!)
+    expect(screen.getByText(/showing attempt 1/)).toBeTruthy()
+
+    // The Timeline now shows attempt 1 as it stood when the attempt ended: a real bar on
+    // the attempt's own window, no replay badge — the agent EXECUTED in that attempt.
+    expect(screen.getByText(/attempt 1 — agents as they stood when this attempt ended/)).toBeTruthy()
+    expect(document.querySelector('.badge.replay')).toBeNull()
+    const exec = document.querySelector<HTMLElement>('.lane-track .exec')!
+    expect(exec).not.toBeNull()
+    // …and a closed attempt has no "now", whatever the run is doing at the moment.
+    expect(document.querySelector('.now-line')).toBeNull()
+
+    // Back to current restores the live view exactly.
+    fireEvent.click(screen.getByRole('button', { name: 'back to current' }))
+    expect(document.querySelector('.badge.replay')).not.toBeNull()
+  })
+
+  it('clamps the axis to the attempt’s own window, not the whole lineage', async () => {
+    const detail = foldDetail(REPLAYED)
+    render(
+      <>
+        <IconSprite />
+        <Cockpit runId={detail.runId} storeApi={fixedApi(detail)} />
+      </>,
+    )
+    await screen.findByRole('tablist')
+    fireEvent.click(screen.getAllByRole('radio')[0]!)
+    // Attempt 1 ran T0 → T0+3_100 (its terminal event), so on the attempt's own axis the
+    // bar starts at the window's left edge (`left` ≈ 0) and spans ~96.8% of the 3_100 ms
+    // window (queued at T0, done at T0+3_000). The width is what catches a missing clamp:
+    // against the whole ~3.6e6 ms lineage span the same bar would be a <0.1% sliver.
+    const bar = document.querySelector<HTMLElement>('.lane-track .bar')!
+    expect(parseFloat(bar.style.left)).toBeCloseTo((0 / 3_100) * 100, 1)
+    expect(parseFloat(bar.style.width)).toBeCloseTo((3_000 / 3_100) * 100, 1)
+  })
+
+  it('derives an earlier attempt’s capability verdict from its own engine, not the resume’s', async () => {
+    // Attempt 1 was recorded by an engine that wrote no version on its run event
+    // (pre-E4/E6 — no queue events, no progress ticks); the resume runs an upgraded
+    // engine, whose version overwrites `run.engine` and flips the RUN-level caps to
+    // supported. The archived attempt must render under its OWN verdict: the
+    // older-engine notice, not a claim of queue data its engine could not emit.
+    const UPGRADED: Record<string, unknown>[] = [
+      { t: T0, type: 'run', state: 'started', concurrency: 2 },
+      { t: T0, type: 'agent', index: 0, key: 'k0', label: 'retried', adapter: 'claude', state: 'running' },
+      { t: T0 + 3_000, type: 'agent', index: 0, state: 'done', durationMs: 3_000 },
+      { t: T0 + 3_100, type: 'run', state: 'completed' },
+      { t: T0 + 3_500_000, type: 'run', state: 'resumed', engine: '0.2.0' },
+      { t: T0 + 3_599_000, type: 'agent', index: 0, key: 'k0', adapter: 'claude', state: 'cached' },
+    ]
+    const detail = foldDetail(UPGRADED)
+    expect(detail.caps?.queueEvents).toBe('supported')
+    expect(detail.attemptScopes![0]!.engine).toBeNull()
+    render(
+      <>
+        <IconSprite />
+        <Cockpit runId={detail.runId} storeApi={fixedApi(detail)} />
+      </>,
+    )
+    await screen.findByRole('tablist')
+
+    // The current attempt renders under the run-level verdict — no notice.
+    expect(screen.queryByText(/Recorded by an older engine/)).toBeNull()
+
+    // Attempt 1 renders under its own: the notice is back for the attempt whose engine
+    // could not record queue waits, exactly as if the run had never been upgraded.
+    fireEvent.click(screen.getAllByRole('radio')[0]!)
+    expect(screen.getByText(/Recorded by an older engine/)).toBeTruthy()
+
+    // An archive from before the field existed cannot say — only there does the
+    // run-level verdict stand in (today's behavior, the sole verdict available).
+    cleanup()
+    const preField = foldDetail(UPGRADED)
+    delete (preField.attemptScopes![0] as Record<string, unknown>)['engine']
+    render(
+      <>
+        <IconSprite />
+        <Cockpit runId={preField.runId} storeApi={fixedApi(preField)} />
+      </>,
+    )
+    await screen.findByRole('tablist')
+    fireEvent.click(screen.getAllByRole('radio')[0]!)
+    expect(screen.queryByText(/Recorded by an older engine/)).toBeNull()
+  })
+
+  it('a multi-resume lane with no events in the shown attempt leaks no other attempt’s metadata', async () => {
+    // Codex round 2: the fold archives every globally known agent into a closing scope,
+    // including agents the attempt never touched — so after several resumes, an agent
+    // cached or completed in attempt 1 could show a `replay` badge or attempt 1's runtime
+    // beside "no events in this attempt" while attempt 2 was selected. Three attempts:
+    // attempt 1 has a cross-run cache hit AND a real execution, attempt 2 opens and dies
+    // with NO agent events, attempt 3 is current. Selecting attempt 2 must render both
+    // lanes as the explicit badge and NOTHING carried over.
+    const detail = foldDetail([
+      { t: T0, type: 'run', state: 'started', engine: '0.2.0', concurrency: 2 },
+      { t: T0 + 500, type: 'agent', index: 0, key: 'k0', label: 'seeded', adapter: 'claude', state: 'cached', seededFrom: 'r_prev' },
+      { t: T0 + 1_000, type: 'agent', index: 1, key: 'k1', label: 'worker', adapter: 'claude', state: 'queued' },
+      { t: T0 + 2_000, type: 'agent', index: 1, state: 'running', waitMs: 1_000 },
+      { t: T0 + 4_000, type: 'agent', index: 1, state: 'done', durationMs: 2_000 },
+      { t: T0 + 4_100, type: 'run', state: 'completed' },
+      { t: T0 + 10_000, type: 'run', state: 'resumed' },
+      { t: T0 + 10_500, type: 'run', state: 'interrupted' },
+      { t: T0 + 20_000, type: 'run', state: 'resumed' },
+    ])
+    render(
+      <>
+        <IconSprite />
+        <Cockpit runId={detail.runId} storeApi={fixedApi(detail)} />
+      </>,
+    )
+    await screen.findByRole('tablist')
+    fireEvent.click(screen.getAllByRole('radio')[1]!)
+    expect(screen.getByText(/showing attempt 2/)).toBeTruthy()
+    expect(screen.getByText(/attempt 2 — agents as they stood when this attempt ended/)).toBeTruthy()
+
+    const tl = document.querySelector<HTMLElement>('.tl')!
+    // Both lanes are on the roster, and both say the one thing the attempt supports.
+    expect(tl.querySelectorAll('.lane')).toHaveLength(2)
+    expect(screen.getAllByText('no events in this attempt')).toHaveLength(2)
+    // The leaks: no replay badge for attempt 1's cache hit, no duration figure for
+    // attempt 1's execution, no wait chip, no geometry, no error badges.
+    expect(tl.querySelector('.badge.replay')).toBeNull()
+    expect(tl.querySelector('.dur')).toBeNull()
+    expect(tl.querySelector('.chip.q')).toBeNull()
+    expect(tl.querySelector('.lane-track .bar')).toBeNull()
+    expect(tl.querySelector('.badge.err')).toBeNull()
+  })
+
+  it('degrades honestly when the snapshot archived no agents for the attempt', async () => {
+    const detail = foldDetail(REPLAYED)
+    // The pre-archival wire: the scope exists, its `agents` key does not.
+    delete (detail.attemptScopes![0] as Record<string, unknown>)['agents']
+    render(
+      <>
+        <IconSprite />
+        <Cockpit runId={detail.runId} storeApi={fixedApi(detail)} />
+      </>,
+    )
+    await screen.findByRole('tablist')
+    fireEvent.click(screen.getAllByRole('radio')[0]!)
+    // An explicit absence — never attempt 2's replay tick under attempt 1's label.
+    expect(screen.getByText(/recorded no per-attempt agent timing for attempt 1/)).toBeTruthy()
+    expect(document.querySelector('.lane-track')).toBeNull()
+    expect(document.querySelector('.badge.replay')).toBeNull()
   })
 })

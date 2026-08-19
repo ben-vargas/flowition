@@ -18,7 +18,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import type { ReactNode } from 'react'
 import { api, getToken, subscribeToken } from '../../api/client.js'
-import type { LogView, RunDetail } from '../../api/types.js'
+import type { LogView, RunDetail, RunState } from '../../api/types.js'
+import { deriveCaps } from '../../fold/index.js'
 import {
   createRunStore,
   type RunSnapshot,
@@ -36,11 +37,11 @@ import { AgentsTab, type Grouping } from './AgentsTab.js'
 import { type RunHonesty, RunHonestyContext, deriveHonesty, isRunLive } from './honesty.js'
 import { InboxRail, inboxDefaultOpen } from './InboxRail.js'
 import { LastLogLine, LogLane } from './LogLane.js'
-import { RunHeader, canResumeState } from './RunHeader.js'
+import { RunHeader, archivedAttempt, canResumeState } from './RunHeader.js'
 import { Structure } from './Structure.js'
 import { CockpitTabs, TABS as TAB_ORDER } from './Tabs.js'
 import type { CockpitTab } from './Tabs.js'
-import { Timeline } from './Timeline.js'
+import { Timeline, type TimelineAttempt } from './Timeline.js'
 import { type SortDir, type SortKey } from './agents.js'
 import { type Zoom, stepZoom } from './gantt.js'
 import { stepCursor, visibleAgentIndices } from './visible.js'
@@ -159,6 +160,41 @@ export function Cockpit(props: CockpitProps) {
         mail: scopes[shownScope]!.mail,
         mailTotal: scopes[shownScope]!.mailTotal,
       }
+
+  // …and the Timeline is the fourth surface the selector projects into (§6.4 step 1a,
+  // amended: attempt-scoped Timeline). An earlier attempt hands the Gantt that scope's
+  // ARCHIVED agents — snapshotted by the fold at the resume boundary, before the round-11
+  // clear wiped their clocks — plus the attempt's own `[start, end)` window from the
+  // lineage. `agents: null` is a snapshot from before archiving existed, and the Timeline
+  // renders that as an explicit absence rather than the current attempt's bars under an
+  // earlier attempt's label — which is exactly what it did before this wiring.
+  const attempt: TimelineAttempt | null = detail != null && shownScope !== currentScope
+    ? (() => {
+      const located = archivedAttempt(
+        detail.attemptSpans ?? [], shownScope, now, detail.createdAt ?? null, honesty,
+      )
+      // The capability verdict is per attempt, not per run: `run.engine` is overwritten
+      // by every resume, so after an upgrade `detail.caps` describes the newest attempt
+      // only — rendered under an earlier one it would claim queue waits and progress
+      // ticks that attempt's engine could not emit, and suppress the older-engine notice
+      // that says so. The archived scope carries its own opening event's engine; `null`
+      // there is a recorded fact (no version written → caps honestly unsupported), and
+      // only an absent key — an archive from before the field existed — falls back to
+      // the run-level caps, the sole verdict available there.
+      const scopeEngine = scopes[shownScope]?.engine
+      return {
+        ordinal: located?.ordinal ?? shownScope + 1,
+        agents: scopes[shownScope]?.agents ?? null,
+        caps: scopeEngine !== undefined ? deriveCaps({ engine: scopeEngine }) : null,
+        window: located && located.endedAt != null
+          ? { start: located.startedAt, end: located.endedAt }
+          : null,
+        // An archived attempt's fate is always a dead state: its terminal event, or
+        // `stale` where the next attempt's start is all that closed it.
+        state: (located?.state ?? 'stale') as RunState,
+      }
+    })()
+    : null
 
   // A different run is a different set of agents and a different lineage, so the agent
   // cursor and the selected attempt scope do not carry across one. (The run rail switches
@@ -361,10 +397,11 @@ export function Cockpit(props: CockpitProps) {
               <EmptyAgents detail={detail} live={live} />
             ) : tab === 'timeline' ? (
               <Timeline
-                detail={detail} now={now} zoom={zoom} onZoom={setZoom}
+                detail={view!} now={now} zoom={zoom} onZoom={setZoom}
                 selectedAgent={selectedAgent ?? cursor}
                 onOpenAgent={openAgent}
                 onCursor={setCursor}
+                attempt={attempt}
               />
             ) : tab === 'structure' ? (
               <Structure detail={view!} now={now} selectedAgent={selectedAgent} onOpenAgent={openAgent} />

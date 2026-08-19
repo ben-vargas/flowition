@@ -368,6 +368,12 @@ export function createRunStore(options: RunStoreOptions): RunStoreHandle {
         mailTotal: totalFor(index, 'mail', scope.mail.length),
         logs: scope.logs.slice(-TAIL_RECORDS),
         logTotal: totalFor(index, 'log', scope.logs.length),
+        // Archived per-attempt agents ride through unchanged: seeded from the snapshot or
+        // written by the fold when an SSE `resumed` closes a scope. Absence stays absent.
+        ...(scope.agents ? { agents: scope.agents } : {}),
+        // The scope's opening-event engine rides the same rule — `null` is a recorded
+        // verdict (older engine), absence a pre-field archive.
+        ...(scope.engine !== undefined ? { engine: scope.engine } : {}),
       })),
       offsets: {
         events: typeof cursor.e === 'number' ? cursor.e : base.offsets?.events ?? 0,

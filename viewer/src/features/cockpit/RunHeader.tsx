@@ -877,3 +877,37 @@ export function attemptSegments(
   }
   return out
 }
+
+/**
+ * One archived attempt scope, located in the lineage (§6.4 step 1a, amended: attempt-scoped
+ * Timeline).
+ *
+ * Scopes are numbered over the attempts that actually OPENED one — a stub attempt (N14)
+ * never did — which is the same rule `Lineage` numbers its radios by, so "showing attempt N"
+ * and the Timeline's own caption cannot drift apart. `ordinal` is the 1-based attempt number
+ * as the strip counts it (stubs included).
+ *
+ * `endedAt` is the attempt's own right edge: the terminal event that closed it, or the next
+ * attempt's start where it wrote none (`closedByResume` — the last instant it can be shown to
+ * have been alive). It is `null` only for a trailing open attempt, which is the CURRENT scope
+ * and not this function's subject; callers treat that as "no window to clamp to".
+ */
+export function archivedAttempt(
+  spans: readonly AttemptSpan[],
+  scope: number,
+  now: number,
+  createdAt: number | null,
+  honesty: RunLiveness | null = null,
+): { ordinal: number; startedAt: number; endedAt: number | null; state: string } | null {
+  const segments = attemptSegments(spans, now, createdAt, honesty)
+  let counter = 0
+  for (let i = 0; i < segments.length; i++) {
+    const segment = segments[i]!
+    if (segment.stub) continue
+    if (counter === scope) {
+      return { ordinal: i + 1, startedAt: segment.startedAt, endedAt: segment.endedAt, state: segment.state }
+    }
+    counter++
+  }
+  return null
+}

@@ -5,6 +5,18 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.0] — 2026-08-18
+
+### Added
+
+- Attempt-scoped Timeline in the viewer cockpit. The fold now archives each agent's per-attempt view into the closing attempt scope when a resume opens a new one (`AttemptScope.agents`, archived before the round-11 clock clear), and selecting an earlier attempt in the lineage strip renders that attempt's real execution bars on its own `[start, end)` window — no `replay` badges for agents that actually executed there, replay ticks kept for agents that were cache hits in that attempt, and no now-line on a closed attempt. An agent with no events in the shown attempt renders an explicit "no events in this attempt" badge and none of the metadata its carried-over clock would support. Archives keep the journal-joined fields blank so server- and client-built archives are identical; a server re-fold of a run recorded before this change reconstructs its archives deterministically from the events log, and the explicit "no per-attempt agent timing recorded" state covers clients seeded from an old server's snapshot.
+
+### Fixed
+
+- Viewer Timeline no longer ignores the attempt selector: with "showing attempt 1" selected after a resume, the Gantt previously still rendered attempt 2's state (every replayed lane a collapsed `replay` tick at the replay instant).
+- An archived attempt's Timeline now derives its capability verdict from that attempt's own opening-event engine (`AttemptScope.engine`) instead of inheriting the run-level caps, which every resume overwrites. Previously, resuming a run under an upgraded engine made earlier attempts claim queue-wait and progress support their engine could not emit and suppressed the "recorded by an older engine" notice; archives that predate the field keep today's run-level fallback.
+- A previous attempt's lane can no longer leak into an archived attempt's Timeline through a same-millisecond resume boundary. The fold now records byte-order participation on every agent (`AgentView.inAttempt`, frozen into each archive), and the Gantt's pre-window refusal reads that flag ahead of the timestamp inference — which a terminal or cached event sharing the `resumed` event's millisecond used to defeat. The strict timestamp fallback remains for snapshots and archives that predate the field.
+
 ## [0.6.0] — 2026-08-13
 
 ### Added

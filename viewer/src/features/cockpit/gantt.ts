@@ -122,6 +122,18 @@ export interface GanttLane {
   quiet: QuietTag | null
   errorCode: string | null
   error: string | null
+  /**
+   * Every timestamp this agent carries predates `options.window` — the lane belongs to an
+   * archived attempt in which this index never re-entered (its clock still dates an earlier
+   * attempt's execution). Drawing that bar inside this window would clamp it to the left
+   * edge and date one attempt's geometry with another's events, so the lane has NO geometry
+   * and NO attempt-specific metadata either — `duration` reads `absent`, `waitMs`, `quiet`,
+   * `errorCode` and `error` are `null` — because a figure or badge carried over from a
+   * different attempt is the same leak in metadata form. A badge says why instead (the
+   * same refusal the truncated edge makes, in attempt form). Always `false` when no window
+   * is set.
+   */
+  preWindow: boolean
 }
 
 export interface RulerTick { at: number; pct: number; label: string }
@@ -378,7 +390,12 @@ export interface GanttOptions {
    * itself — that rule has exactly one home (round 6).
    */
   honesty?: RunHonesty
-  /** Test seam and future zoom-to-attempt: clamp the window to an explicit range. */
+  /**
+   * Clamp the window to an explicit range — the attempt-scoped Timeline's seam (and still a
+   * test seam). When an EARLIER attempt is shown, the Cockpit passes that attempt's own
+   * `[start, end)` — its opening `started`/`resumed` to the instant the next attempt began
+   * (or its terminal event) — so the ruler measures the attempt, not the whole lineage.
+   */
   window?: { start: number; end: number }
 }
 
@@ -427,20 +444,40 @@ export function ganttModel(detail: RunDetail, options: GanttOptions): GanttModel
     const orphaned = honesty.orphaned(agent)
     const moving = honesty.moving(agent)
     const startedAt = finite(agent.startedAt) ? agent.startedAt : null
+    // The archived-attempt refusal (`preWindow` on the lane): nothing this agent did falls
+    // inside the attempt on screen — its clock still dates an earlier attempt's execution,
+    // and clamping that geometry to the left edge would date this attempt's chart with
+    // another's events. The fold's `inAttempt` flag is the authority (codex round 3): the
+    // resume boundary is a byte position in the events file, not a millisecond, and a
+    // closing attempt's terminal or cached event can share the `resumed` event's `t` — a
+    // tie the strict `< start` comparison reads as in-window. Only a record that predates
+    // the flag falls back to the every-timestamp-predates-the-window inference.
+    const windowStart = options.window?.start
+    const ownTimes = windowStart != null && agent.inAttempt == null
+      ? agentTimes(agent, honesty, now)
+      : []
+    const preWindow = windowStart != null && (agent.inAttempt != null
+      ? !agent.inAttempt
+      : ownTimes.length > 0 && Math.max(...ownTimes) < windowStart)
     // The wait's RECORDED extent, with the provenance of ITS right edge attached — the same
     // separation the execution bar makes, for the same reason (round 12, B1).
-    const queue = cached ? NO_QUEUE : queueExtent(agent, honesty, now)
+    const queue = cached || preWindow ? NO_QUEUE : queueExtent(agent, honesty, now)
     // Queue wait is DRAWN only where E4 recorded it. Without the capability there is no
     // hatch, and the tab header says why (§6.5) instead of drawing an empty one.
     const drawn = hasQueueData ? queue : NO_QUEUE
     // The bar's RECORDED EXTENT, with the provenance of its right edge attached — the two
     // are not the same fact, and only `settled`/`open` support a duration (round 7, B1).
-    const extent = execExtent(agent, honesty, now)
+    const extent: ExecExtent = preWindow
+      ? { end: null, kind: 'unstarted' }
+      : execExtent(agent, honesty, now)
     const endedAt = cached ? null : extent.end
     // The FIGURE is a separate question from the extent and is answered in exactly one
     // place for the whole cockpit (round 8, B1). A cache hit is not special-cased here
-    // either: `honesty.duration` already knows a replay never took a slot.
-    const duration = honesty.duration(agent)
+    // either: `honesty.duration` already knows a replay never took a slot. A pre-window
+    // lane reads `absent`: whatever figure the archive carries dates an EARLIER attempt's
+    // execution, and printing it beside "no events in this attempt" is the same leak the
+    // refused geometry closes, in metadata form.
+    const duration: AgentDuration = preWindow ? { kind: 'absent' } : honesty.duration(agent)
 
     // The mark is drawn wherever there is a queue event; the INTERVAL only where something
     // recorded closes it. `unrecorded` therefore keeps `waitLeft` and drops `waitWidth`, and
@@ -463,6 +500,7 @@ export function ganttModel(detail: RunDetail, options: GanttOptions): GanttModel
     }
 
     const notch = hasProgressData && finite(agent.lastOutputAt) && startedAt != null && !cached
+      && !preWindow
       ? pct(agent.lastOutputAt)
       : null
 
@@ -491,7 +529,7 @@ export function ganttModel(detail: RunDetail, options: GanttOptions): GanttModel
       // run — and it ended at the window's own `start`, which is the round-12 leak in its
       // second form: a replay with no timestamp of its own was marked at whichever OTHER
       // agent opened the run. There is no such mark now; the lane says the time is unrecorded.
-      tick: cached ? cachedTick(agent, pct) : null,
+      tick: cached && !preWindow ? cachedTick(agent, pct) : null,
       notch,
       // A wait has a LENGTH only where something recorded its end. `agent.waitMs` is E4's own
       // figure and wins where it exists; the derived form is this agent's own two stamps.
@@ -504,11 +542,17 @@ export function ganttModel(detail: RunDetail, options: GanttOptions): GanttModel
       // The figure beside the bar describes THE BAR — and a bar whose right edge is a
       // truncation boundary rather than a recorded end has no figure at all (round 7, B1).
       durationMs: durationValue(duration),
-      open: moving,
+      open: !preWindow && moving,
       truncated: !cached && extent.kind === 'truncated',
-      quiet: quietTag(agent, { live: moving, now }),
-      errorCode: agent.errorCode ?? null,
-      error: agent.error ?? null,
+      // The rest of the pre-window suppression: a quiet tag, an error and an error code
+      // are all claims ABOUT an execution, and every execution this agent's archive
+      // records belongs to an earlier attempt. `waitMs` is already `null` (the queue
+      // extent above is `NO_QUEUE`), and `duration` reads `absent` — the lane's one
+      // statement is the badge.
+      quiet: preWindow ? null : quietTag(agent, { live: moving, now }),
+      errorCode: preWindow ? null : agent.errorCode ?? null,
+      error: preWindow ? null : agent.error ?? null,
+      preWindow,
     }
   })
 

@@ -13,15 +13,43 @@
 
 import { useCallback } from 'react'
 import type { CSSProperties } from 'react'
-import type { RunDetail } from '../../api/types.js'
+import type { AgentView, Caps, RunDetail, RunState } from '../../api/types.js'
 import { fmtDuration } from '../../format/fmt.js'
 import { Icon } from '../../ui/Icon.js'
 import { AdapterBadge, StatusGlyph } from '../../ui/Status.js'
 import { lookUpState } from '../../ui/icons.js'
 import { DurationText } from './Duration.js'
 import { type GanttLane, type GanttModel, type Zoom, ganttModel, trackWidth } from './gantt.js'
-import { isQueuedState, useRunHonesty } from './honesty.js'
+import { deriveHonesty, isQueuedState, useRunHonesty } from './honesty.js'
 import { saturationModel } from './saturation.js'
+
+/**
+ * An EARLIER attempt, selected through the lineage strip (§6.4 step 1a, amended:
+ * attempt-scoped Timeline). `null`/absent is the current attempt — today's behaviour,
+ * unchanged.
+ *
+ * `agents` are the scope's archived snapshots — the fold copies them at the resume boundary,
+ * before the round-11 clear wipes their clocks — or `null` when the run predates archiving,
+ * which renders the explicit "no per-attempt agent timing recorded" state rather than the
+ * current attempt's bars under an earlier attempt's label. `state` is the attempt's own fate
+ * (its terminal event, or `stale` where the next attempt's start closed it), and it is what
+ * the honesty verdict for this FROZEN view derives from: an archived attempt is never live,
+ * so there is no now-line, no open bar and no quiet ladder, whatever the run is doing now.
+ */
+export interface TimelineAttempt {
+  /** 1-based attempt number, counted exactly as the lineage strip counts it. */
+  ordinal: number
+  agents: AgentView[] | null
+  /**
+   * The attempt's OWN capability verdict, derived from its scope's opening-event engine —
+   * never the run's, which every resume overwrites (`AttemptScope.engine`). `null` means
+   * the archive predates the field and the run-level caps are the only verdict there is.
+   */
+  caps: Caps | null
+  /** The attempt's own `[start, end)`, or `null` when the spans cannot locate it. */
+  window: { start: number; end: number } | null
+  state: RunState
+}
 
 export interface TimelineProps {
   detail: RunDetail
@@ -31,27 +59,86 @@ export interface TimelineProps {
   selectedAgent: number | null
   onOpenAgent: (index: number) => void
   onCursor?: (index: number) => void
+  /** The selected earlier attempt, or `null`/absent for the current one. */
+  attempt?: TimelineAttempt | null
 }
 
 export function Timeline(props: TimelineProps) {
   const { detail, now, zoom } = props
   // ONE liveness verdict for the screen (`honesty.ts`): the chart's now-line, its open bars
   // and its quiet tags are the same claim the header and the Agents table make.
-  const honesty = useRunHonesty(detail, now)
-  const model = ganttModel(detail, { now, honesty })
+  const screenHonesty = useRunHonesty(detail, now)
+  const attempt = props.attempt ?? null
+  // An archived attempt swaps in its own agents and its own verdict. The screen's verdict
+  // is about the RUN's present; this chart is about an attempt that has already ended, and
+  // deriving from the attempt's own fate (always a dead state) is what stops a live run's
+  // now-line, open bars and quiet tags from being painted onto a finished attempt.
+  const archivedDetail: RunDetail | null = attempt?.agents
+    ? {
+      ...detail,
+      agents: attempt.agents,
+      ...(attempt.window ? { startedAt: attempt.window.start, endedAt: attempt.window.end } : {}),
+      // The spread above would hand the archived attempt the CURRENT run's caps — after a
+      // mid-lineage engine upgrade that claims queue waits and progress ticks this
+      // attempt's engine could not emit, and hides the older-engine notice that says so.
+      // The attempt's own verdict (from its scope's opening-event engine) wins; only an
+      // archive that predates the field keeps the run-level caps, the sole verdict left.
+      ...(attempt.caps ? { caps: attempt.caps } : {}),
+    }
+    : null
+  const honesty = archivedDetail
+    ? deriveHonesty(archivedDetail, { now, state: attempt!.state })
+    : screenHonesty
+  const model = ganttModel(archivedDetail ?? detail, {
+    now,
+    honesty,
+    ...(attempt?.agents && attempt.window ? { window: attempt.window } : {}),
+  })
   const track = trackWidth(zoom, model.spanMs)
   const sat = saturationModel(detail.saturation, {
     start: model.start,
     end: model.end,
     concurrency: detail.concurrency,
   })
-  const showSat = model.hasQueueData && !sat.empty && sat.concurrency > 0
+  // The saturation samples span the whole lineage; on an archived attempt the strip is
+  // omitted rather than sliced — the attempt view's one subject is the archived lanes.
+  const showSat = attempt == null && model.hasQueueData && !sat.empty && sat.concurrency > 0
+
+  if (attempt != null && attempt.agents == null) {
+    return (
+      <div className="tl scroller">
+        <div className="tl-head">
+          <span className="lbl">timeline</span>
+          <span className="tl-note">attempt {attempt.ordinal}</span>
+        </div>
+        {/* The honest degradation (§6.5): old runs archived no per-attempt agent clocks,
+            and the round-11 clear means the current agents carry nothing this attempt's
+            bars could be drawn from. Absence is stated, never papered over with the
+            current attempt's geometry — that is the exact dishonesty the selector fix
+            exists to remove. */}
+        <div className="rawgrp" style={{ marginBottom: 12 }} role="status">
+          <Icon name="unknown" size={12} />
+          <span>
+            <b>This run recorded no per-attempt agent timing for attempt {attempt.ordinal}.</b>{' '}
+            The snapshot was written before attempts archived their agents&apos; clocks, and
+            the only clocks on disk are the current attempt&apos;s — drawing those bars under
+            this attempt&apos;s label would date one attempt&apos;s chart with another&apos;s
+            events. The attempt&apos;s phases, logs and mail are still shown in their tabs;
+            use <b>back to current</b> in the lineage strip for the live timeline.
+          </span>
+        </div>
+      </div>
+    )
+  }
 
   return (
     <div className="tl scroller">
       <div className="tl-head">
         <span className="lbl">timeline</span>
         <span className="tl-note">
+          {attempt != null
+            ? `attempt ${attempt.ordinal} — agents as they stood when this attempt ended · `
+            : ''}
           {model.hasQueueData
             ? 'queue wait hatched · execution solid'
             : 'execution only — this run recorded no queue events'}
@@ -236,6 +323,19 @@ function Lane(
             ) : null}
           </span>
         ) : null}
+        {/* The archived-attempt refusal (`gantt.ts` preWindow): everything this agent's
+            clock records happened before the attempt on screen began, so there is no
+            geometry to draw inside its window — and no metadata either. A `replay` badge,
+            a duration, a wait chip or an error code here would all be facts about an
+            EARLIER attempt printed under this attempt's label, which is the exact leak
+            the refused geometry closes. The badge is the lane's one statement. */}
+        {lane.preWindow ? (
+          <span className="bar-meta" style={{ left: metaLeft }}>
+            <span className="badge" title={PRE_WINDOW}>
+              no events in this attempt
+            </span>
+          </span>
+        ) : (
         <span className="bar-meta" style={{ left: metaLeft }}>
           {lane.cached ? <span className="badge replay">replay</span> : null}
           {lane.cached && lane.tick == null ? (
@@ -301,6 +401,7 @@ function Lane(
           ) : null}
           {lane.errorCode ? <span className="badge err">{lane.errorCode}</span> : null}
         </span>
+        )}
       </span>
     </button>
   )
@@ -317,6 +418,18 @@ const QUEUE_UNRECORDED =
   'this agent never started and no terminal event was written for it, so nothing on disk'
   + ' records when — or whether — its queue wait ended; the mark is the queued event alone'
   + ' and the chart draws no interval past it'
+
+/**
+ * The one sentence for a lane whose clock predates the attempt on screen. The state glyph in
+ * the lane's label is real — the agent as it stood when this attempt ended — but everything
+ * else its record supports (bar, replay badge, duration, wait, error) dates an EARLIER
+ * attempt's execution, so the lane renders this badge and nothing beside it.
+ */
+const PRE_WINDOW =
+  'this attempt recorded no events for this agent — its state and timestamps were settled in'
+  + ' an earlier attempt and merely carried over, so drawing them on this attempt’s axis'
+  + ' would date one attempt’s chart with another’s events; no bar, figure or badge from'
+  + ' that carried clock is shown'
 
 /**
  * Draw the hatched wait segment?

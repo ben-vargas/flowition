@@ -92,6 +92,79 @@ function exposeScope(state) {
   state.mail = scope.mail
 }
 
+/**
+ * The agent fields §6.4 J (the journal join) also writes, with the blank each takes in an
+ * archived snapshot. Inside a server fold they hold the EVENT stream's answer; a seeded
+ * client fold holds exactly these blanks — `seedFoldState` strips the join's output so a
+ * journal `sys/reset` has one home to clear, and no boundary event re-supplies them. An
+ * `AttemptScope.agents` archive is built by BOTH folds and joined by NEITHER, so the blank
+ * is the only value the two paths can agree on byte-for-byte. `archiveAgents` applies this
+ * map, `seedFoldState` seeds live agents from it, and the client's `JOURNAL_DERIVED_FIELDS`
+ * is pinned to these keys by test.
+ */
+export const ARCHIVED_AGENT_BLANKS = Object.freeze({
+  attempts: 0,
+  usage: null,
+  attemptUsage: null,
+  durationMs: null,
+  resultPreview: null,
+  resultBytes: null,
+  resultTruncated: false,
+  sessionId: null,
+  liveTokens: null,
+  cumTokens: null,
+})
+
+/**
+ * Snapshot every agent's per-attempt view into the scope a `resumed` event is closing
+ * (§6.4 step 1a, amended: attempt-scoped Timeline).
+ *
+ * Agents themselves stay UNSCOPED — same identity, same lifetime totals — but their clock
+ * fields expire with the execution they date (the round-11 amendment), so once the next
+ * attempt's events start clearing them the closed attempt's timeline is unrecoverable.
+ * This archive is taken AT the resume boundary, which in byte order is strictly before any
+ * of the new attempt's agent events, so it is exactly what the agents looked like when the
+ * attempt ended: archive-before-clear.
+ *
+ * The archive carries EVENT-owned facts only, and identically on both sides of the wire.
+ * The §6.4 J two-home fields (`durationMs`, `usage`, …) are archived blank
+ * (`ARCHIVED_AGENT_BLANKS`): a server fold holds the event stream's answer for them while a
+ * seeded client fold holds blanks, so keeping either would make the same scope archive
+ * differently depending on which side happened to close it — and the Timeline never needed
+ * them (an archived duration reads from the agent's own two stamps). The two
+ * projection-derived display verdicts (`toolIds`, `phaseApproximate`) are reset to the
+ * fold's defaults for the same reason: the materializer recomputes them for the live agents
+ * on every snapshot and never for an archive.
+ * An agent still `queued`/`running` at the boundary was definitionally stranded by that
+ * attempt's end, so its archived `displayState` is `orphaned` — a pure fact about the
+ * closed attempt, unlike the live post-pass, which needs the run state.
+ *
+ * The copy also freezes `inAttempt`: whether any event for the index folded inside the
+ * scope this archive closes. That is the byte-order fact the Timeline's pre-window
+ * refusal reads — the boundary is a byte position, not a millisecond, and a closing
+ * attempt's terminal or cached event can share the `resumed` event's `t`, a tie no
+ * timestamp comparison can break (codex round 3).
+ */
+function archiveAgents(state) {
+  return Object.values(state._agentByIndex)
+    .sort((a, b) => a.index - b.index)
+    .map((agent) => {
+      const copy = {
+        ...agent,
+        ...ARCHIVED_AGENT_BLANKS,
+        steers: agent.steers.map((s) => ({ ...s })),
+        toolIds: false,
+        phaseApproximate: false,
+      }
+      delete copy._firstOffset
+      delete copy._approxPhaseIndex
+      copy.displayState = agent.state === 'queued' || agent.state === 'running'
+        ? 'orphaned'
+        : agent.state
+      return copy
+    })
+}
+
 function openAttempt(state, ev) {
   const firstEmpty = state.attemptSpans.length === 0
     && state.attemptScopes.length === 1
@@ -100,9 +173,21 @@ function openAttempt(state, ev) {
     && state.attemptScopes[0].mail.length === 0
   if (firstEmpty) state._scope = 0
   else {
+    currentScope(state).agents = archiveAgents(state)
+    // The archive above froze each agent's participation verdict for the CLOSING scope;
+    // the new attempt starts with none. The reset is what makes `inAttempt` byte-order
+    // truth: events before this run record belong to the closed attempt whatever their
+    // `t` says, and only events folded after it can set the flag again.
+    for (const agent of Object.values(state._agentByIndex)) agent.inAttempt = false
     state.attemptScopes.push(blankScope())
     state._scope = state.attemptScopes.length - 1
   }
+  // The scope's capability verdict is its OWN opening event's engine, not the run's:
+  // `run.engine` is a merge that every later `resumed` overwrites, so after an upgrade the
+  // run-level caps describe the newest attempt only. `null` records that this attempt's
+  // engine wrote no version (pre-E4/E6 — caps unsupported, the honest verdict); the key is
+  // ABSENT only on archives built before it existed, where consumers fall back to run caps.
+  currentScope(state).engine = typeof ev.engine === 'string' ? ev.engine : null
   state._lastPhaseIndex = null
   state._attemptOpen = true
   state.attemptSpans.push({ state: ev.state, t: finite(ev.t) ?? 0 })
@@ -131,6 +216,15 @@ function foldRun(state, ev) {
     if (!state._attemptOpen) {
       const t = state._createdAt ?? finite(ev.t) ?? 0
       if (state.attemptSpans.length === 0) state.attemptSpans.push({ state: 'started', t })
+      // A terminal-only stub attempt (N14) never ran `openAttempt`, so without this its
+      // scope would reach an archive with `engine` ABSENT — the pre-field-archive marker —
+      // and a later resume under an upgraded engine would hand the stub the new run-level
+      // caps. The stub's verdict is its own events': the terminal record's version, or
+      // `null` where none was written. `undefined` guard, not `??=`: a recorded `null`
+      // is a verdict and must not be re-stamped by a second terminal record.
+      if (currentScope(state).engine === undefined) {
+        currentScope(state).engine = typeof ev.engine === 'string' ? ev.engine : null
+      }
     }
     merged.endedAt = finite(ev.t)
     merged.error = ev.error ?? null
@@ -201,6 +295,7 @@ function blankAgent(index) {
     steers: [],
     cached: false,
     seededFrom: null,
+    inAttempt: false,
     _firstOffset: null,
     _approxPhaseIndex: null,
   }
@@ -283,6 +378,12 @@ function foldAgent(state, ev, offset) {
     agent._firstOffset = offset
     agent._approxPhaseIndex = state._lastPhaseIndex
   }
+  // Byte-order attempt participation: ANY event for the index inside the current scope —
+  // annotations included — puts the agent in this attempt. `openAttempt` resets the flag
+  // for every agent when a `started`/`resumed` run event opens a new scope, so the value
+  // an archive freezes is the closing attempt's own verdict, decided by the file's byte
+  // order rather than by timestamps (which a boundary-sharing millisecond defeats).
+  agent.inAttempt = true
   mergeIdentity(agent, ev)
 
   if (ev.state === 'steered') {
@@ -676,6 +777,15 @@ export function materializeFold(raw, runState, caps = deriveCaps(raw?.run)) {
     })),
     logs: scope.logs.map((l) => ({ ...l })),
     mail: scope.mail.map((m) => ({ ...m })),
+    // Archived per-attempt agent snapshots exist only on CLOSED scopes; absence on an old
+    // fold state (or the current scope) is meaningful — the UI degrades honestly rather
+    // than backfilling — so the key is carried through, never invented.
+    ...(Array.isArray(scope.agents)
+      ? { agents: scope.agents.map((a) => ({ ...a, steers: (a.steers ?? []).map((s) => ({ ...s })) })) }
+      : {}),
+    // The scope's own opening-event engine (see `openAttempt`): absent only where the fold
+    // state predates the field, carried verbatim otherwise — same rule as `agents`.
+    ...(scope.engine !== undefined ? { engine: scope.engine } : {}),
   }))
   return {
     run: state.run ? { ...state.run } : null,

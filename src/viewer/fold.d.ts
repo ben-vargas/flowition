@@ -174,6 +174,19 @@ export interface AgentView {
    * while `state === 'cached'`; a later real execution of the index clears it.
    */
   seededFrom: string | null
+  /**
+   * Byte-order attempt participation: has ANY event for this index folded inside the
+   * attempt this record belongs to? On a live agent that is the CURRENT attempt — reset
+   * for every agent when a `started`/`resumed` run event opens a new scope, set again by
+   * the agent's first event after it. On an `AttemptScope.agents` archive the value is
+   * frozen at the boundary, so `false` marks a lane carried over from an earlier attempt.
+   * This is the fact the Timeline's pre-window refusal reads first: the resume boundary
+   * is a byte position, not a millisecond, and a closing attempt's terminal or cached
+   * event can share the `resumed` event's `t` — a tie timestamps cannot break. Absent
+   * (never `false`) on snapshots and archives built before the field existed; consumers
+   * fall back to the strict timestamp inference there.
+   */
+  inAttempt?: boolean
 }
 
 /**
@@ -272,6 +285,12 @@ export interface RunDetail extends Omit<RunSummary, 'agents'> {
     mailTotal: number
     logs: LogView[]
     logTotal: number
+    /** Archived per-attempt agent snapshots — see {@link AttemptScope.agents}. Absent on
+     *  the current scope, and on snapshots no archiving fold ever built (a server re-fold
+     *  of an old run's events reconstructs them; an old server's snapshot JSON cannot). */
+    agents?: AgentView[]
+    /** The attempt's own opening-event engine — see {@link AttemptScope.engine}. */
+    engine?: string | null
   }[]
   /** §6.5's debug row: events whose `type` the fold does not recognize. */
   unknownEvents?: number
@@ -296,6 +315,39 @@ export interface AttemptScope {
   phases: PhaseView[]
   logs: LogView[]
   mail: MailView[]
+  /**
+   * Per-attempt agent snapshots, archived when a `started`/`resumed` run event CLOSES this
+   * scope (§6.4 step 1a as amended for the attempt-scoped Timeline). Agents themselves stay
+   * unscoped; what expires with an attempt is their CLOCK (the round-11 amendment), and this
+   * archive is taken at the resume boundary — before any of the next attempt's events clear
+   * it — so an earlier attempt's Timeline can draw the real bars.
+   *
+   * Present only on scopes closed by a fold that archives (and never on the current scope —
+   * the top-level `agents` ARE the current attempt). The fold is deterministic over the
+   * events log, so a server re-fold of a run recorded BEFORE archiving existed reconstructs
+   * these for its earlier attempts exactly as a live fold would have — replay of recorded
+   * facts, not fabrication. The key is genuinely absent only where no archiving fold ever
+   * saw the events (e.g. a client seeded from an old server's snapshot JSON), and there the
+   * UI degrades to an explicit "no per-attempt agent timing recorded" state, never a guess.
+   * Values are event-derived facts as they stood at the boundary; the §6.4 J journal join
+   * never touches an archive, and its two-home fields are archived blank
+   * ({@link ARCHIVED_AGENT_BLANKS}) so both folds build the identical archive. An agent left
+   * `queued`/`running` at the boundary is archived with `displayState: 'orphaned'` — the
+   * closed attempt stranded it, by definition.
+   */
+  agents?: AgentView[]
+  /**
+   * The engine version from THIS scope's opening `started`/`resumed` event. Run-level
+   * `caps` derive from `run.engine`, which every later resume overwrites — so after an
+   * upgrade they describe only the newest attempt, and an archived attempt rendered under
+   * them would claim queue waits and progress ticks its own engine could not emit (and
+   * suppress the older-engine notice that says so). Consumers derive an archived attempt's
+   * caps from this field via `deriveCaps({ engine })` instead. `null` means the opening
+   * event carried no version (an older engine — caps honestly unsupported); the key is
+   * absent only on archives built before the field existed, where the run-level caps are
+   * the only verdict available and consumers fall back to them.
+   */
+  engine?: string | null
 }
 
 /**
@@ -352,6 +404,25 @@ export const FIRST_VIEWER_EVENT_VERSION: string
 export const TOOL_IDS_VERSION: string
 /** The minimum engine version each §6.2 `Cap` requires (critique M2: version, not fields). */
 export const CAP_VERSIONS: Readonly<Record<keyof Caps, string>>
+
+/**
+ * The §6.4 J two-home agent fields, with the blank each takes in an `AttemptScope.agents`
+ * archive. The client seeds live agents with the same blanks (`JOURNAL_DERIVED_FIELDS` in
+ * `viewer/src/fold/index.ts` is pinned to these keys by test), which is what keeps a scope
+ * closed client-side byte-identical to the same scope closed by a server re-fold.
+ */
+export const ARCHIVED_AGENT_BLANKS: Readonly<{
+  attempts: 0
+  usage: null
+  attemptUsage: null
+  durationMs: null
+  resultPreview: null
+  resultBytes: null
+  resultTruncated: false
+  sessionId: null
+  liveTokens: null
+  cumTokens: null
+}>
 
 export function createFoldState(options?: { createdAt?: number | null }): FoldState
 

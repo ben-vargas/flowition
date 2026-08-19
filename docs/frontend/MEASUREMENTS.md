@@ -4,7 +4,67 @@ Measured 2026-07-31 on a 16-core Apple M3 Max MacBook Pro with 64 GB RAM,
 macOS 27.0 (26A5388g), Node 24.14.0, and Google Chrome 150.0.7871.187.
 These are development-machine measurements, not portable benchmarks.
 
-Measured-source SHA-256: `6262df115f0075c07b179ad05163ac10bf86e2e4ba27df5d7aea831bd9be3706`
+Measured-source SHA-256: `a019a6f03fbb239caed8602bf7205aa8b61ba79257f9e82d633254ecb3fe45e6`
+
+Hash rebound 2026-08-18 (fourth rebind, PR review) for the per-attempt capability
+verdict: `src/viewer/fold.js` stamps each attempt scope's opening-event engine onto the
+scope — one property write inside `openAttempt` (once per `started`/`resumed` record)
+plus an `undefined` guard on the terminal-only stub path — and `src/viewer/snapshot.js`,
+`viewer/src/fold/index.ts` and `viewer/src/state/runStore.ts` carry the `engine` key
+through their existing attemptScopes maps (a conditional spread on an already-iterated
+list, same shape as the `agents` carry). `src/viewer/fold.d.ts` gained the field
+declaration and `viewer/dist` was rebuilt for the Cockpit/Timeline consumption
+(`deriveCaps` on attempt selection — a user interaction, not a hot path). No measured
+hot path changes shape or allocation profile: the P2 mix contains no resumed runs, so
+none of this rebind's changes execute in it beyond the once-per-run `openAttempt` write.
+Budgets and browser rows below are untouched and were not re-measured.
+
+Hash rebound 2026-08-18 (third rebind, review round 3) for the attempt-scoped Timeline:
+`src/viewer/fold.js` now records byte-order attempt participation on every agent — one
+boolean write (`inAttempt = true`) added to `foldAgent`'s per-event path and an O(agents)
+flag reset inside `openAttempt`, which runs once per `started`/`resumed` record — and
+`ganttModel`'s pre-window classification reads that flag instead of computing the
+`agentTimes` max wherever it is present (strictly less work per lane on flagged data; the
+timestamp fallback is unchanged for pre-field archives). `src/viewer/fold.d.ts` gained
+the field declaration, and `viewer/dist` was rebuilt for the shared-fold and gantt
+changes. No measured hot path changes shape or allocation profile; budgets and browser
+rows below are untouched and were not re-measured.
+
+Hash rebound 2026-08-18 (second rebind, review round) for the attempt-scoped Timeline:
+`src/viewer/fold.js` now blanks the §6.4 J two-home agent fields when archiving a closing
+attempt scope (`ARCHIVED_AGENT_BLANKS` — a fixed `Object.assign`-shaped spread inside the
+same once-per-resume O(agents) copy), `src/viewer/snapshot.js` and `src/viewer/fold.d.ts`
+changed comments only, and `viewer/dist` was rebuilt for the pre-window metadata
+suppression in the Timeline lane (render-path branch, no new model work). No measured hot
+path changes shape or allocation profile; budgets and browser rows below are untouched
+and were not re-measured. On the day of this rebind, P2's steady-state request 4/5
+exceeded its 120 ms budget on every run (123.3–146.7 ms; other requests 65–125 ms) — and
+did so IDENTICALLY on the unmodified committed tree (144.2 ms, verified via stash
+before/after), so this is the same machine-load spike the entry below records, on the
+same jittered quiescent-TTL expiry request: the P2 mix contains no resumed runs, and
+none of this rebind's fold changes execute outside a resume record.
+
+Hash rebound 2026-08-18 for the attempt-scoped Timeline (feat/attempt-scoped-timeline):
+`src/viewer/fold.js` archives each agent's per-attempt view into the closing attempt
+scope when a `resumed` event opens a new one — an O(agents) copy performed once per
+resume event, on a code path no perf fixture's mix exercises more than once per run —
+and `src/viewer/snapshot.js` / `viewer/src/state/runStore.ts` carry the archived
+`agents` key through their existing attemptScopes maps (a conditional spread on an
+already-iterated list). `viewer/dist` was rebuilt for the cockpit change: selecting an
+earlier attempt now hands the Timeline that scope's archived agents and its own
+`[start, end)` window (the pre-existing `GanttOptions.window` seam). The measured hot
+paths — snapshot assembly for runs without resumes, SSE folding, transcript paging —
+change neither shape nor allocation profile: the archive runs only when a resume record
+is folded, and the wire grows only for runs that carry closed scopes. Browser rows
+below were NOT re-measured for this entry and remain measurements of the previous
+bundle's identical hot paths. The perf pool ran green on this tree under the
+concurrent root suite (final verification run: 533/533). During earlier, loaded runs on
+the measuring machine, P2's steady-state request 4/5 intermittently exceeded its 120 ms
+budget (127.6–140.4 ms; other requests 77–116 ms) — and did so IDENTICALLY on the
+unmodified base tree (125.5 ms, verified via stash before/after), so the spike is
+machine load on the request the jittered quiescent-TTL expiry batch lands on (see the
+2026-08-05 entry), not this change: the P2 mix contains no resumed runs, so the archive
+code path never executes in it.
 
 Hash rebound 2026-08-13 for the Node 18 double-pane composition-test timeout:
 `viewer/src/features/transcript/Transcript.test.tsx` gained only a test-local 40-second
