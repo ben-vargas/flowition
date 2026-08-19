@@ -138,6 +138,12 @@ export const ARCHIVED_AGENT_BLANKS = Object.freeze({
  * An agent still `queued`/`running` at the boundary was definitionally stranded by that
  * attempt's end, so its archived `displayState` is `orphaned` — a pure fact about the
  * closed attempt, unlike the live post-pass, which needs the run state.
+ *
+ * The copy also freezes `inAttempt`: whether any event for the index folded inside the
+ * scope this archive closes. That is the byte-order fact the Timeline's pre-window
+ * refusal reads — the boundary is a byte position, not a millisecond, and a closing
+ * attempt's terminal or cached event can share the `resumed` event's `t`, a tie no
+ * timestamp comparison can break (codex round 3).
  */
 function archiveAgents(state) {
   return Object.values(state._agentByIndex)
@@ -168,6 +174,11 @@ function openAttempt(state, ev) {
   if (firstEmpty) state._scope = 0
   else {
     currentScope(state).agents = archiveAgents(state)
+    // The archive above froze each agent's participation verdict for the CLOSING scope;
+    // the new attempt starts with none. The reset is what makes `inAttempt` byte-order
+    // truth: events before this run record belong to the closed attempt whatever their
+    // `t` says, and only events folded after it can set the flag again.
+    for (const agent of Object.values(state._agentByIndex)) agent.inAttempt = false
     state.attemptScopes.push(blankScope())
     state._scope = state.attemptScopes.length - 1
   }
@@ -269,6 +280,7 @@ function blankAgent(index) {
     steers: [],
     cached: false,
     seededFrom: null,
+    inAttempt: false,
     _firstOffset: null,
     _approxPhaseIndex: null,
   }
@@ -351,6 +363,12 @@ function foldAgent(state, ev, offset) {
     agent._firstOffset = offset
     agent._approxPhaseIndex = state._lastPhaseIndex
   }
+  // Byte-order attempt participation: ANY event for the index inside the current scope —
+  // annotations included — puts the agent in this attempt. `openAttempt` resets the flag
+  // for every agent when a `started`/`resumed` run event opens a new scope, so the value
+  // an archive freezes is the closing attempt's own verdict, decided by the file's byte
+  // order rather than by timestamps (which a boundary-sharing millisecond defeats).
+  agent.inAttempt = true
   mergeIdentity(agent, ev)
 
   if (ev.state === 'steered') {

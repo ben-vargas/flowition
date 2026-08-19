@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - Viewer Timeline no longer ignores the attempt selector: with "showing attempt 1" selected after a resume, the Gantt previously still rendered attempt 2's state (every replayed lane a collapsed `replay` tick at the replay instant).
+- A previous attempt's lane can no longer leak into an archived attempt's Timeline through a same-millisecond resume boundary. The fold now records byte-order participation on every agent (`AgentView.inAttempt`, frozen into each archive), and the Gantt's pre-window refusal reads that flag ahead of the timestamp inference — which a terminal or cached event sharing the `resumed` event's millisecond used to defeat. The strict timestamp fallback remains for snapshots and archives that predate the field.
 
 ## [0.6.0] — 2026-08-13
 

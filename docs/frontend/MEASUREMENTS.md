@@ -4,7 +4,18 @@ Measured 2026-07-31 on a 16-core Apple M3 Max MacBook Pro with 64 GB RAM,
 macOS 27.0 (26A5388g), Node 24.14.0, and Google Chrome 150.0.7871.187.
 These are development-machine measurements, not portable benchmarks.
 
-Measured-source SHA-256: `f6e5e6e49e7d8b2ab669f2a839149715fdaa3d75095b2ba3a4a6e908d420eefb`
+Measured-source SHA-256: `1ef7c30125b05fec213f5df582d9e386becfddd6aa867e2278a5f2911769026e`
+
+Hash rebound 2026-08-18 (third rebind, review round 3) for the attempt-scoped Timeline:
+`src/viewer/fold.js` now records byte-order attempt participation on every agent — one
+boolean write (`inAttempt = true`) added to `foldAgent`'s per-event path and an O(agents)
+flag reset inside `openAttempt`, which runs once per `started`/`resumed` record — and
+`ganttModel`'s pre-window classification reads that flag instead of computing the
+`agentTimes` max wherever it is present (strictly less work per lane on flagged data; the
+timestamp fallback is unchanged for pre-field archives). `src/viewer/fold.d.ts` gained
+the field declaration, and `viewer/dist` was rebuilt for the shared-fold and gantt
+changes. No measured hot path changes shape or allocation profile; budgets and browser
+rows below are untouched and were not re-measured.
 
 Hash rebound 2026-08-18 (second rebind, review round) for the attempt-scoped Timeline:
 `src/viewer/fold.js` now blanks the §6.4 J two-home agent fields when archiving a closing

@@ -206,6 +206,12 @@ test('§6.4 step 1a (amended): a resume archives the closing scope\'s agents bef
   // event-stream fact, so the fold may state it without knowing the run state.
   assert.equal(archived[1].state, 'running')
   assert.equal(archived[1].displayState, 'orphaned')
+  // The archive freezes byte-order participation: both agents had events in attempt 1.
+  assert.equal(archived[0].inAttempt, true)
+  assert.equal(archived[1].inAttempt, true)
+  // The live flags were reset at the boundary: only the replayed agent re-entered.
+  assert.equal(state.agents[0].inAttempt, true)
+  assert.equal(state.agents[1].inAttempt, false)
   // The archive is a copy: the cached replay that follows does not disturb it…
   assert.equal(state.agents[0].state, 'cached')
   assert.equal(state.agents[0].endedAt, 101)
@@ -261,6 +267,42 @@ test('§6.4 step 1a (amended): successive resumes archive each scope in place, n
   assert.equal(state.attemptScopes[2].agents, undefined)
   assert.equal(state.agents[0].state, 'queued')
   assert.equal(state.agents[0].queuedAt, 201)
+})
+
+test('§6.4 step 1a (amended): participation is byte-order truth, not a timestamp comparison', () => {
+  // Attempt 2 opens at t=100 — the `resumed` event's own millisecond. Agent 1's cache
+  // replay lands at that SAME millisecond but earlier in the file, so it belongs to
+  // attempt 1; agent 0 re-enters attempt 2 at the same millisecond too. Timestamps alone
+  // cannot separate the three records; the byte order of the events file can, and
+  // `inAttempt` is where the fold records its verdict.
+  const state = fold(null, records([
+    { t: 1, type: 'run', state: 'started', engine: '0.2.0' },
+    { t: 2, type: 'agent', index: 0, key: 'k0', adapter: 'mock', state: 'queued' },
+    { t: 3, type: 'agent', index: 0, state: 'running', waitMs: 1 },
+    { t: 5, type: 'agent', index: 0, state: 'done', durationMs: 2 },
+    { t: 100, type: 'agent', index: 1, key: 'k1', adapter: 'mock', state: 'cached' },
+    { t: 100, type: 'run', state: 'resumed' },
+    // Attempt 2: agent 0 re-executes (first event in the boundary's own millisecond);
+    // agent 1 never re-enters.
+    { t: 100, type: 'agent', index: 0, key: 'k0', adapter: 'mock', state: 'queued' },
+    { t: 110, type: 'agent', index: 0, state: 'running', waitMs: 10 },
+    { t: 120, type: 'agent', index: 0, state: 'done', durationMs: 10 },
+    { t: 200, type: 'run', state: 'resumed' },
+  ]))
+  // Attempt 1's archive: both participated — agent 1's replay precedes the boundary in bytes.
+  const first = state.attemptScopes[0].agents
+  assert.equal(first.find((a) => a.index === 0).inAttempt, true)
+  assert.equal(first.find((a) => a.index === 1).inAttempt, true)
+  assert.equal(first.find((a) => a.index === 1).endedAt, 100)
+  // Attempt 2's archive: agent 0 re-entered (same millisecond, later bytes); agent 1 did
+  // not, and its carried clock still reads t=100 — equal to the attempt's own start,
+  // which is exactly the tie the flag exists to break.
+  const second = state.attemptScopes[1].agents
+  assert.equal(second.find((a) => a.index === 0).inAttempt, true)
+  assert.equal(second.find((a) => a.index === 0).startedAt, 110)
+  assert.equal(second.find((a) => a.index === 1).inAttempt, false)
+  assert.equal(second.find((a) => a.index === 1).state, 'cached')
+  assert.equal(second.find((a) => a.index === 1).endedAt, 100)
 })
 
 test('a cold re-fold backfills earlier-attempt archives for runs recorded before archiving existed', async (t) => {

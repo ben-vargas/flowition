@@ -173,6 +173,12 @@ describe('§6.4 the fold, through the SPA import', () => {
     // pure event-stream fact, unlike the live post-pass, so the fold may state it.
     expect(archived[1]!.state).toBe('running')
     expect(archived[1]!.displayState).toBe('orphaned')
+    // The archive freezes byte-order participation, and the boundary resets the live
+    // flags: only the replayed agent has re-entered the new attempt.
+    expect(archived[0]!.inAttempt).toBe(true)
+    expect(archived[1]!.inAttempt).toBe(true)
+    expect(state.agents[0]!.inAttempt).toBe(true)
+    expect(state.agents[1]!.inAttempt).toBe(false)
     // Private fold fields never leak into the archive.
     expect('_firstOffset' in archived[0]!).toBe(false)
     // The archive is a COPY: the replay that follows does not disturb it.
@@ -596,6 +602,10 @@ describe('seedFoldState — snapshot-then-tail (§9.3)', () => {
     // writes to an archive — so a client-closed scope archives the EVENT facts only.)
     expect(archived.find((a) => a.index === 0)).toMatchObject({
       state: 'done', startedAt: 6, endedAt: 8, queuedAt: 4,
+      // Participation crossed the wire with the seeded agent — the snapshot's live
+      // `inAttempt` is what the client-side archive freezes, so a scope closed here
+      // reads the same as the server re-fold of the full events file.
+      inAttempt: true,
     })
     expect(resumed.agents[0]!.state).toBe('cached')
     expect(resumed.agents[0]!.startedAt).toBeNull()

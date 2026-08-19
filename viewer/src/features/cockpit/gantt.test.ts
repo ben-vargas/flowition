@@ -731,4 +731,65 @@ describe('the attempt window (§6.4 step 1a amended)', () => {
     // The free axis spans the agents' own extent instead.
     expect(free.start).toBeLessThanOrEqual(T0 - 50_000)
   })
+
+  it('byte-order participation beats a same-millisecond boundary tie (codex round 3)', () => {
+    // The resume boundary is a byte position in the events file, not a millisecond: a
+    // closing attempt's cached or terminal event can share the `resumed` event's `t`, so
+    // its timestamp EQUALS the window's start and the strict `< start` inference reads it
+    // as in-window. The archive's `inAttempt: false` is the fold's byte-order verdict —
+    // no event for this agent folded inside the shown attempt — and it wins.
+    const tied: RunDetail = {
+      ...detail,
+      agents: [
+        // A previous attempt's replay at exactly the boundary instant, never re-entered.
+        {
+          ...base, index: 4, state: 'cached', displayState: 'cached', cached: true,
+          queuedAt: null, startedAt: null, endedAt: W_START,
+          waitMs: null, durationMs: null, usage: null, lastOutputAt: null,
+          inAttempt: false,
+        },
+        // A previous attempt's terminal event in the boundary's own millisecond.
+        {
+          ...base, index: 5, state: 'failed', displayState: 'failed',
+          queuedAt: T0 - 20_000, startedAt: T0 - 10_000, endedAt: W_START,
+          waitMs: 10_000, durationMs: 10_000, lastOutputAt: null,
+          errorCode: 'stalled', error: 'boom from another attempt',
+          inAttempt: false,
+        },
+      ],
+    }
+    const m = ganttModel(tied, { now: NOW, window: { start: W_START, end: W_END } })
+    const replay = lane(m, 4)
+    expect(replay.preWindow).toBe(true)
+    expect(replay.tick).toBeNull()
+    expect(replay.duration).toEqual({ kind: 'absent' })
+    const term = lane(m, 5)
+    expect(term.preWindow).toBe(true)
+    expect(term.execLeft).toBeNull()
+    expect(term.execWidth).toBeNull()
+    expect(term.waitLeft).toBeNull()
+    expect(term.durationMs).toBeNull()
+    expect(term.error).toBeNull()
+    expect(term.errorCode).toBeNull()
+  })
+
+  it('trusts an explicit `inAttempt: true` at the same boundary instant', () => {
+    // The other side of the same tie: an agent CAN legitimately re-enter in the
+    // boundary's own millisecond, and only the flag separates it from the carried-over
+    // lane above — every timestamp is identical. (The pre-flag fixtures in `detail`
+    // carry no `inAttempt` at all; the tests above pin that the strict timestamp
+    // fallback still classifies those, so archives that predate the field keep rendering.)
+    const entered: RunDetail = {
+      ...detail,
+      agents: [{
+        ...base, index: 6, state: 'cached', displayState: 'cached', cached: true,
+        queuedAt: null, startedAt: null, endedAt: W_START,
+        waitMs: null, durationMs: null, usage: null, lastOutputAt: null,
+        inAttempt: true,
+      }],
+    }
+    const m = ganttModel(entered, { now: NOW, window: { start: W_START, end: W_END } })
+    expect(lane(m, 6).preWindow).toBe(false)
+    expect(lane(m, 6).tick).toBeCloseTo(0, 6)
+  })
 })

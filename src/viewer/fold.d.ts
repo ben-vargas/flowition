@@ -174,6 +174,19 @@ export interface AgentView {
    * while `state === 'cached'`; a later real execution of the index clears it.
    */
   seededFrom: string | null
+  /**
+   * Byte-order attempt participation: has ANY event for this index folded inside the
+   * attempt this record belongs to? On a live agent that is the CURRENT attempt — reset
+   * for every agent when a `started`/`resumed` run event opens a new scope, set again by
+   * the agent's first event after it. On an `AttemptScope.agents` archive the value is
+   * frozen at the boundary, so `false` marks a lane carried over from an earlier attempt.
+   * This is the fact the Timeline's pre-window refusal reads first: the resume boundary
+   * is a byte position, not a millisecond, and a closing attempt's terminal or cached
+   * event can share the `resumed` event's `t` — a tie timestamps cannot break. Absent
+   * (never `false`) on snapshots and archives built before the field existed; consumers
+   * fall back to the strict timestamp inference there.
+   */
+  inAttempt?: boolean
 }
 
 /**

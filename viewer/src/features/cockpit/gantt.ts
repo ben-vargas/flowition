@@ -444,14 +444,21 @@ export function ganttModel(detail: RunDetail, options: GanttOptions): GanttModel
     const orphaned = honesty.orphaned(agent)
     const moving = honesty.moving(agent)
     const startedAt = finite(agent.startedAt) ? agent.startedAt : null
-    // The archived-attempt refusal (`preWindow` on the lane): every timestamp this agent
-    // carries predates the clamped window, so nothing it did falls inside the attempt on
-    // screen — its clock still dates an earlier attempt's execution, and clamping that
-    // geometry to the left edge would date this attempt's chart with another's events.
+    // The archived-attempt refusal (`preWindow` on the lane): nothing this agent did falls
+    // inside the attempt on screen — its clock still dates an earlier attempt's execution,
+    // and clamping that geometry to the left edge would date this attempt's chart with
+    // another's events. The fold's `inAttempt` flag is the authority (codex round 3): the
+    // resume boundary is a byte position in the events file, not a millisecond, and a
+    // closing attempt's terminal or cached event can share the `resumed` event's `t` — a
+    // tie the strict `< start` comparison reads as in-window. Only a record that predates
+    // the flag falls back to the every-timestamp-predates-the-window inference.
     const windowStart = options.window?.start
-    const ownTimes = windowStart != null ? agentTimes(agent, honesty, now) : []
-    const preWindow = windowStart != null
-      && ownTimes.length > 0 && Math.max(...ownTimes) < windowStart
+    const ownTimes = windowStart != null && agent.inAttempt == null
+      ? agentTimes(agent, honesty, now)
+      : []
+    const preWindow = windowStart != null && (agent.inAttempt != null
+      ? !agent.inAttempt
+      : ownTimes.length > 0 && Math.max(...ownTimes) < windowStart)
     // The wait's RECORDED extent, with the provenance of ITS right edge attached — the same
     // separation the execution bar makes, for the same reason (round 12, B1).
     const queue = cached || preWindow ? NO_QUEUE : queueExtent(agent, honesty, now)

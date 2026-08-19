@@ -1374,6 +1374,20 @@ events are common — G10).
    fold with this amendment ever saw the events — e.g. a client seeded from an old
    server's snapshot JSON — and there the Timeline renders an explicit "this run recorded
    no per-attempt agent timing for attempt N" state (§6.5 degradation), never a guess.
+
+   **AMENDED further (2026-08-18, round 3) — participation is byte-order truth.** The
+   resume boundary is a byte position in the events file, not a millisecond: a closing
+   attempt's terminal or cached event can share the `resumed` event's `t`, and the next
+   attempt's first agent events can land in that same millisecond too, so no timestamp
+   comparison can decide which side of the boundary an event fell on. The fold therefore
+   records the fact explicitly. Every agent carries `inAttempt` — set by ANY event for
+   its index (annotations included), reset for all agents when a `started`/`resumed` run
+   event opens a new scope — and the archive freezes it, so `inAttempt: false` on an
+   archived record marks a lane carried over from an earlier attempt. The Timeline's
+   pre-window refusal reads this flag first and keeps the strict
+   every-timestamp-predates-the-window inference only as the fallback for records that
+   predate the field (an old server's snapshot JSON); a server re-fold of any events file
+   reconstructs the flag exactly, per the determinism ruling above.
 2. **phase** events: append `{phaseIndex: ev.phaseIndex ?? scope-local ordinal, title}`
    to the current attempt scope; identity is `phaseIndex`, not title (titles repeat
    legally — Sol-10).
