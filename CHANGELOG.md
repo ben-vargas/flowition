@@ -5,6 +5,16 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.1] — 2026-08-18
+
+### Fixed
+
+- A claude agent that consumed a live mid-turn steer no longer hangs on teardown (#3). The claude CLI emits ONE `result` per turn — a user message injected mid-turn is coalesced into the running turn and never gets a result of its own — but `AgentJob` counted one expected result per injected message, so `outstanding` stuck above zero, stdin never closed, and the CLI (correctly) waited for EOF while the engine waited for exit: a deadlock only the 30-minute stall SIGKILL broke, after which the already-valid result was discarded as `truncated … refusing stale result` and the whole agent re-ran. A parsed terminal result now settles the whole outstanding count and closes stdin immediately (on error results too — the turn is over either way); a steer landing after the result queues for a `--resume` follow-up turn instead.
+- A live-steer process that exits with messages still counted outstanding but a valid result post-dating every injection now has that result accepted, with the unanswered messages requeued for a follow-up turn, instead of the finished turn being refused as `truncated` and expensively re-run. True early death — no result yet, or an injection after the last result — still refuses.
+- amp's per-message `turn-end` accounting is documented as intentionally unchanged: amp does not share claude's coalescing (a message sent without `steer: true` while the agent is busy is queued and run as its own turn, and amp exits only once the assistant is done AND stdin is closed — owner's manual appendix, checked 2026-08-18), now pinned by fake-CLI regression tests either way.
+- Empty-reasoning handling is now deliberate and uniform across every stream parser. Claude Code ≥2.1 in headless print mode redacts thinking blocks to empty text plus a crypto signature (verified 2026-08-18 on claude-fable-5 and claude-sonnet-5, CLI 2.1.235); the parsers now record a final reasoning block with no text as an explicit `{kind:"reasoning", text:"", redacted:true}` transcript record (claude/amp/grok blocks, codex completed reasoning items, droid reasoning events) instead of a bare empty record, and drop empty *incremental* payloads (pi/cursor thinking deltas, opencode part snapshots), where a later event carries the block's text if there is any. The transcript keeps its honest record that reasoning occurred — which also feeds the viewer's Thinking… liveness indicator — without inventing text.
+- The viewer no longer renders a textless reasoning record as an expandable "reasoning — 1 line" block that opens to nothing. Any reasoning row whose coalesced text is empty renders as a compact non-expandable row, worded by what the transcript attests: an episode carrying an engine `redacted:true` marker says "text withheld by the CLI", while the plain `{"kind":"reasoning","text":""}` records already sitting in recorded runs (which never recorded a cause) say "no reasoning text recorded". The Thinking…/Working… liveness indicator and the screen-reader frontier announcement are unchanged: textless reasoning still counts as thinking.
+
 ## [0.7.0] — 2026-08-18
 
 ### Added

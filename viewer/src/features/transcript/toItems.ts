@@ -244,6 +244,7 @@ function coalesce(items: TimelineItem[], next: TimelineItem): boolean {
   if (prior.kind === 'reasoning' && next.kind === 'reasoning') {
     prior.text += next.text
     prior.o = next.o
+    prior.redacted = prior.redacted || next.redacted
     return true
   }
   if (prior.kind === 'raw' && next.kind === 'raw') {
@@ -348,6 +349,7 @@ export function toItems(
         kind,
         text: string(rec.text),
       } as TimelineItem
+      if (next.kind === 'reasoning') next.redacted = rec.redacted === true
       if (!coalesce(items, next)) items.push(next)
       continue
     }

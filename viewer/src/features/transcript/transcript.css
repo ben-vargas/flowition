@@ -344,6 +344,7 @@
 .reason-h .prev { min-width: 0; font: 400 var(--fs-meta)/1.4 var(--sans); color: var(--text-3); }
 .reason-h .chev { margin-left: auto; flex: none; }
 .reason .prose { padding: 9px; border-top: 1px solid var(--hairline); }
+.reason.redacted .prev { font-style: italic; }
 
 .prose { font-size: var(--fs-prose); line-height: var(--lh-prose); overflow-wrap: anywhere; }
 .prose > * + * { margin-top: 10px; }

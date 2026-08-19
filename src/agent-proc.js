@@ -344,6 +344,12 @@ export class AgentJob {
     let turnError = null
     let stalled = false
     let outstanding = 1
+    // Orders live injections against the parsed result: liveSeq counts every
+    // stdin injection; liveSeqAtResult snapshots it when a result event is
+    // parsed. Equal at process exit ⇒ no message was injected after the last
+    // result, so that result post-dates everything the turn was given.
+    let liveSeq = 0
+    let liveSeqAtResult = 0
     let stdinOpen = true
     let stallTimer = null
     const parser = makeParser(this.adapter.protocol, { idSeed: `t${++this.turnSeq}` })
@@ -371,6 +377,7 @@ export class AgentJob {
         this.liveWrite = (mail) => {
           if (!stdinOpen) return false
           outstanding++
+          liveSeq++
           this.liveDelivered.push(mail)
           const undo = () => {
             outstanding--
@@ -411,11 +418,33 @@ export class AgentJob {
         for (const e of events) {
           if (e.k === 'result') {
             turnResult = { text: e.text, structured: e.structured, isError: e.isError }
+            liveSeqAtResult = liveSeq
             if (this.adapter.protocol !== 'claude-stream-eof') {
-              outstanding--
-              if (built.keepOpen && outstanding <= 0) endStdin()
+              // ONE result per TURN, not per stdin message (issue #3): claude
+              // coalesces a user message injected mid-turn into the running
+              // turn and never emits a result for it, so per-message
+              // accounting stuck outstanding above zero after a consumed live
+              // steer — stdin never closed, the CLI (correctly) waited for
+              // EOF, and the engine waited on 'close' forever. The parsed
+              // result settles the WHOLE count: it answers the initial prompt
+              // and every message injected before it was parsed. Close stdin
+              // on an error result too — the turn is over either way, and
+              // holding stdin open would recreate the hang; the isError throw
+              // below surfaces the failure and runTurn requeues the
+              // live-delivered mail. A steer landing after this point finds
+              // stdinOpen false and queues for a resume follow-up turn.
+              outstanding = 0
+              if (built.keepOpen) endStdin()
             }
           } else if (e.k === 'turn-end') {
+            // Per-MESSAGE accounting stays correct for amp (claude-stream-eof),
+            // which does NOT share claude's coalescing: a message written
+            // without `steer: true` (userMessage never sets it) while the
+            // agent is busy is queued and run as its own turn once the current
+            // one ends, each turn closing with its own stop_reason=end_turn,
+            // and amp only exits once the assistant is done AND stdin is
+            // closed (amp owner's manual appendix, checked 2026-08-18) — so a
+            // message buffered at EOF still runs before exit.
             outstanding--
             if (built.keepOpen && outstanding <= 0) endStdin()
           } else if (e.k === 'error') {
@@ -454,7 +483,22 @@ export class AgentJob {
       // Multi-message live turns: an earlier in-turn result must not stand in for
       // messages that never got answered (they'd be falsely marked delivered).
       if (built.keepOpen && outstanding > 0) {
-        throw new AgentError('truncated', `process exited (code ${code}${signal ? `, signal ${signal}` : ''}) with ${outstanding} injected message(s) unanswered — refusing stale result`, { retryable: signal != null })
+        if (turnResult != null && !turnResult.isError && liveSeq === liveSeqAtResult) {
+          // The per-message count never settled, but a valid result post-dates
+          // every injected message: the finished work stands — accept it and
+          // requeue the unanswered tail for a resume follow-up turn instead of
+          // refusing (a possible duplicate delivery beats discarding a
+          // completed turn and re-running it from scratch). Splicing them out
+          // of liveDelivered keeps runTurn from marking them done; unshift
+          // keeps acceptance order ahead of mail queued after them.
+          const unanswered = this.liveDelivered.splice(this.liveDelivered.length - Math.min(outstanding, this.liveDelivered.length))
+          if (unanswered.length) {
+            this.mailQueue.unshift(...unanswered)
+            this.transcript.write('status', { text: `process exited with ${unanswered.length} injected message(s) unanswered but a result that post-dates them — result accepted, message(s) requeued for a follow-up turn` })
+          }
+        } else {
+          throw new AgentError('truncated', `process exited (code ${code}${signal ? `, signal ${signal}` : ''}) with ${outstanding} injected message(s) unanswered — refusing stale result`, { retryable: signal != null })
+        }
       }
       // Refuse results synthesized from partial output. Protocols with an explicit
       // completion event (codex/droid/pi/claude/amp/cursor/grok) must have shown it regardless
@@ -502,7 +546,8 @@ export class AgentJob {
         }
         break
       case 'text': this.transcript.write('text', { text: e.text }); break
-      case 'reasoning': this.transcript.write('reasoning', { text: e.text }); break
+      // redacted rides through like the tool id below — undefined never reaches the file
+      case 'reasoning': this.transcript.write('reasoning', { text: e.text, redacted: e.redacted }); break
       case 'tool':
         this.lastTool = e.name
         // E11: the id rides through untouched — undefined never reaches the file

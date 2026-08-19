@@ -31,6 +31,29 @@ describe('toItems projection (§9.6)', () => {
     expect(p.items[0]).toMatchObject({ kind: 'reasoning', text: 'ab' })
   })
 
+  it('coalesces a run of textless reasoning records into one textless item', () => {
+    // old journals hold {kind:'reasoning', text:''}; the engine now also marks redacted:true.
+    // One marked record makes the whole episode an observed redaction.
+    offset = 0
+    const p = toItems([r('reasoning', { text: '' }), r('reasoning', { text: '', redacted: true })])
+    expect(p.items).toHaveLength(1)
+    expect(p.items[0]).toMatchObject({ kind: 'reasoning', text: '', redacted: true })
+  })
+
+  it('an episode of only unmarked empty records stays unredacted — no cause was recorded', () => {
+    offset = 0
+    const p = toItems([r('reasoning', { text: '' }), r('reasoning', { text: '' })])
+    expect(p.items).toHaveLength(1)
+    expect(p.items[0]).toMatchObject({ kind: 'reasoning', text: '', redacted: false })
+  })
+
+  it('a redaction marker coalesces into adjacent reasoning text without erasing it', () => {
+    offset = 0
+    const p = toItems([r('reasoning', { text: '', redacted: true }), r('reasoning', { text: 'real' })])
+    expect(p.items).toHaveLength(1)
+    expect(p.items[0]).toMatchObject({ kind: 'reasoning', text: 'real', redacted: true })
+  })
+
   it('cross-flushes interleaved text and reasoning', () => {
     offset = 0
     const p = toItems([r('text', { text: 'a' }), r('reasoning', { text: 'b' }), r('text', { text: 'c' })])
