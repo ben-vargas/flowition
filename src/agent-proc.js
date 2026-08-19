@@ -502,7 +502,8 @@ export class AgentJob {
         }
         break
       case 'text': this.transcript.write('text', { text: e.text }); break
-      case 'reasoning': this.transcript.write('reasoning', { text: e.text }); break
+      // redacted rides through like the tool id below — undefined never reaches the file
+      case 'reasoning': this.transcript.write('reasoning', { text: e.text, redacted: e.redacted }); break
       case 'tool':
         this.lastTool = e.name
         // E11: the id rides through untouched — undefined never reaches the file

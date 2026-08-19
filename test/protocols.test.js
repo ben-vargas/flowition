@@ -254,3 +254,35 @@ test('grok error subtypes, contentless schema turns, and unknown blocks are hand
   assert.equal(cut.terminalRequired, true)
   assert.deepEqual(cut.finish(), [])
 })
+
+test('empty reasoning: final blocks become explicit redaction markers, empty deltas are dropped', () => {
+  // Claude Code ≥2.1 headless redacts thinking — empty text, crypto signature only
+  // (verified 2026-08-18 on claude-fable-5 and claude-sonnet-5, CLI 2.1.235)
+  const claude = makeParser('claude-stream')
+  assert.deepEqual(
+    claude.push({ type: 'assistant', message: { content: [{ type: 'thinking', thinking: '', signature: 'EqQBCkgIBRABGAI' }] } }),
+    [{ k: 'reasoning', text: '', redacted: true }],
+  )
+  assert.deepEqual(
+    claude.push({ type: 'assistant', message: { content: [{ type: 'thinking', thinking: 'plan it' }] } }),
+    [{ k: 'reasoning', text: 'plan it' }],
+  )
+
+  const codex = makeParser('codex-jsonl')
+  assert.deepEqual(
+    codex.push({ type: 'item.completed', item: { type: 'reasoning', text: '' } }),
+    [{ k: 'reasoning', text: '', redacted: true }],
+  )
+
+  const droid = makeParser('droid-jsonl')
+  assert.deepEqual(droid.push({ type: 'reasoning', text: '' }), [{ k: 'reasoning', text: '', redacted: true }])
+  assert.deepEqual(droid.push({ type: 'reasoning', text: 'thought' }), [{ k: 'reasoning', text: 'thought' }])
+
+  // incremental payloads: an empty one is mid-stream noise, never a redaction marker
+  const opencode = makeParser('opencode-jsonl')
+  assert.deepEqual(opencode.push({ type: 'reasoning', part: { text: '' } }), [])
+  const pi = makeParser('pi-jsonl')
+  assert.deepEqual(pi.push({ type: 'message_update', assistantMessageEvent: { type: 'thinking_delta', delta: '' } }), [])
+  const cursor = makeParser('cursor-jsonl')
+  assert.deepEqual(cursor.push({ type: 'thinking', subtype: 'delta', text: '' }), [])
+})
