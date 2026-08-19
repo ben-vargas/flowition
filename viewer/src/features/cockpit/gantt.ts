@@ -127,8 +127,11 @@ export interface GanttLane {
    * archived attempt in which this index never re-entered (its clock still dates an earlier
    * attempt's execution). Drawing that bar inside this window would clamp it to the left
    * edge and date one attempt's geometry with another's events, so the lane has NO geometry
-   * and a badge says why instead (the same refusal the truncated edge makes, in attempt
-   * form). Always `false` when no window is set.
+   * and NO attempt-specific metadata either — `duration` reads `absent`, `waitMs`, `quiet`,
+   * `errorCode` and `error` are `null` — because a figure or badge carried over from a
+   * different attempt is the same leak in metadata form. A badge says why instead (the
+   * same refusal the truncated edge makes, in attempt form). Always `false` when no window
+   * is set.
    */
   preWindow: boolean
 }
@@ -463,8 +466,11 @@ export function ganttModel(detail: RunDetail, options: GanttOptions): GanttModel
     const endedAt = cached ? null : extent.end
     // The FIGURE is a separate question from the extent and is answered in exactly one
     // place for the whole cockpit (round 8, B1). A cache hit is not special-cased here
-    // either: `honesty.duration` already knows a replay never took a slot.
-    const duration = honesty.duration(agent)
+    // either: `honesty.duration` already knows a replay never took a slot. A pre-window
+    // lane reads `absent`: whatever figure the archive carries dates an EARLIER attempt's
+    // execution, and printing it beside "no events in this attempt" is the same leak the
+    // refused geometry closes, in metadata form.
+    const duration: AgentDuration = preWindow ? { kind: 'absent' } : honesty.duration(agent)
 
     // The mark is drawn wherever there is a queue event; the INTERVAL only where something
     // recorded closes it. `unrecorded` therefore keeps `waitLeft` and drops `waitWidth`, and
@@ -529,11 +535,16 @@ export function ganttModel(detail: RunDetail, options: GanttOptions): GanttModel
       // The figure beside the bar describes THE BAR — and a bar whose right edge is a
       // truncation boundary rather than a recorded end has no figure at all (round 7, B1).
       durationMs: durationValue(duration),
-      open: moving,
+      open: !preWindow && moving,
       truncated: !cached && extent.kind === 'truncated',
-      quiet: quietTag(agent, { live: moving, now }),
-      errorCode: agent.errorCode ?? null,
-      error: agent.error ?? null,
+      // The rest of the pre-window suppression: a quiet tag, an error and an error code
+      // are all claims ABOUT an execution, and every execution this agent's archive
+      // records belongs to an earlier attempt. `waitMs` is already `null` (the queue
+      // extent above is `NO_QUEUE`), and `duration` reads `absent` — the lane's one
+      // statement is the badge.
+      quiet: preWindow ? null : quietTag(agent, { live: moving, now }),
+      errorCode: preWindow ? null : agent.errorCode ?? null,
+      error: preWindow ? null : agent.error ?? null,
       preWindow,
     }
   })

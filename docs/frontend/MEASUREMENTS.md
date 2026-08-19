@@ -4,7 +4,21 @@ Measured 2026-07-31 on a 16-core Apple M3 Max MacBook Pro with 64 GB RAM,
 macOS 27.0 (26A5388g), Node 24.14.0, and Google Chrome 150.0.7871.187.
 These are development-machine measurements, not portable benchmarks.
 
-Measured-source SHA-256: `38347eb576477eb06d122c8f0fc3d2f770b133b3d61ef104293d554bc7163c07`
+Measured-source SHA-256: `f6e5e6e49e7d8b2ab669f2a839149715fdaa3d75095b2ba3a4a6e908d420eefb`
+
+Hash rebound 2026-08-18 (second rebind, review round) for the attempt-scoped Timeline:
+`src/viewer/fold.js` now blanks the §6.4 J two-home agent fields when archiving a closing
+attempt scope (`ARCHIVED_AGENT_BLANKS` — a fixed `Object.assign`-shaped spread inside the
+same once-per-resume O(agents) copy), `src/viewer/snapshot.js` and `src/viewer/fold.d.ts`
+changed comments only, and `viewer/dist` was rebuilt for the pre-window metadata
+suppression in the Timeline lane (render-path branch, no new model work). No measured hot
+path changes shape or allocation profile; budgets and browser rows below are untouched
+and were not re-measured. On the day of this rebind, P2's steady-state request 4/5
+exceeded its 120 ms budget on every run (123.3–146.7 ms; other requests 65–125 ms) — and
+did so IDENTICALLY on the unmodified committed tree (144.2 ms, verified via stash
+before/after), so this is the same machine-load spike the entry below records, on the
+same jittered quiescent-TTL expiry request: the P2 mix contains no resumed runs, and
+none of this rebind's fold changes execute outside a resume record.
 
 Hash rebound 2026-08-18 for the attempt-scoped Timeline (feat/attempt-scoped-timeline):
 `src/viewer/fold.js` archives each agent's per-attempt view into the closing attempt

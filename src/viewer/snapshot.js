@@ -343,9 +343,13 @@ export class SnapshotStore {
         mailTotal: scope.mail.length,
         logs: scope.logs.slice(-DETAIL_TAIL_RECORDS),
         logTotal: scope.logs.length,
-        // Archived per-attempt agent snapshots (closed scopes only). The key is carried
-        // through, never invented: an old events file whose fold predates archiving has
-        // none, and the SPA renders that absence honestly.
+        // Archived per-attempt agent snapshots (closed scopes only). The fold is
+        // deterministic over the events log, so a cold re-fold of a run recorded before
+        // archiving existed reconstructs these for its earlier attempts — the same archive
+        // a live fold would have written at each resume boundary, not an invention. The
+        // key is genuinely absent only where the fold itself produced none, and the SPA
+        // renders that absence honestly (its own degraded state exists for clients seeded
+        // from an old server's snapshot JSON, which no re-fold can repair client-side).
         ...(scope.agents ? { agents: scope.agents } : {}),
       })),
       unknownEvents: projected.unknownEvents,

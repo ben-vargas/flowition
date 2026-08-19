@@ -639,11 +639,13 @@ describe('the attempt window (§6.4 step 1a amended)', () => {
         waitMs: 10_000, durationMs: 40_000, lastOutputAt: null,
       },
       // Settled before the attempt began and never re-entered: every timestamp it carries
-      // is another attempt's, so this window may draw none of them.
+      // is another attempt's, so this window may draw none of them — nor print the
+      // duration, wait or error that clock supports.
       {
-        ...base, index: 1, state: 'done', displayState: 'done',
+        ...base, index: 1, state: 'failed', displayState: 'failed',
         queuedAt: T0 - 50_000, startedAt: T0 - 40_000, endedAt: T0 - 30_000,
         waitMs: 10_000, durationMs: 10_000, lastOutputAt: null,
+        errorCode: 'stalled', error: 'boom from another attempt',
       },
       // A cache hit replayed IN the attempt keeps its replay tick…
       {
@@ -690,6 +692,28 @@ describe('the attempt window (§6.4 step 1a amended)', () => {
     expect(before.notch).toBeNull()
     // Not a truncation: the end IS recorded, it just belongs to another attempt's axis.
     expect(before.truncated).toBe(false)
+  })
+
+  it('suppresses attempt-specific metadata on a pre-window lane, not just its geometry', () => {
+    // The metadata form of the same leak (codex round 2): the duration, wait, quiet tag
+    // and error on this record all describe an EARLIER attempt's execution, and printing
+    // any of them beside "no events in this attempt" dates this attempt's chart with
+    // another's facts exactly as the refused bar would have.
+    const before = lane(model, 1)
+    expect(before.duration).toEqual({ kind: 'absent' })
+    expect(before.durationMs).toBeNull()
+    expect(before.waitMs).toBeNull()
+    expect(before.quiet).toBeNull()
+    expect(before.errorCode).toBeNull()
+    expect(before.error).toBeNull()
+    expect(before.open).toBe(false)
+    // The pre-window replay reads the same: no figure from the carried clock.
+    const carried = lane(model, 3)
+    expect(carried.duration).toEqual({ kind: 'absent' })
+    expect(carried.durationMs).toBeNull()
+    // An IN-window lane keeps its own metadata — the suppression is the window's, not
+    // the archive's.
+    expect(lane(model, 0).duration).toEqual({ kind: 'recorded', ms: 40_000 })
   })
 
   it('marks an in-window replay and refuses one from before the window', () => {

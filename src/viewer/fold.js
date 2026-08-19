@@ -93,6 +93,29 @@ function exposeScope(state) {
 }
 
 /**
+ * The agent fields §6.4 J (the journal join) also writes, with the blank each takes in an
+ * archived snapshot. Inside a server fold they hold the EVENT stream's answer; a seeded
+ * client fold holds exactly these blanks — `seedFoldState` strips the join's output so a
+ * journal `sys/reset` has one home to clear, and no boundary event re-supplies them. An
+ * `AttemptScope.agents` archive is built by BOTH folds and joined by NEITHER, so the blank
+ * is the only value the two paths can agree on byte-for-byte. `archiveAgents` applies this
+ * map, `seedFoldState` seeds live agents from it, and the client's `JOURNAL_DERIVED_FIELDS`
+ * is pinned to these keys by test.
+ */
+export const ARCHIVED_AGENT_BLANKS = Object.freeze({
+  attempts: 0,
+  usage: null,
+  attemptUsage: null,
+  durationMs: null,
+  resultPreview: null,
+  resultBytes: null,
+  resultTruncated: false,
+  sessionId: null,
+  liveTokens: null,
+  cumTokens: null,
+})
+
+/**
  * Snapshot every agent's per-attempt view into the scope a `resumed` event is closing
  * (§6.4 step 1a, amended: attempt-scoped Timeline).
  *
@@ -103,9 +126,15 @@ function exposeScope(state) {
  * of the new attempt's agent events, so it is exactly what the agents looked like when the
  * attempt ended: archive-before-clear.
  *
- * The copies are event-derived facts only — the fold never sees the journal, so the
- * journal-joined lifetime fields (`usage`, `attempts`, `sessionId`, …) hold whatever the
- * event stream carried at the boundary and the §6.4 J join never touches an archive.
+ * The archive carries EVENT-owned facts only, and identically on both sides of the wire.
+ * The §6.4 J two-home fields (`durationMs`, `usage`, …) are archived blank
+ * (`ARCHIVED_AGENT_BLANKS`): a server fold holds the event stream's answer for them while a
+ * seeded client fold holds blanks, so keeping either would make the same scope archive
+ * differently depending on which side happened to close it — and the Timeline never needed
+ * them (an archived duration reads from the agent's own two stamps). The two
+ * projection-derived display verdicts (`toolIds`, `phaseApproximate`) are reset to the
+ * fold's defaults for the same reason: the materializer recomputes them for the live agents
+ * on every snapshot and never for an archive.
  * An agent still `queued`/`running` at the boundary was definitionally stranded by that
  * attempt's end, so its archived `displayState` is `orphaned` — a pure fact about the
  * closed attempt, unlike the live post-pass, which needs the run state.
@@ -114,7 +143,13 @@ function archiveAgents(state) {
   return Object.values(state._agentByIndex)
     .sort((a, b) => a.index - b.index)
     .map((agent) => {
-      const copy = { ...agent, steers: agent.steers.map((s) => ({ ...s })) }
+      const copy = {
+        ...agent,
+        ...ARCHIVED_AGENT_BLANKS,
+        steers: agent.steers.map((s) => ({ ...s })),
+        toolIds: false,
+        phaseApproximate: false,
+      }
       delete copy._firstOffset
       delete copy._approxPhaseIndex
       copy.displayState = agent.state === 'queued' || agent.state === 'running'

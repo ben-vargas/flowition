@@ -311,18 +311,22 @@ function Lane(
             ) : null}
           </span>
         ) : null}
-        <span className="bar-meta" style={{ left: metaLeft }}>
-          {lane.cached ? <span className="badge replay">replay</span> : null}
-          {/* The archived-attempt refusal (`gantt.ts` preWindow): everything this agent's
-              clock records happened before the attempt on screen began, so there is no
-              geometry to draw inside its window — the badge says so instead of a bar
-              clamped to the left edge. */}
-          {lane.preWindow ? (
+        {/* The archived-attempt refusal (`gantt.ts` preWindow): everything this agent's
+            clock records happened before the attempt on screen began, so there is no
+            geometry to draw inside its window — and no metadata either. A `replay` badge,
+            a duration, a wait chip or an error code here would all be facts about an
+            EARLIER attempt printed under this attempt's label, which is the exact leak
+            the refused geometry closes. The badge is the lane's one statement. */}
+        {lane.preWindow ? (
+          <span className="bar-meta" style={{ left: metaLeft }}>
             <span className="badge" title={PRE_WINDOW}>
               no events in this attempt
             </span>
-          ) : null}
-          {lane.cached && lane.tick == null && !lane.preWindow ? (
+          </span>
+        ) : (
+        <span className="bar-meta" style={{ left: metaLeft }}>
+          {lane.cached ? <span className="badge replay">replay</span> : null}
+          {lane.cached && lane.tick == null ? (
             <span
               className="badge"
               title={
@@ -385,6 +389,7 @@ function Lane(
           ) : null}
           {lane.errorCode ? <span className="badge err">{lane.errorCode}</span> : null}
         </span>
+        )}
       </span>
     </button>
   )
@@ -403,14 +408,16 @@ const QUEUE_UNRECORDED =
   + ' and the chart draws no interval past it'
 
 /**
- * The one sentence for a lane whose clock predates the attempt on screen. The state and any
- * figures beside it are real — they are the agent as it stood when this attempt ended — but
- * they date an EARLIER attempt's execution, and this window may not draw them.
+ * The one sentence for a lane whose clock predates the attempt on screen. The state glyph in
+ * the lane's label is real — the agent as it stood when this attempt ended — but everything
+ * else its record supports (bar, replay badge, duration, wait, error) dates an EARLIER
+ * attempt's execution, so the lane renders this badge and nothing beside it.
  */
 const PRE_WINDOW =
   'this attempt recorded no events for this agent — its state and timestamps were settled in'
   + ' an earlier attempt and merely carried over, so drawing them on this attempt’s axis'
-  + ' would date one attempt’s chart with another’s events; no bar is drawn'
+  + ' would date one attempt’s chart with another’s events; no bar, figure or badge from'
+  + ' that carried clock is shown'
 
 /**
  * Draw the hatched wait segment?

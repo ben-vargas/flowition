@@ -191,9 +191,16 @@ test('§6.4 step 1a (amended): a resume archives the closing scope\'s agents bef
   assert.equal(archived[0].startedAt, 3)
   assert.equal(archived[0].endedAt, 5)
   assert.equal(archived[0].waitMs, 1)
-  assert.equal(archived[0].durationMs, 2)
   assert.equal(archived[0].lastOutputAt, 4)
   assert.equal(archived[0].cached, false)
+  // The §6.4 J two-home fields are archived BLANK (ARCHIVED_AGENT_BLANKS): a seeded client
+  // fold holds blanks for them, so the blank is the only value on which a server-built and
+  // a client-built archive can be identical. The Timeline reads an archived duration from
+  // the agent's own two stamps instead.
+  assert.equal(archived[0].durationMs, null)
+  assert.equal(archived[0].resultPreview, null)
+  assert.equal(archived[0].usage, null)
+  assert.equal(archived[0].sessionId, null)
   assert.ok(!('_firstOffset' in archived[0]), 'private fold fields never leak into an archive')
   // An agent the closing attempt left running was stranded by that attempt's end — an
   // event-stream fact, so the fold may state it without knowing the run state.
@@ -210,6 +217,86 @@ test('§6.4 step 1a (amended): a resume archives the closing scope\'s agents bef
   const view = materializeFold(state, 'running')
   assert.equal(view.attemptScopes[0].agents[0].endedAt, 5)
   assert.equal(view.attemptScopes[1].agents, undefined)
+})
+
+test('§6.4 step 1a (amended): successive resumes archive each scope in place, never overwrite', () => {
+  // Three attempts. The discriminator against a fixed-index archive bug (an `openAttempt`
+  // that wrote scope 0, or the last scope, on every resume) is that the two archives are
+  // DIFFERENT sizes and carry different clocks: agent 1 does not exist at the first
+  // boundary, and agent 0's attempt-2 record is a cache hit while its attempt-1 record is
+  // a real execution.
+  const state = fold(null, records([
+    { t: 1, type: 'run', state: 'started', engine: '0.2.0' },
+    { t: 2, type: 'agent', index: 0, key: 'k0', adapter: 'mock', state: 'queued' },
+    { t: 3, type: 'agent', index: 0, state: 'running', waitMs: 1 },
+    { t: 5, type: 'agent', index: 0, state: 'done', durationMs: 2 },
+    { t: 6, type: 'run', state: 'failed', error: 'boom' },
+    { t: 100, type: 'run', state: 'resumed' },
+    // Attempt 2: agent 0 is an in-attempt cache hit; agent 1 executes for real.
+    { t: 101, type: 'agent', index: 0, key: 'k0', adapter: 'mock', state: 'cached' },
+    { t: 102, type: 'agent', index: 1, key: 'k1', adapter: 'mock', state: 'queued' },
+    { t: 103, type: 'agent', index: 1, state: 'running', waitMs: 1 },
+    { t: 105, type: 'agent', index: 1, state: 'done', durationMs: 2 },
+    { t: 106, type: 'run', state: 'failed', error: 'boom again' },
+    { t: 200, type: 'run', state: 'resumed' },
+    { t: 201, type: 'agent', index: 0, key: 'k0', adapter: 'mock', state: 'queued' },
+  ]))
+  assert.equal(state.attemptScopes.length, 3)
+  // Scope 0 still holds attempt 1's clocks — the second resume did not disturb it.
+  assert.equal(state.attemptScopes[0].agents.length, 1)
+  assert.deepEqual(
+    [state.attemptScopes[0].agents[0].state, state.attemptScopes[0].agents[0].queuedAt,
+      state.attemptScopes[0].agents[0].startedAt, state.attemptScopes[0].agents[0].endedAt],
+    ['done', 2, 3, 5],
+  )
+  // Scope 1 holds attempt 2's: the replay instant for the in-attempt cache hit, and
+  // agent 1's own execution.
+  const second = state.attemptScopes[1].agents
+  assert.equal(second.length, 2)
+  assert.deepEqual([second[0].state, second[0].cached, second[0].endedAt, second[0].startedAt],
+    ['cached', true, 101, null])
+  assert.deepEqual([second[1].state, second[1].queuedAt, second[1].startedAt, second[1].endedAt],
+    ['done', 102, 103, 105])
+  // The current scope carries no archive — the top-level agents ARE attempt 3.
+  assert.equal(state.attemptScopes[2].agents, undefined)
+  assert.equal(state.agents[0].state, 'queued')
+  assert.equal(state.agents[0].queuedAt, 201)
+})
+
+test('a cold re-fold backfills earlier-attempt archives for runs recorded before archiving existed', async (t) => {
+  // Reclassified in review: this is reconstruction, not fabrication. The fold is
+  // deterministic over the events log, so replaying a pre-change run's events.jsonl
+  // through a cold SnapshotStore rebuilds exactly the archives a live fold would have
+  // recorded at each resume boundary — no version marker suppresses it. The degraded
+  // "no per-attempt agent timing" state exists for genuinely absent data (a client seeded
+  // from an old server's snapshot JSON), not for old events files.
+  const events = [
+    { t: 1, type: 'run', state: 'started', engine: '0.2.0' },
+    { t: 2, type: 'agent', index: 0, key: 'k0', adapter: 'mock', state: 'queued' },
+    { t: 3, type: 'agent', index: 0, state: 'running', waitMs: 1 },
+    { t: 5, type: 'agent', index: 0, state: 'done', durationMs: 2 },
+    { t: 6, type: 'run', state: 'interrupted' },
+    { t: 100, type: 'run', state: 'resumed', engine: '0.2.0' },
+    { t: 101, type: 'agent', index: 0, key: 'k0', adapter: 'mock', state: 'cached' },
+  ]
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'flo-view-backfill-'))
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }))
+  fs.writeFileSync(path.join(dir, 'events.jsonl'), jsonl(events))
+  fs.writeFileSync(path.join(dir, 'journal.jsonl'), jsonl([
+    { type: 'meta', createdAt: 1, workflowFile: '/tmp/old-run.js' },
+  ]))
+  const detail = await new SnapshotStore({
+    deriveState: async () => ({ state: 'running' }),
+  }).get(dir)
+  // The reconstructed archive is attempt 1's own clocks…
+  const archived = detail.attemptScopes[0].agents
+  assert.deepEqual(
+    archived.map((a) => [a.index, a.state, a.queuedAt, a.startedAt, a.endedAt, a.waitMs]),
+    [[0, 'done', 2, 3, 5, 1]],
+  )
+  // …and is exactly what a fold that had been running live would have recorded.
+  const direct = materializeFold(fold(null, records(events)), 'running')
+  assert.deepEqual(archived, direct.attemptScopes[0].agents)
 })
 
 test('§6.4 post-pass orphans live-looking agents and abandons terminal questions', () => {

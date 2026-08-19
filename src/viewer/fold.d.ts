@@ -273,7 +273,8 @@ export interface RunDetail extends Omit<RunSummary, 'agents'> {
     logs: LogView[]
     logTotal: number
     /** Archived per-attempt agent snapshots — see {@link AttemptScope.agents}. Absent on
-     *  the current scope and on snapshots written before attempts were archived. */
+     *  the current scope, and on snapshots no archiving fold ever built (a server re-fold
+     *  of an old run's events reconstructs them; an old server's snapshot JSON cannot). */
     agents?: AgentView[]
   }[]
   /** §6.5's debug row: events whose `type` the fold does not recognize. */
@@ -307,11 +308,17 @@ export interface AttemptScope {
    * it — so an earlier attempt's Timeline can draw the real bars.
    *
    * Present only on scopes closed by a fold that archives (and never on the current scope —
-   * the top-level `agents` ARE the current attempt). Absent on old snapshots: the UI must
-   * degrade to an explicit "no per-attempt agent timing recorded" state, never backfill.
+   * the top-level `agents` ARE the current attempt). The fold is deterministic over the
+   * events log, so a server re-fold of a run recorded BEFORE archiving existed reconstructs
+   * these for its earlier attempts exactly as a live fold would have — replay of recorded
+   * facts, not fabrication. The key is genuinely absent only where no archiving fold ever
+   * saw the events (e.g. a client seeded from an old server's snapshot JSON), and there the
+   * UI degrades to an explicit "no per-attempt agent timing recorded" state, never a guess.
    * Values are event-derived facts as they stood at the boundary; the §6.4 J journal join
-   * never touches an archive, and an agent left `queued`/`running` at the boundary is
-   * archived with `displayState: 'orphaned'` — the closed attempt stranded it, by definition.
+   * never touches an archive, and its two-home fields are archived blank
+   * ({@link ARCHIVED_AGENT_BLANKS}) so both folds build the identical archive. An agent left
+   * `queued`/`running` at the boundary is archived with `displayState: 'orphaned'` — the
+   * closed attempt stranded it, by definition.
    */
   agents?: AgentView[]
 }
@@ -370,6 +377,25 @@ export const FIRST_VIEWER_EVENT_VERSION: string
 export const TOOL_IDS_VERSION: string
 /** The minimum engine version each §6.2 `Cap` requires (critique M2: version, not fields). */
 export const CAP_VERSIONS: Readonly<Record<keyof Caps, string>>
+
+/**
+ * The §6.4 J two-home agent fields, with the blank each takes in an `AttemptScope.agents`
+ * archive. The client seeds live agents with the same blanks (`JOURNAL_DERIVED_FIELDS` in
+ * `viewer/src/fold/index.ts` is pinned to these keys by test), which is what keeps a scope
+ * closed client-side byte-identical to the same scope closed by a server re-fold.
+ */
+export const ARCHIVED_AGENT_BLANKS: Readonly<{
+  attempts: 0
+  usage: null
+  attemptUsage: null
+  durationMs: null
+  resultPreview: null
+  resultBytes: null
+  resultTruncated: false
+  sessionId: null
+  liveTokens: null
+  cumTokens: null
+}>
 
 export function createFoldState(options?: { createdAt?: number | null }): FoldState
 

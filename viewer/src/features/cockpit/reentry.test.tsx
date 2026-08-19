@@ -291,11 +291,56 @@ describe('the Timeline on an earlier attempt (§6.4 step 1a, amended)', () => {
     )
     await screen.findByRole('tablist')
     fireEvent.click(screen.getAllByRole('radio')[0]!)
-    // Attempt 1 ran T0 → T0+3_100 (its terminal event). On the LINEAGE-wide axis the bar
-    // would be a sliver at the far left; on the attempt's own it starts ~32% in.
+    // Attempt 1 ran T0 → T0+3_100 (its terminal event), so on the attempt's own axis the
+    // bar starts at the window's left edge (`left` ≈ 0) and spans ~96.8% of the 3_100 ms
+    // window (queued at T0, done at T0+3_000). The width is what catches a missing clamp:
+    // against the whole ~3.6e6 ms lineage span the same bar would be a <0.1% sliver.
     const bar = document.querySelector<HTMLElement>('.lane-track .bar')!
     expect(parseFloat(bar.style.left)).toBeCloseTo((0 / 3_100) * 100, 1)
     expect(parseFloat(bar.style.width)).toBeCloseTo((3_000 / 3_100) * 100, 1)
+  })
+
+  it('a multi-resume lane with no events in the shown attempt leaks no other attempt’s metadata', async () => {
+    // Codex round 2: the fold archives every globally known agent into a closing scope,
+    // including agents the attempt never touched — so after several resumes, an agent
+    // cached or completed in attempt 1 could show a `replay` badge or attempt 1's runtime
+    // beside "no events in this attempt" while attempt 2 was selected. Three attempts:
+    // attempt 1 has a cross-run cache hit AND a real execution, attempt 2 opens and dies
+    // with NO agent events, attempt 3 is current. Selecting attempt 2 must render both
+    // lanes as the explicit badge and NOTHING carried over.
+    const detail = foldDetail([
+      { t: T0, type: 'run', state: 'started', engine: '0.2.0', concurrency: 2 },
+      { t: T0 + 500, type: 'agent', index: 0, key: 'k0', label: 'seeded', adapter: 'claude', state: 'cached', seededFrom: 'r_prev' },
+      { t: T0 + 1_000, type: 'agent', index: 1, key: 'k1', label: 'worker', adapter: 'claude', state: 'queued' },
+      { t: T0 + 2_000, type: 'agent', index: 1, state: 'running', waitMs: 1_000 },
+      { t: T0 + 4_000, type: 'agent', index: 1, state: 'done', durationMs: 2_000 },
+      { t: T0 + 4_100, type: 'run', state: 'completed' },
+      { t: T0 + 10_000, type: 'run', state: 'resumed' },
+      { t: T0 + 10_500, type: 'run', state: 'interrupted' },
+      { t: T0 + 20_000, type: 'run', state: 'resumed' },
+    ])
+    render(
+      <>
+        <IconSprite />
+        <Cockpit runId={detail.runId} storeApi={fixedApi(detail)} />
+      </>,
+    )
+    await screen.findByRole('tablist')
+    fireEvent.click(screen.getAllByRole('radio')[1]!)
+    expect(screen.getByText(/showing attempt 2/)).toBeTruthy()
+    expect(screen.getByText(/attempt 2 — agents as they stood when this attempt ended/)).toBeTruthy()
+
+    const tl = document.querySelector<HTMLElement>('.tl')!
+    // Both lanes are on the roster, and both say the one thing the attempt supports.
+    expect(tl.querySelectorAll('.lane')).toHaveLength(2)
+    expect(screen.getAllByText('no events in this attempt')).toHaveLength(2)
+    // The leaks: no replay badge for attempt 1's cache hit, no duration figure for
+    // attempt 1's execution, no wait chip, no geometry, no error badges.
+    expect(tl.querySelector('.badge.replay')).toBeNull()
+    expect(tl.querySelector('.dur')).toBeNull()
+    expect(tl.querySelector('.chip.q')).toBeNull()
+    expect(tl.querySelector('.lane-track .bar')).toBeNull()
+    expect(tl.querySelector('.badge.err')).toBeNull()
   })
 
   it('degrades honestly when the snapshot archived no agents for the attempt', async () => {

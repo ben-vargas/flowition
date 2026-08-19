@@ -13,6 +13,7 @@
 import { describe, expect, it } from 'vitest'
 
 import {
+  ARCHIVED_AGENT_BLANKS,
   createFoldState,
   deriveCaps,
   fanoutsFromStructure,
@@ -162,7 +163,11 @@ describe('§6.4 the fold, through the SPA import', () => {
     expect(archived).toHaveLength(2)
     expect(archived[0]).toMatchObject({
       index: 0, key: 'k0', label: 'worker', state: 'done', cached: false,
-      queuedAt: 2, startedAt: 3, endedAt: 5, waitMs: 1, durationMs: 2, lastOutputAt: 4,
+      queuedAt: 2, startedAt: 3, endedAt: 5, waitMs: 1, lastOutputAt: 4,
+      // The §6.4 J two-home fields are archived BLANK (`ARCHIVED_AGENT_BLANKS`): a seeded
+      // client fold holds blanks for them, so the blank is the only value on which a
+      // server-built and a client-built archive can be identical.
+      durationMs: null, resultPreview: null, usage: null,
     })
     // An agent the closing attempt left running was stranded BY that attempt's end — a
     // pure event-stream fact, unlike the live post-pass, so the fold may state it.
@@ -181,6 +186,43 @@ describe('§6.4 the fold, through the SPA import', () => {
     const view = materializeFold(state, 'running')
     expect(view.attemptScopes[0]!.agents![0]!.endedAt).toBe(5)
     expect(view.attemptScopes[1]!.agents).toBeUndefined()
+  })
+
+  it('successive resumes archive each scope in place, never overwrite (3 attempts)', () => {
+    // The discriminator against a fixed-index archive bug (an `openAttempt` that wrote
+    // scope 0, or the last scope, on every resume): the two archives are different sizes
+    // and carry different clocks — agent 1 does not exist at the first boundary, and
+    // agent 0's attempt-2 record is an in-attempt cache hit, not attempt 1's execution.
+    const state = fold(null, records([
+      { t: 1, type: 'run', state: 'started', engine: ENGINE },
+      { t: 2, type: 'agent', index: 0, key: 'k0', adapter: 'mock', state: 'queued' },
+      { t: 3, type: 'agent', index: 0, state: 'running', waitMs: 1 },
+      { t: 5, type: 'agent', index: 0, state: 'done', durationMs: 2 },
+      { t: 6, type: 'run', state: 'failed', error: 'boom' },
+      { t: 100, type: 'run', state: 'resumed' },
+      { t: 101, type: 'agent', index: 0, key: 'k0', adapter: 'mock', state: 'cached' },
+      { t: 102, type: 'agent', index: 1, key: 'k1', adapter: 'mock', state: 'queued' },
+      { t: 103, type: 'agent', index: 1, state: 'running', waitMs: 1 },
+      { t: 105, type: 'agent', index: 1, state: 'done', durationMs: 2 },
+      { t: 106, type: 'run', state: 'failed', error: 'boom again' },
+      { t: 200, type: 'run', state: 'resumed' },
+      { t: 201, type: 'agent', index: 0, key: 'k0', adapter: 'mock', state: 'queued' },
+    ]))
+    expect(state.attemptScopes).toHaveLength(3)
+    // Scope 0 still holds attempt 1's clocks — the second resume did not disturb it.
+    expect(state.attemptScopes[0]!.agents).toHaveLength(1)
+    expect(state.attemptScopes[0]!.agents![0]).toMatchObject({
+      index: 0, state: 'done', queuedAt: 2, startedAt: 3, endedAt: 5,
+    })
+    // Scope 1 holds attempt 2's: the replay instant for the in-attempt cache hit and
+    // agent 1's own execution.
+    const second = state.attemptScopes[1]!.agents!
+    expect(second).toHaveLength(2)
+    expect(second[0]).toMatchObject({ index: 0, state: 'cached', cached: true, endedAt: 101, startedAt: null })
+    expect(second[1]).toMatchObject({ index: 1, state: 'done', queuedAt: 102, startedAt: 103, endedAt: 105 })
+    // The current scope carries no archive — the top-level agents ARE attempt 3.
+    expect(state.attemptScopes[2]!.agents).toBeUndefined()
+    expect(state.agents[0]).toMatchObject({ state: 'queued', queuedAt: 201 })
   })
 
   it('openQuestions is zeroed and questions abandoned on a terminal run (M6)', () => {
@@ -558,6 +600,54 @@ describe('seedFoldState — snapshot-then-tail (§9.3)', () => {
     expect(resumed.agents[0]!.state).toBe('cached')
     expect(resumed.agents[0]!.startedAt).toBeNull()
     expect(resumed.attemptScopes).toHaveLength(2)
+  })
+
+  it('server-folded and seeded+SSE-folded archives are field-identical for the same events', () => {
+    // The parity hole this pins shut: `seedFoldState` blanks the §6.4 J two-home fields,
+    // so before `ARCHIVED_AGENT_BLANKS` a scope closed client-side archived
+    // `durationMs: null` where a server re-fold of the SAME events archived the event's
+    // figure — one attempt, two readings, decided by which side happened to fold the
+    // boundary. The archive now carries the blanks on both paths, and this compares the
+    // whole archived objects, not a curated field list.
+    const attemptOne = [
+      { t: 1, type: 'run', state: 'started', engine: ENGINE },
+      { t: 2, type: 'agent', index: 0, key: 'k0', label: 'worker', adapter: 'mock', state: 'queued' },
+      { t: 3, type: 'agent', index: 0, state: 'running', waitMs: 1, stallMs: 1000 },
+      { t: 4, type: 'agent', index: 0, state: 'progress', tool: 'grep', lastOutputAt: 4 },
+      { t: 5, type: 'agent', index: 0, state: 'steered', delivery: 'live', mailId: 'm1' },
+      { t: 6, type: 'agent', index: 0, state: 'done', durationMs: 2, resultPreview: 'ok', usage: { input: 1, output: 2, cost: 0.1 } },
+      { t: 7, type: 'agent', index: 1, key: 'k1', adapter: 'mock', state: 'running' },
+      { t: 8, type: 'run', state: 'failed', error: 'boom' },
+    ]
+    const boundary = [
+      { t: 100, type: 'run', state: 'resumed' },
+      { t: 101, type: 'agent', index: 0, key: 'k0', adapter: 'mock', state: 'cached' },
+    ]
+    // The server path: one fold over the whole events file.
+    const server = materializeFold(fold(null, records([...attemptOne, ...boundary])), 'running')
+    // The client path: snapshot at the terminal, seed, fold the resume as an SSE batch.
+    // The wire snapshot is POST-JOIN, so give the journal answers that DISAGREE with the
+    // events — parity must not depend on the journal happening to echo the stream.
+    const detail = detailFrom(attemptOne, 'failed')
+    Object.assign(detail.agents[0]!, {
+      attempts: 2, usage: { input: 9, output: 9, cost: 9 }, attemptUsage: { input: 9, output: 9, cost: 9 },
+      durationMs: 700, resultPreview: 'from the journal', resultBytes: 99, resultTruncated: true,
+      sessionId: 'sess-1', liveTokens: { input: 3, output: 4 }, cumTokens: { input: 3, output: 4 },
+    })
+    // …including the join's steer-origin rewrite, which `stripSteers` takes back out.
+    detail.agents[0]!.steers[0]!.origin = 'workflow'
+    const seeded = materializeFold(
+      fold(seedFoldState(detail), records(boundary, detail.offsets.events)),
+      'running',
+    )
+    expect(seeded.attemptScopes[0]!.agents).toEqual(server.attemptScopes[0]!.agents)
+  })
+
+  it('JOURNAL_DERIVED_FIELDS and ARCHIVED_AGENT_BLANKS name the same fields', () => {
+    // The seed strips exactly what the archive blanks. A key in one list and not the
+    // other is either a field the two folds would archive differently (the parity above
+    // breaks) or a field the seed deletes and nothing restores.
+    expect(Object.keys(ARCHIVED_AGENT_BLANKS).sort()).toEqual([...JOURNAL_DERIVED_FIELDS].sort())
   })
 
   it('an old snapshot with no archived agents seeds an honest absence, never a fabrication', () => {

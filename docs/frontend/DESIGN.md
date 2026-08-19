@@ -1361,11 +1361,19 @@ events are common — G10).
    post-pass). The archive is what lets the Timeline draw an EARLIER attempt's real
    execution bars on that attempt's own `[start, end)` window instead of the current
    attempt's replay ticks. The current scope never carries the field — the top-level
-   `agents` ARE the current attempt — and the §6.4 J join never touches an archive. A
-   snapshot written before this amendment has no archives; the Timeline renders that as an
-   explicit "this run recorded no per-attempt agent timing for attempt N" state (§6.5
-   degradation), never a backfill — reconstructing archives from old events files is out
-   of scope by ruling.
+   `agents` ARE the current attempt — and the §6.4 J join never touches an archive; its
+   two-home fields (`durationMs`, `usage`, …) are archived BLANK (`ARCHIVED_AGENT_BLANKS`
+   in the fold), because a server fold holds the event stream's answer for them while a
+   seeded client fold holds the stripped blanks, and the blank is the only value on which
+   a scope closed client-side and the same scope closed by a server re-fold can be
+   byte-identical. Because the fold is deterministic over the events log, a server re-fold
+   of a run recorded BEFORE this amendment reconstructs the archives for its earlier
+   attempts exactly as a live fold would have recorded them — replay of recorded facts,
+   not fabrication, and it happens naturally the first time a cold `SnapshotStore`
+   re-reads such a run's `events.jsonl`. The archive is genuinely absent only where no
+   fold with this amendment ever saw the events — e.g. a client seeded from an old
+   server's snapshot JSON — and there the Timeline renders an explicit "this run recorded
+   no per-attempt agent timing for attempt N" state (§6.5 degradation), never a guess.
 2. **phase** events: append `{phaseIndex: ev.phaseIndex ?? scope-local ordinal, title}`
    to the current attempt scope; identity is `phaseIndex`, not title (titles repeat
    legally — Sol-10).
