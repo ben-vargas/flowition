@@ -114,6 +114,22 @@ export function PromptCard(
 export function ReasoningCard({ item, expanded, onExpanded }: { item: ReasoningItem } & ToggleProps) {
   const lines = lineCount(item.text)
   const preview = item.text.replaceAll('\n', ' ').trim()
+  if (!preview) {
+    // Claude Code ≥2.1 headless redacts thinking to signature-only blocks; the engine
+    // now records them as {kind:'reasoning', text:'', redacted:true}, and old journals
+    // already hold plain empty-text records. Both mean the same thing: the model DID
+    // reason here — the row stays for the honest record (and it still drives the
+    // Thinking… indicator) — but there is nothing to expand, so no disclosure.
+    return (
+      <section className="reason redacted">
+        <div className="reason-h">
+          <Icon name="reasoning" size={14} className="dim" />
+          <span className="lbl">reasoning</span>
+          <span className="prev trunc">text withheld by the CLI</span>
+        </div>
+      </section>
+    )
+  }
   return (
     <section className="reason">
       <button

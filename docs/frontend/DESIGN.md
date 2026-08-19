@@ -266,7 +266,12 @@ Body (virtualized, §9.5): the **prompt block** first — full text (E10), colla
 lines with expand, copy button, and for old runs a "may be truncated at 4000 chars" note
 (G16). Then the timeline: step-collapse groups (§9.6), assistant text as safe markdown
 (§9.7), reasoning as collapsible blocks *with a one-line preview* (skippable without
-being opaque — never a bare "reasoning" pill), tool cards paired to results by id (E11; positional fallback labelled
+being opaque — never a bare "reasoning" pill) — except a *textless* reasoning item
+(Claude Code ≥2.1 headless redacts thinking to a signature-only block; the engine marks
+these `redacted:true`, and old journals hold plain empty text), which renders as a
+compact non-expandable "text withheld by the CLI" row: the row stays because the
+reasoning happened (and it still drives the Thinking… indicator below), but an
+expandable block that opens to nothing reads as lost content — tool cards paired to results by id (E11; positional fallback labelled
 approximate for old runs), terminal cards with ANSI (§9.8) — and **no fabricated exit
 codes**: render `exit code N` only when the adapter reported one; otherwise omit the line
 entirely (rendering `isError?1:0` as if measured is fabrication). `mail-in` /

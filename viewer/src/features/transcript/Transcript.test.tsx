@@ -218,6 +218,23 @@ describe('transcript route composition', () => {
     expect(screen.queryByText('Working…')).toBeNull()
   })
 
+  it('keeps Thinking… for a redacted-reasoning frontier and renders it without a disclosure', async () => {
+    // Claude ≥2.1 headless withholds thinking text; the records still carry the
+    // liveness signal (#95 parity: Thinking… vs Working…), so they must not be dropped.
+    const run = detail([agent(0)])
+    const view = render(<TranscriptRoute runId="run-1" agentIndex={0} dataApi={dataApi(run, {
+      0: [
+        { t: 1, kind: 'meta', attempt: 1, prompt: 'think' },
+        { t: 2, kind: 'reasoning', text: '' },
+        { t: 3, kind: 'reasoning', text: '', redacted: true },
+      ],
+    })} />)
+    await screen.findByText('Thinking…')
+    expect(screen.getByText('text withheld by the CLI')).toBeTruthy()
+    expect(view.container.querySelectorAll('.reason')).toHaveLength(1)
+    expect(view.container.querySelector('.reason button')).toBeNull()
+  })
+
   it('uses the narrow replacement while keeping compare in the stacked-selector state', async () => {
     vi.stubGlobal('matchMedia', (query: string) => ({
       matches: query.includes('max-width: 899px'),
