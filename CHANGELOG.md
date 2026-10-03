@@ -5,6 +5,12 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.2] — 2026-10-03
+
+### Fixed
+
+- Viewer browser tabs now identify the machine running the Flowition server with `flowition | <hostname>` (for example, `flowition | ben-ms`). The server uses its short hostname, removing macOS `.local` and other DNS suffixes, so the title stays consistent across client machines, URLs, and viewer navigation. The shared viewer bundle remains portable.
+
 ## [0.7.1] — 2026-08-18
 
 ### Fixed
