@@ -19,6 +19,7 @@ process.env.FLOWITION_HOME = HOME
 const { startViewer } = await import('../src/viewer/index.js')
 const { SECURITY_HEADERS, MAX_BODY_BYTES } = await import('../src/viewer/http.js')
 const { resolveRoute, validateMutationBody } = await import('../src/viewer/routes.js')
+const { renderIndexTitle } = await import('../src/viewer/static.js')
 
 const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)))
 
@@ -546,6 +547,34 @@ test('resolveRoute is matched on decoded segments', () => {
 })
 
 // ---- static serving (§5.8) --------------------------------------------------------
+
+test('static: title uses the server short hostname, with HTML escaping', () => {
+  const html = '<!doctype html><title>flowition</title><script src="/assets/app.js"></script>'
+  for (const hostname of ['ben-ms', 'ben-mbp.local', 'ben-mm.example.test']) {
+    const expected = html.replace('<title>flowition</title>', `<title>flowition | ${hostname.split('.')[0]}</title>`)
+    assert.equal(renderIndexTitle(html, hostname), expected)
+  }
+  assert.match(renderIndexTitle(html, 'ben-<&>'), /<title>flowition \| ben-&lt;&amp;&gt;<\/title>/)
+  assert.match(renderIndexTitle(html, 'ben-$&'), /<title>flowition \| ben-\$&amp;<\/title>/)
+})
+
+test('static: title identifies the server for every index route and accepted Host, with matching HEAD length', async () => {
+  const expected = fs.readFileSync(path.join(DIST, 'index.html'), 'utf8').replace('<title>flowition</title>', `<title>flowition | ${os.hostname().split('.')[0]}</title>`)
+  for (const host of [`127.0.0.1:${ro.port}`, `localhost:${ro.port}`, `[::1]:${ro.port}`]) {
+    for (const target of ['/', '/settings', '/run/flo_x', '/index.html']) {
+      const get = await request(ro.port, { path: target, headers: { host } })
+      const head = await request(ro.port, { method: 'HEAD', path: target, headers: { host } })
+      assert.equal(get.status, 200)
+      assert.equal(get.body, expected)
+      assert.equal(head.status, 200)
+      assert.equal(head.body, '')
+      assert.equal(get.headers['content-length'], String(Buffer.byteLength(expected)))
+      assert.equal(head.headers['content-length'], get.headers['content-length'])
+      assert.equal(get.headers['cache-control'], 'no-cache')
+    }
+  }
+  assert.equal(fs.readFileSync(path.join(DIST, 'index.html'), 'utf8'), '<!doctype html><title>flowition</title><script src="/assets/app.js"></script>', 'the portable bundle remains unchanged')
+})
 
 test('static: index.html for / and extension-less paths, assets by content type', async () => {
   const host = { host: `127.0.0.1:${ro.port}` }

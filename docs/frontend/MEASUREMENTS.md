@@ -4,7 +4,22 @@ Measured 2026-07-31 on a 16-core Apple M3 Max MacBook Pro with 64 GB RAM,
 macOS 27.0 (26A5388g), Node 24.14.0, and Google Chrome 150.0.7871.187.
 These are development-machine measurements, not portable benchmarks.
 
-Measured-source SHA-256: `1637a9c724674d66fb23a931f8d4529e5537874a07a82a6022786f76c71209f5`
+Measured-source SHA-256: `49f7b196fd52d1ea724f901bfc5fbd70eb3e07f4fa789003fc0c998a350a7d3d`
+
+Hash rebound 2026-10-03 for the server-hostname tab title: `src/viewer/static.js`
+renders `flowition | <short hostname>` into the index HTML, and `http.js` serves that
+buffer with matching GET/HEAD lengths. The added work is on index requests only;
+API, stream, transcript, state, and built-bundle bytes are unchanged. The full root
+suite on ben-ms (arm64, Node 24.21.0) passed all 547 behavioral/performance tests on
+this tree before this rebind; its sole failure was this stale fingerprint. Server
+measurements from that run: P2 handler samples 49.5/71.8/53.9/67.2/71.3 ms, P1 warm
+1.6 ms, P3 fold 34.1 ms cold / 0.7 ms delta, P7 supporting tail HTTP 11.8 ms, P8
+catch-up 203.6 ms for 100,000 records with zero duplicates. All asserted budgets
+passed. A separate temporary read-only viewer verified the exact `flowition | ben-ms`
+title in a browser through authentication, hash navigation, return to Runs, and
+reload. Browser performance rows below were NOT re-measured and retain their
+historical measurements; no new browser performance claim is made for index serving.
+
 
 Hash rebound 2026-08-18 (sixth rebind, fix/empty-reasoning-rendering round 2) for the
 redaction-cause split: `toItems.ts` now carries the record-level `redacted` flag onto

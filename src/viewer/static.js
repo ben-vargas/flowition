@@ -9,6 +9,7 @@
 // node: builtins only.
 import fs from 'node:fs'
 import path from 'node:path'
+import os from 'node:os'
 import { fileURLToPath } from 'node:url'
 
 // parity #24 — woff included alongside woff2 so a fallback font never serves as
@@ -30,6 +31,17 @@ const CONTENT_TYPES = {
 }
 
 export const contentTypeFor = (file) => CONTENT_TYPES[path.extname(file).toLowerCase()] ?? 'application/octet-stream'
+
+/**
+ * Identify the machine serving the viewer, independent of the client's URL. Use the
+ * short host name so macOS's `.local` (or another DNS suffix) does not enter the title.
+ * Render into HTML at request time: one portable bundle can serve every machine.
+ */
+export function renderIndexTitle(html, hostname = os.hostname()) {
+  const host = hostname.split('.')[0]
+  const title = `flowition | ${host}`.replace(/[&<>]/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' })[char])
+  return html.replace(/<title>[^]*?<\/title>/i, () => `<title>${title}</title>`)
+}
 
 /**
  * The built SPA's root: module-relative (`<pkg>/viewer/dist`, which is what ships in

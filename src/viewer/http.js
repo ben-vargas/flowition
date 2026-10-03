@@ -23,7 +23,7 @@
 //
 // node: builtins only.
 import { requestToken, tokenMatches, redactSecrets } from './auth.js'
-import { resolveAsset, contentTypeFor, cacheControlFor } from './static.js'
+import { resolveAsset, contentTypeFor, cacheControlFor, renderIndexTitle } from './static.js'
 import { STATUS_CODES } from 'node:http'
 import { EventEmitter } from 'node:events'
 import fs from 'node:fs'
@@ -638,12 +638,13 @@ function staticRequest(ctx, req, res, url, state) {
   const resolved = resolveAsset(ctx.distRoot, url.pathname)
   if (resolved.status) throw new HttpError(resolved.status, resolved.code, resolved.message)
 
+  const index = resolved.isIndex ? Buffer.from(renderIndexTitle(fs.readFileSync(resolved.realPath, 'utf8'))) : null
   const relative = path.relative(ctx.distRoot, resolved.file)
   const headers = {
     ...SECURITY_HEADERS,
     'content-type': contentTypeFor(resolved.realPath),
     'cache-control': resolved.isIndex ? 'no-cache' : cacheControlFor(relative),
-    'content-length': String(resolved.size),
+    'content-length': String(index ? index.length : resolved.size),
     ...connectionHeaders(req),
   }
   if (req.method === 'HEAD') {
@@ -652,6 +653,10 @@ function staticRequest(ctx, req, res, url, state) {
     return
   }
   res.writeHead(200, headers)
+  if (index) {
+    res.end(index)
+    return
+  }
   const stream = fs.createReadStream(resolved.realPath)
   stream.on('error', () => res.destroy())
   res.on('close', () => stream.destroy())
