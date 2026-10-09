@@ -16,14 +16,27 @@ type ButtonFaceState = { isHover: boolean; isCancelled: boolean }
 const ButtonFace: ClientModule<ButtonFaceProps, ButtonFaceState> = (props, surface) => {
   const { Box, Text } = surface.elements
   const state = surface.state ?? { isHover: false, isCancelled: false }
-  // A press is the button's release, unless the pointer left the region since it last
-  // came in (dragged away: cancelled, as a click is). Nothing waits on a redraw after
-  // the `down`, and no cell position is trusted: a trackpad tap delivers down and up
-  // in one frame, and on the desktop an edge of a bordered face can map outside it.
+  // A press is the button's release inside the region, unless the pointer left it since
+  // the press (dragged away: cancelled, as a click is). Nothing waits on a redraw after
+  // the `down` (a trackpad tap delivers down and up in one frame): the flag is set on
+  // the state object the running listener holds, and stored for the next.
+  // Outside the region, past a cell of slack (an edge of a bordered face can map just
+  // outside it on the desktop); negative coordinates are outside whatever the size.
+  const isOutside = (x: number, y: number) =>
+    x < -1 || y < -1 || (surface.columns > 0 && x > surface.columns) || (surface.rows > 0 && y > surface.rows)
   surface.onPointer((e) => {
     if (e.type === 'enter') surface.setState({ isHover: true, isCancelled: false })
     else if (e.type === 'leave') surface.setState({ isHover: false, isCancelled: true })
-    else if (e.type === 'up' && e.button !== 'right' && e.button !== 'middle' && !state.isCancelled) surface.post({ press: true })
+    else if (e.type === 'down') {
+      state.isCancelled = false
+      surface.setState({ isHover: true, isCancelled: false })
+    } else if (e.type === 'move' && e.button !== undefined && isOutside(e.x, e.y)) {
+      // Captured after a down, moves arrive from outside too, with or without a leave.
+      state.isCancelled = true
+      surface.setState({ isHover: false, isCancelled: true })
+    } else if (e.type === 'up' && e.button !== 'right' && e.button !== 'middle' && !state.isCancelled && !isOutside(e.x, e.y)) {
+      surface.post({ press: true })
+    }
   })
   surface.onKey((e) => {
     if (e.key === 'return' || e.key === ' ') surface.post({ press: true })

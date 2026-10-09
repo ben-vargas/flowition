@@ -24,9 +24,19 @@ const num = (v: unknown): number | null => (typeof v === 'number' && Number.isFi
 const isRecord = (v: unknown): v is Record<string, unknown> => v !== null && typeof v === 'object' && !Array.isArray(v)
 const obj = (v: unknown): Record<string, unknown> => (isRecord(v) ? v : {})
 
-/** `flowition runs --json`: newest first, as the CLI sorts it. */
+/**
+ * `flowition runs --json`: newest first, as the CLI sorts it. Output cut short (at
+ * $.process.run's 4 MiB cap, a very long history) keeps every complete row before the
+ * cut: the newest runs, which are the ones the pane shows.
+ */
 export function parseRuns(stdout: string): Run[] {
-  const rows: unknown = JSON.parse(stdout)
+  let rows: unknown
+  try {
+    rows = JSON.parse(stdout)
+  } catch {
+    const cut = stdout.lastIndexOf('},{')
+    rows = cut > 0 ? JSON.parse(`${stdout.slice(0, cut + 1)}]`) : []
+  }
   if (!Array.isArray(rows)) return []
   const out: Run[] = []
   for (const raw of rows) {
@@ -55,6 +65,7 @@ function toWorker(raw: unknown, kind: 'agent' | 'step'): Worker {
     // `t` moves on every progress event; only a finished worker's is needed (the run's
     // duration), so a live one carries none and its polls compare equal.
     lastAt: isActive(str(a.state) ?? '') ? null : num(a.t),
+    lastOutputAt: num(a.lastOutputAt),
     tool: str(a.tool),
     outputTokens: num(a.outputTokens) ?? num(usage.output),
     cost: num(usage.cost),
@@ -785,7 +796,10 @@ export function buildStructure(lanes: Lane[]): StructureNode[] {
         }
         list = item.children
       } else if (seg.kind === 'stage') {
+        // Each stage runs in a context of its own (fan-out ordinals restart at 0), so
+        // a fan-out nested in stage 1 is not the same container as one in stage 0.
         stage = seg.s
+        prefix += `/stage${seg.s ?? 0}`
       }
     }
     list.push({ type: 'lane', lane, stage })
@@ -894,4 +908,31 @@ export async function catchUpTimeline(tl: Timeline, size: number, file: string, 
     }
   }
   return { ...out, total: size }
+}
+
+// ---- reconciling cached details with the run list ---------------------------------
+
+/**
+ * Runs whose cached detail disagrees with the run list: something happened to them
+ * between polls (a resume elsewhere, a crash) that the pane did not see, so they are
+ * polled again rather than shown from the stale cache.
+ */
+export const staleDetailIds = (list: Run[], details: Record<string, Detail>): string[] =>
+  list.filter((r) => details[r.runId] !== undefined && details[r.runId]!.state !== r.state).map((r) => r.runId)
+
+/**
+ * Workers with their spend over every attempt, from the timeline's lanes: finished
+ * attempts' tokens and cost, plus the live attempt's tokens once it has produced any
+ * (status --json keeps the last attempt's count until new progress arrives, so output
+ * older than the live attempt's start belongs to the attempt before).
+ */
+export function lifetimeWorkers(workers: Worker[], lanes: Lane[]): Worker[] {
+  const byId = new Map(lanes.map((l) => [l.id, l]))
+  return workers.map((w) => {
+    const lane = byId.get(w.id)
+    if (!lane || typeof lane.cost !== 'number') return w
+    const isCurrent = isActive(w.state) && lane.startedAt !== null && w.lastOutputAt !== null && w.lastOutputAt >= lane.startedAt
+    const tokens = lane.outputTokens + (isCurrent ? (w.outputTokens ?? 0) : 0)
+    return { ...w, cost: lane.cost || null, outputTokens: tokens || null }
+  })
 }

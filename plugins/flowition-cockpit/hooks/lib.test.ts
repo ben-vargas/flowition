@@ -19,6 +19,8 @@ import {
   catchUpTimeline,
   emptyTimeline,
   stateColor,
+  lifetimeWorkers,
+  staleDetailIds,
   foldTimeline,
   parseTimeline,
   readStatus,
@@ -427,4 +429,58 @@ test('a resumed run\'s current phase is the one it last entered, not a count of 
   const tl = foldTimeline(emptyTimeline('r'), ev)
   expect(tl.currentPhase).toEqual({ index: 0, title: 'Scout' })
   expect(tl.phases.length).toBe(2)
+})
+
+describe('review loop round 1 (gpt-6.1-sol)', () => {
+  test('F4: a runs listing cut at the 4 MiB cap keeps its complete rows', async () => {
+    const rows = Array.from({ length: 5 }, (_, i) => ({ runId: `flo_${i}`, state: 'completed', file: 'w.mjs', createdAt: 100 - i }))
+    const json = JSON.stringify(rows)
+    const cut = json.slice(0, json.indexOf('flo_3') + 3) // mid-row
+    expect(parseRuns(cut).map((r) => r.runId)).toEqual(['flo_0', 'flo_1', 'flo_2'])
+    expect(parseRuns('not json')).toEqual([])
+  })
+
+  test('F1: a cached detail the list contradicts is polled again', async () => {
+    const d = parseStatus(STATUS, 1)
+    const list = [
+      { runId: 'flo_abc', state: 'completed', file: 'f', createdAt: 0 },
+      { runId: 'flo_x', state: 'running', file: 'f', createdAt: 0 },
+    ]
+    expect(staleDetailIds(list, { flo_abc: { ...d, state: 'failed' } })).toEqual(['flo_abc'])
+    expect(staleDetailIds(list, { flo_abc: { ...d, state: 'completed' } })).toEqual([])
+  })
+
+  test('F5: fan-outs nested in different pipeline stages stay separate containers', async () => {
+    const lane = (id: string, at: number, path: object[]) => ({
+      id, kind: 'agent' as const, index: Number(id.slice(2)), label: id, adapter: null, state: 'done', phaseIndex: null,
+      queuedAt: at, startedAt: at, endedAt: at + 1, lastSeenAt: at + 1, cost: 0, outputTokens: 0,
+      path: path.map((o) => ({ kind: '?', ordinal: null, count: null, stages: null, i: null, s: null, ...o })),
+    })
+    const inStage = (s: number) => [
+      { kind: 'pipeline', ordinal: 0, count: 1, stages: 2 }, { kind: 'item', i: 0 }, { kind: 'stage', s },
+      { kind: 'parallel', ordinal: 0, count: 1 }, { kind: 'item', i: 0 },
+    ]
+    const tree = buildStructure([lane('a:0', 0, inStage(0)), lane('a:1', 10, inStage(1))])
+    const pipe = tree[0]
+    if (pipe?.type !== 'fanout') throw new Error('expected the pipeline')
+    const nested = pipe.items[0]!.children.filter((c) => c.type === 'fanout')
+    expect(nested.length).toBe(2)
+  })
+
+  test('F6: a resumed agent counts its last attempt once until the new attempt produces output', async () => {
+    const lanes = parseTimeline(
+      [
+        { t: 1, type: 'agent', index: 0, label: 'a', state: 'queued' },
+        { t: 2, type: 'agent', index: 0, state: 'running' },
+        { t: 3, type: 'agent', index: 0, state: 'done', usage: { output: 100, cost: 1 } },
+        { t: 10, type: 'agent', index: 0, state: 'queued' },
+        { t: 11, type: 'agent', index: 0, state: 'running' },
+      ].map((r) => JSON.stringify(r)).join('\n') + '\n',
+      'r',
+      0,
+    ).lanes
+    const worker = { ...parseStatus(STATUS, 1).workers[0]!, id: 'a:0', state: 'running', outputTokens: 100, lastOutputAt: 3 }
+    expect(lifetimeWorkers([worker], lanes)[0]?.outputTokens).toBe(100)
+    expect(lifetimeWorkers([{ ...worker, outputTokens: 20, lastOutputAt: 12 }], lanes)[0]?.outputTokens).toBe(120)
+  })
 })

@@ -36,7 +36,9 @@ import {
   laneSvg,
   laneText,
   parseRuns,
+  lifetimeWorkers,
   readStatus,
+  staleDetailIds,
   parseTranscript,
   phaseGroups,
   placeholder,
@@ -107,8 +109,10 @@ let attachNextSince: number | null = null
 // each render sets its own, stamped with the render's number, and a face's click
 // (`ui.message` with `{ press }`) runs the newest. Pruned at the end of a render (never
 // during one, which would strand faces it already drew), keeping the last two renders'.
-const pressHandlers = new Map<string, { fn: () => unknown; render: number }>()
-let renderCount = 0
+const pressHandlers = new Map<string, { fn: () => unknown; render: number; surface: string }>()
+// Renders are counted per surface, and a render prunes only its own surface's handlers:
+// a terminal redraw never strands the faces a desktop pane still shows.
+const renderCounts = new Map<string, number>()
 // Bumped by each message sent: part of the fields' keys, so a sent field draws empty.
 let sent = 0
 // The session's working directory: where a run started from the pane runs.
@@ -219,13 +223,20 @@ async function refresh($: EngineInterface, force = false): Promise<void> {
     }
     const isPaneUp = (await $.ui.panes()).some((p) => p.id === PANE)
     const listEvery = list.some((r) => isLive(r.state)) ? 10_000 : isPaneUp ? 15_000 : 60_000
+    // A listing that fails keeps the last list and is reported; it never stops the
+    // watched runs' polls below (their toasts and wakes).
+    let listError: string | null = null
     if (mustList || mtime !== runsDirMtime || now - lastListAt >= listEvery) {
-      const ran = await flo($, ['runs', '--json'])
-      if (ran.exitCode !== 0) throw new Error(firstLine(ran.stderr) || `flowition runs exited ${ran.exitCode}`)
-      list = parseRuns(ran.stdout)
-      lastListAt = now
-      runsDirMtime = mtime
-      mustList = false
+      try {
+        const ran = await flo($, ['runs', '--json'])
+        if (ran.exitCode !== 0) throw new Error(firstLine(ran.stderr) || `flowition runs exited ${ran.exitCode}`)
+        list = parseRuns(ran.stdout)
+        lastListAt = now
+        runsDirMtime = mtime
+        mustList = false
+      } catch (err) {
+        listError = `Listing runs failed: ${err instanceof Error ? err.message : String(err)}`
+      }
     }
 
     let attached: string[] = await read($, attachedAtom)
@@ -251,15 +262,19 @@ async function refresh($: EngineInterface, force = false): Promise<void> {
     for (const id of watched) if (!details[id] || isLive(details[id].state)) ids.add(id)
     // An armed run is polled until a poll reconciles it (finds it ended) and disarms it.
     for (const id of wake) ids.add(id)
+    // So is any run whose cached detail the list now contradicts (resumed elsewhere).
+    for (const id of staleDetailIds(list, details)) ids.add(id)
     if (selected && (force || !details[selected] || isLive(details[selected].state))) ids.add(selected)
 
     const toasts: string[] = []
     const woken: string[] = []
+    const polled = new Set<string>()
     for (const id of ids) {
       const ran = await flo($, ['status', id, '--json'])
       if (ran.exitCode !== 0) continue
       const prev = details[id]
       const next = readStatus(ran.stdout, ran.isStdoutTruncated, prev, id, now)
+      polled.add(id)
       if (watched.has(id)) toasts.push(...transitions(prev, next))
       if (hasEnded(prev, next)) mustList = true
       if (shouldWake(prev, next, wake.includes(id))) woken.push(id)
@@ -267,9 +282,10 @@ async function refresh($: EngineInterface, force = false): Promise<void> {
       details[id] = prev && sameDetail(prev, next) ? prev : next
     }
 
-    // The list's state lags a poll behind; the detail just read is the truth.
+    // The list's state lags a poll behind; a detail read in this poll is the truth (a
+    // cached one is not: the list may know better, which is why it was re-polled).
     list = list.map((r) => {
-      const state = details[r.runId]?.state
+      const state = polled.has(r.runId) ? details[r.runId]?.state : undefined
       return state && state !== r.state ? { ...r, state } : r
     })
     // Keep detail only for what the pane or the toasts still need.
@@ -280,7 +296,7 @@ async function refresh($: EngineInterface, force = false): Promise<void> {
     // mid-click can swallow the click on the desktop.
     if (!sameJson(list, await read($, runsAtom))) await update($, runsAtom, () => list)
     if (!sameJson(details, await read($, detailsAtom))) await update($, detailsAtom, () => details)
-    if ((await read($, errorAtom)) !== null) await update($, errorAtom, () => null)
+    if ((await read($, errorAtom)) !== listError) await update($, errorAtom, () => listError)
     for (const text of toasts) $.ui.toast(text, { timeoutMs: 8000 })
     const status = statusLine(list, details)
     if (status !== lastStatus) {
@@ -288,8 +304,6 @@ async function refresh($: EngineInterface, force = false): Promise<void> {
       $.ui.status(status)
     }
 
-    await refreshThread($, now)
-    await refreshTimeline($)
 
     // The opt-in wake: a turn of Claude's own once the session is idle.
     if (woken.length) {
@@ -301,6 +315,19 @@ async function refresh($: EngineInterface, force = false): Promise<void> {
           text: `Flowition run ${id}${run ? ` (${run.file})` : ''} just finished: ${d?.state ?? 'ended'}. Read its result with \`flowition result ${id}\` and give me a short summary.`,
         })
       }
+    }
+
+    // The open thread and the timeline are read last, each on its own: a failed read
+    // (a file gone, a command refused) never holds back the toasts and wakes above.
+    try {
+      await refreshThread($, now)
+    } catch {
+      // the thread shows what it last read
+    }
+    try {
+      await refreshTimeline($)
+    } catch {
+      // the tabs show what they last read
     }
   } catch (err) {
     await update($, errorAtom, () => (err instanceof Error ? err.message : String(err)))
@@ -659,12 +686,13 @@ export const register: Register = (on) => {
   // A face was clicked (button.tsx, card.tsx): run the handler its render registered.
   on('ui.message', async ($, e) => {
     const data = e.data !== null && typeof e.data === 'object' ? (e.data as { press?: unknown }) : {}
-    if (data.press === true) await pressHandlers.get(e.element)?.fn()
+    if (data.press === true) await pressHandlers.get(`${e.surface}:${e.element}`)?.fn()
     return {}
   })
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
-    const render = ++renderCount
+    const render = (renderCounts.get(e.surface) ?? 0) + 1
+    renderCounts.set(e.surface, render)
     try {
       const els = $.ui.resolve(e)
       const { Box, Text, Button, Markdown, Code } = els
@@ -680,7 +708,7 @@ export const register: Register = (on) => {
       // what it draws, so a long title would push the badge out of the card).
       const face = (key: string, props: CardProps, onPress: () => unknown, fallback: () => ReturnType<typeof Box>) => {
         if (!Client) return fallback()
-        pressHandlers.set(key, { fn: onPress, render })
+        pressHandlers.set(`${e.surface}:${key}`, { fn: onPress, render, surface: e.surface })
         return (
           <Box flexGrow={1} flexShrink={1} minWidth={0}>
             <Client key={key} module="./card.tsx" props={props} width="100%" />
@@ -691,7 +719,7 @@ export const register: Register = (on) => {
       // column (a Client alone is as wide as what it draws, and would spill out).
       const btn = (key: string, label: string, onPress: () => unknown, variant: ButtonFaceProps['variant'] = 'secondary', fill = false) => {
         if (Client) {
-          pressHandlers.set(key, { fn: onPress, render })
+          pressHandlers.set(`${e.surface}:${key}`, { fn: onPress, render, surface: e.surface })
           return fill ? (
             <Box flexGrow={1} flexShrink={1} minWidth={0}>
               <Client key={key} module="./button.tsx" props={{ label, variant }} width="100%" />
@@ -934,18 +962,7 @@ export const register: Register = (on) => {
         const state = d?.state ?? run?.state ?? 'unknown'
         const live = isLive(state)
         // Each worker's spend over all its attempts, from the run's events, where read.
-        const lanes = new Map((timeline && timeline.runId === selected && Array.isArray(timeline.lanes) ? timeline.lanes : []).map((l) => [l.id, l]))
-        const workers = (d?.workers ?? []).map((w) => {
-          const lane = lanes.get(w.id)
-          return lane && typeof lane.cost === 'number' && (lane.cost > 0 || lane.outputTokens > 0)
-            ? {
-                ...w,
-                cost: lane.cost || w.cost,
-                // Finished attempts' tokens, plus the live attempt's so far.
-                outputTokens: lane.outputTokens + (isActive(w.state) ? (w.outputTokens ?? 0) : 0) || w.outputTokens,
-              }
-            : w
-        })
+        const workers = lifetimeWorkers(d?.workers ?? [], timeline && timeline.runId === selected && Array.isArray(timeline.lanes) ? timeline.lanes : [])
         const runCost = workers.reduce((sum, w) => sum + (w.cost ?? 0), 0)
         const agents = workers.filter((w) => w.kind === 'agent')
         const counts = progress(workers)
@@ -1482,7 +1499,7 @@ export const register: Register = (on) => {
       const els = $.ui.resolve(e)
       const { Box, Text, Button } = els
       const recover = () => select($, null)
-      pressHandlers.set('recover', { fn: recover, render: renderCount })
+      pressHandlers.set(`${e.surface}:recover`, { fn: recover, render, surface: e.surface })
       return (
         <Box flexDirection="column" gap={1}>
           <Text color="error" wrap="wrap">
@@ -1496,7 +1513,7 @@ export const register: Register = (on) => {
         </Box>
       )
     } finally {
-      for (const [key, h] of pressHandlers) if (h.render < render - 1) pressHandlers.delete(key)
+      for (const [key, h] of pressHandlers) if (h.surface === e.surface && h.render < render - 1) pressHandlers.delete(key)
     }
   })
 }

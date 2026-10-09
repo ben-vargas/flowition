@@ -18,6 +18,8 @@ export type FlowitionCockpitWorker = {
   state: string
   durationMs: number | null
   lastAt: number | null
+  /** When it last produced output (any attempt): tells a resumed attempt's progress from the last one's. */
+  lastOutputAt: number | null
   tool: string | null
   outputTokens: number | null
   cost: number | null
