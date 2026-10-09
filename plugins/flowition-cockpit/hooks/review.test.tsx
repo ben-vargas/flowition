@@ -297,3 +297,226 @@ test('R2-F10: a resumed attempt reusing a tool id never takes an earlier call\'s
   expect((await ui.findAll({ type: 'Code' })).filter((c) => c.text.endsWith('OUTPUT')).map((c) => c.text)).toEqual(['FIRST OUTPUT'])
   await ui.unmount()
 })
+
+// ---- round 3: the session harness, with events.jsonl, prompt refusals, capped status ----
+
+type World3 = World2 & {
+  dropPrompt: boolean
+  submitCalls: number
+  events: string
+  capCompleted: boolean
+  eventsDenied: boolean
+  statusGate: Promise<void> | null
+  statusEntered: (() => void) | null
+}
+
+function started3(on: On) {
+  const clock = mock.clock(on, { now: 100_000 })
+  const w: World3 = {
+    states: { flo_bad: 'failed', flo_live: 'running' },
+    errors: { flo_bad: 'FIRST failure' },
+    calls: [],
+    submitted: [],
+    statusDenied: null,
+    workflows: [],
+    transcript: '',
+    agents: [],
+    eventsGrowth: 0,
+    dropPrompt: false,
+    submitCalls: 0,
+    events: '',
+    capCompleted: false,
+    eventsDenied: false,
+    statusGate: null,
+    statusEntered: null,
+  }
+  mock.env(on, { HOME: '/home/t', FLOWITION_HOME: '/home/t/.flowition', FLOWITION_BIN: '/bin/flowition', PATH: '/usr/bin' })
+  on('session.start', ($, e) => ({ cwd: e.cwd }))
+  on('command.register', ($, e) => ({ value: { command: e.name } }))
+  on('fs.stat', ($, e) => ({
+    value: { kind: 'file', size: e.path.includes('/agents/') ? w.transcript.length : e.path.endsWith('events.jsonl') ? w.events.length : 0, mtimeMs: 1, isLink: false },
+  }))
+  on('fs.list', () => ({ value: [] }))
+  on('ui.open', () => ({ value: { isPlaced: true } }))
+  on('ui.panes', () => ({ value: [] }))
+  on('ui.status', () => ({ value: undefined }))
+  on('ui.toast', () => ({ value: undefined }))
+  on('ui.log', () => ({ value: undefined }))
+  on('ui.scroll', () => ({}))
+  on('prompt.submit', ($, e) => {
+    w.submitCalls++
+    if (w.dropPrompt) return { drop: 'temporary prompt block' }
+    w.submitted.push(e.text)
+    return { text: e.text }
+  })
+  on('process.run', async ($, e) => {
+    const args = e.argv.slice(1).join(' ')
+    w.calls.push(args)
+    if (e.argv[0] === '/bin/sh') {
+      if (w.eventsDenied && e.argv[5]?.endsWith('events.jsonl')) return { deny: 'event read denied' }
+      const from = Number(e.argv[4]) - 1
+      return ok((e.argv[5]?.includes('/agents/') ? w.transcript : w.events).slice(from, from + Number(e.argv[6])))
+    }
+    if (e.argv[0] === 'pwd') return ok('/home/t')
+    if (args === 'runs --json')
+      return ok(JSON.stringify(Object.entries(w.states).map(([runId, state], i) => ({ runId, state, file: 'w.workflow.mjs', createdAt: 1000 - i }))))
+    if (args.startsWith('status ')) {
+      const runId = e.argv[2] as string
+      const state = w.states[runId]
+      if (runId === 'flo_live' && w.statusGate) {
+        w.statusEntered?.()
+        await w.statusGate
+      }
+      if (state === 'completed' && w.capCompleted)
+        return {
+          value: {
+            exitCode: 0,
+            stderr: '',
+            stdout: `{"runId":"${runId}","state":"completed","result":{"status":"completed","result":"`.padEnd(4_194_304, 'x'),
+            isStdoutTruncated: true,
+            isStderrTruncated: false,
+          },
+        }
+      return ok(JSON.stringify({ runId, state, result: state === 'failed' ? { status: 'failed', error: w.errors[runId] } : null, phases: [], agents: w.agents, steps: [], questions: [], live: null }))
+    }
+    return ok('{"ok":true}')
+  })
+  return { w, clock }
+}
+const lines = (rows: object[]) => rows.map((r) => `${JSON.stringify(r)}\n`).join('')
+
+test('R3-F2: a release with no press on the face (or a second release) fires nothing', async ($, on) => {
+  const { w } = started3(on)
+  await $.command.run(flo('flo_live'))
+  const ui = await $.ui.mount(PANE('desktop'))
+  await ui.pointer({ in: 'cancel-run', type: 'down', x: 1, y: 0, button: 'left' })
+  await ui.pointer({ in: 'cancel-run', type: 'up', x: 1, y: 0, button: 'left' })
+  w.calls.length = 0
+  await ui.pointer({ in: 'cancel-run-yes', type: 'up', x: 1, y: 0, button: 'left' })
+  expect(w.calls).not.toContain('cancel flo_live')
+  // A whole press fires once; a repeated release after it does not fire again.
+  await ui.pointer({ in: 'cancel-run-yes', type: 'down', x: 1, y: 0, button: 'left' })
+  await ui.pointer({ in: 'cancel-run-yes', type: 'up', x: 1, y: 0, button: 'left' })
+  expect(w.calls.filter((c) => c === 'cancel flo_live').length).toBe(1)
+  await ui.unmount()
+})
+
+test('R3-F2: a card opens only on its own press, never on a stray release', async ($, on) => {
+  const { w } = started3(on)
+  await $.command.run(flo(''))
+  const ui = await $.ui.mount(PANE('desktop'))
+  await ui.pointer({ in: 'refresh', type: 'down', x: 1, y: 0, button: 'left' })
+  await ui.pointer({ in: 'refresh', type: 'up', x: 1, y: 0, button: 'left' })
+  void w
+  await ui.pointer({ in: 'card:flo_live', type: 'up', x: 1, y: 0, button: 'left' })
+  expect(await ui.find({ key: 'card:flo_live' })).toBeDefined()
+  await ui.unmount()
+})
+
+test('R3-F13: a refused wake prompt is tried again at the next poll, once accepted it stops', async ($, on) => {
+  const { w } = started3(on)
+  await $.command.run(flo('flo_live'))
+  const ui = await $.ui.mount(PANE('terminal'))
+  await ui.press({ key: 'wake' })
+  w.dropPrompt = true
+  w.states.flo_live = 'completed'
+  await ui.press({ key: 'refresh' })
+  w.dropPrompt = false
+  for (let i = 0; i < 3; i++) await ui.press({ key: 'refresh' })
+  expect([w.submitCalls, w.submitted.length]).toEqual([2, 1])
+  await ui.unmount()
+})
+
+test('R3: disarming while the completing status runs means no wake', async ($, on) => {
+  const { w } = started3(on)
+  await $.command.run(flo('flo_live'))
+  const ui = await $.ui.mount(PANE('terminal'))
+  await ui.press({ key: 'wake' })
+  let release!: () => void
+  let entered!: () => void
+  w.statusGate = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  const inStatus = new Promise<void>((resolve) => {
+    entered = resolve
+  })
+  w.statusEntered = entered
+  w.states.flo_live = 'completed'
+  const refreshing = ui.press({ key: 'refresh' })
+  await inStatus
+  await ui.press({ key: 'wake' })
+  release()
+  await refreshing
+  w.statusGate = null
+  expect(w.submitted).toEqual([])
+  await ui.unmount()
+})
+
+test('R3-F12: an ended (stale) run shows its abandoned phase and agent as interrupted', async ($, on) => {
+  const { w } = started3(on)
+  w.states.flo_live = 'stale'
+  w.agents = [{ index: 0, label: 'abandoned', adapter: 'claude', state: 'running', phaseIndex: 0 }]
+  w.events = lines([
+    { t: 1000, type: 'run', state: 'started', phases: [{ title: 'Verify' }] },
+    { t: 1100, type: 'phase', phaseIndex: 0, title: 'Verify' },
+    { t: 1200, type: 'agent', index: 0, label: 'abandoned', adapter: 'claude', state: 'running', phaseIndex: 0 },
+  ])
+  await $.command.run(flo('flo_live'))
+  const ui = await $.ui.mount(PANE('terminal'))
+  await ui.press({ key: 'tab:phases' })
+  const phase = (await ui.find({ key: 'phase:0' }))?.text ?? ''
+  expect(phase).not.toContain('running')
+  expect(phase).toContain('interrupted')
+  await ui.unmount()
+})
+
+test('R3-F6: a final status too large to read never double-counts output the events folded', async ($, on) => {
+  const { w } = started3(on)
+  w.agents = [{ index: 0, label: 'a', state: 'running', outputTokens: 100, lastOutputAt: 3 }]
+  w.events = lines([
+    { t: 1, type: 'run', state: 'started' },
+    { t: 2, type: 'agent', index: 0, label: 'a', state: 'running' },
+    { t: 3, type: 'agent', index: 0, state: 'progress', outputTokens: 100, lastOutputAt: 3 },
+  ])
+  await $.command.run(flo('flo_live'))
+  const ui = await $.ui.mount(PANE('terminal'))
+  w.capCompleted = true
+  w.states.flo_live = 'completed'
+  w.events += lines([
+    { t: 4, type: 'agent', index: 0, state: 'done', usage: { output: 100, cost: 1 }, lastOutputAt: 3 },
+    { t: 5, type: 'run', state: 'completed' },
+  ])
+  await ui.press({ key: 'refresh' })
+  await ui.redraw()
+  expect((await ui.find({ key: 't:tokens' }))?.text).toContain('100 tokens')
+  await ui.unmount()
+})
+
+test('R3-F11: an unreadable, older timeline never undercounts what status reports', async ($, on) => {
+  const { w } = started3(on)
+  w.states.flo_live = 'failed'
+  w.agents = [{ index: 0, label: 'a', state: 'failed', t: 4, lastOutputAt: 3, usage: { output: 100, cost: 1 } }]
+  w.events = lines([
+    { t: 1, type: 'run', state: 'started' },
+    { t: 2, type: 'agent', index: 0, label: 'a', state: 'running' },
+    { t: 4, type: 'agent', index: 0, state: 'failed', usage: { output: 100, cost: 1 } },
+    { t: 5, type: 'run', state: 'failed' },
+  ])
+  await $.command.run(flo('flo_live'))
+  const ui = await $.ui.mount(PANE('terminal'))
+  // Resumed elsewhere and finished: status knows the new attempt; the events cannot be read.
+  w.states.flo_live = 'completed'
+  w.agents = [{ index: 0, label: 'a', state: 'done', t: 10, lastOutputAt: 9, usage: { output: 200, cost: 2 } }]
+  w.events += lines([
+    { t: 6, type: 'run', state: 'resumed' },
+    { t: 7, type: 'agent', index: 0, state: 'running' },
+    { t: 10, type: 'agent', index: 0, state: 'done', usage: { output: 200, cost: 2 } },
+    { t: 11, type: 'run', state: 'completed' },
+  ])
+  w.eventsDenied = true
+  for (let i = 0; i < 3; i++) await ui.press({ key: 'refresh' })
+  expect((await ui.find({ key: 't:tokens' }))?.text).toContain('300 tokens')
+  expect((await ui.find({ key: 't:cost' }))?.text).toContain('$3.00')
+  expect(await ui.find({ text: /events could not be read just now/ })).toBeDefined()
+  await ui.unmount()
+})

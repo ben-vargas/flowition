@@ -704,7 +704,7 @@ export type PhaseGroup = {
   title: string
   isDeclared: boolean
   isReached: boolean
-  state: 'pending' | 'running' | 'done' | 'failed'
+  state: 'pending' | 'running' | 'done' | 'failed' | 'interrupted'
   workers: Worker[]
   startedAt: number | null
   endedAt: number | null
@@ -728,11 +728,13 @@ export function phaseGroups(tl: Timeline | null, workers: Worker[], observed: st
     const costs = ws.map((w) => w.cost).filter((c): c is number => c !== null)
     const state: PhaseGroup['state'] = ws.some((w) => w.state === 'failed' || w.state === 'cancelled')
       ? 'failed'
-      : ws.some((w) => isActive(w.state))
-        ? 'running'
-        : ws.length || isReached
-          ? 'done'
-          : 'pending'
+      : ws.some((w) => w.state === 'interrupted')
+        ? 'interrupted'
+        : ws.some((w) => isActive(w.state))
+          ? 'running'
+          : ws.length || isReached
+            ? 'done'
+            : 'pending'
     return {
       index,
       title,
@@ -921,21 +923,31 @@ export const staleDetailIds = (list: Run[], details: Record<string, Detail>): st
   list.filter((r) => details[r.runId] !== undefined && details[r.runId]!.state !== r.state).map((r) => r.runId)
 
 /**
- * Workers with their spend over every attempt, from the timeline's lanes: finished
- * attempts' tokens and cost, plus the live attempt's tokens once it has produced any
- * (status --json keeps the last attempt's count until new progress arrives, so output
- * older than the live attempt's start belongs to the attempt before).
+ * Workers with their spend over every attempt. The timeline's lanes hold every finished
+ * attempt it has read; to that is added
+ * - the live attempt's tokens, only while the run is live and the lane's attempt is
+ *   unfinished and has produced output since it started (status --json keeps the last
+ *   attempt's count until new progress arrives, and keeps a cached worker running when a
+ *   final status was too large to read), and
+ * - a finished attempt status reports that the timeline has not read yet (its reads lag
+ *   or fail): status's worker event is newer than anything the lane has seen.
  */
-export function lifetimeWorkers(workers: Worker[], lanes: Lane[]): Worker[] {
+export function lifetimeWorkers(workers: Worker[], lanes: Lane[], isRunLive: boolean): Worker[] {
   const byId = new Map(lanes.map((l) => [l.id, l]))
   return workers.map((w) => {
     const lane = byId.get(w.id)
     if (!lane || typeof lane.cost !== 'number') return w
-    const isCurrent = isActive(w.state) && lane.startedAt !== null && w.lastOutputAt !== null && w.lastOutputAt >= lane.startedAt
-    const tokens = lane.outputTokens + (isCurrent ? (w.outputTokens ?? 0) : 0)
-    return { ...w, cost: lane.cost || null, outputTokens: tokens || null }
+    const isLaneOpen = isActive(lane.state) && lane.endedAt === null && lane.startedAt !== null
+    const isCurrent = isRunLive && isLaneOpen && isActive(w.state) && w.lastOutputAt !== null && w.lastOutputAt >= (lane.startedAt ?? Infinity)
+    const isUnread = !isActive(w.state) && w.lastAt !== null && w.lastAt > lane.lastSeenAt
+    const tokens = lane.outputTokens + (isCurrent || isUnread ? (w.outputTokens ?? 0) : 0)
+    const cost = lane.cost + (isUnread ? (w.cost ?? 0) : 0)
+    return { ...w, cost: cost || null, outputTokens: tokens || null }
   })
 }
+
+/** Work an ended run left running or queued was abandoned: it shows as interrupted. */
+export const shownState = (state: string, isRunLive: boolean): string => (!isRunLive && isActive(state) ? 'interrupted' : state)
 
 /**
  * Each tool call's result, paired in transcript order within an attempt: a result goes

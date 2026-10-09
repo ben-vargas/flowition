@@ -4,6 +4,7 @@ import type { EngineInterface, ProcessRunResult, Register } from 'claude-code'
 import type {
   FlowitionCockpitDetail as Detail,
   FlowitionCockpitRun as Run,
+  FlowitionCockpitTimeline as Timeline,
   FlowitionCockpitWorker as Worker,
   FlowitionCockpitWorkflowFile as WorkflowFile,
 } from '../types'
@@ -38,6 +39,7 @@ import {
   parseRuns,
   lifetimeWorkers,
   pairToolResults,
+  shownState,
   readStatus,
   staleDetailIds,
   parseTranscript,
@@ -329,13 +331,23 @@ async function refresh($: EngineInterface, force = false): Promise<void> {
 
     // The opt-in wake: a turn of Claude's own once the session is idle.
     if (woken.length) {
-      await update($, wakeAtom, (all) => all.filter((id) => !woken.includes(id)))
-      for (const id of woken) {
+      // Only runs still armed now: one disarmed while this poll's status ran is skipped.
+      const armed = await read($, wakeAtom)
+      const due = woken.filter((id) => armed.includes(id))
+      await update($, wakeAtom, (all) => all.filter((id) => !due.includes(id)))
+      for (const id of due) {
         const run = list.find((r) => r.runId === id)
         const d = details[id]
-        void $.prompt.submit({
-          text: `Flowition run ${id}${run ? ` (${run.file})` : ''} just finished: ${d?.state ?? 'ended'}. Read its result with \`flowition result ${id}\` and give me a short summary.`,
-        })
+        // Not awaited (it resolves only once the session is idle and the turn starts);
+        // a prompt refused (dropped, or the call rejected) re-arms the wake.
+        void $.prompt
+          .submit({
+            text: `Flowition run ${id}${run ? ` (${run.file})` : ''} just finished: ${d?.state ?? 'ended'}. Read its result with \`flowition result ${id}\` and give me a short summary.`,
+          })
+          .then(
+            (r) => (r.drop !== undefined ? rearmWake($, id, r.drop) : undefined),
+            (err: unknown) => rearmWake($, id, err instanceof Error ? err.message : String(err)),
+          )
       }
     }
 
@@ -365,6 +377,9 @@ async function refresh($: EngineInterface, force = false): Promise<void> {
 // events.jsonl is read in chunks well under $.process.run's 4 MiB stdout cap, so no
 // read is ever cut short; a large run is caught up over a few polls.
 const EVENTS_CHUNK = 2 << 20
+// The run whose events.jsonl the last read could not advance (a read refused or
+// failing): its tiles say their totals may lean on status for attempts not read.
+let timelineFailedFor: string | null = null
 const EVENTS_CHUNKS_PER_POLL = 8
 
 /**
@@ -387,7 +402,14 @@ async function refreshTimeline($: EngineInterface): Promise<void> {
   const isUsable = prev !== null && prev.runId === runId && Array.isArray(prev.entries) && typeof prev.consumed === 'number' && prev.consumed <= size
   const from = isUsable ? prev : emptyTimeline(runId)
   if (isUsable && from.consumed === size) return
-  const tl = await catchUpTimeline(from, size, file, (argv) => $.process.run(argv, { timeoutMs: 10_000 }), EVENTS_CHUNK, EVENTS_CHUNKS_PER_POLL)
+  let tl: Timeline
+  try {
+    tl = await catchUpTimeline(from, size, file, (argv) => $.process.run(argv, { timeoutMs: 10_000 }), EVENTS_CHUNK, EVENTS_CHUNKS_PER_POLL)
+  } catch (err) {
+    timelineFailedFor = runId
+    throw err
+  }
+  timelineFailedFor = tl.consumed < size && tl.consumed === from.consumed ? runId : null
   await update($, timelineAtom, () => tl)
 }
 
@@ -444,6 +466,21 @@ async function eventsSize($: EngineInterface, runId: string): Promise<number | n
   } catch {
     return null
   }
+}
+
+// Refused wake prompts per run: re-armed (tried again at the next poll) up to
+// WAKE_RETRIES times, then the person is told and can ask Claude from the run.
+const wakeRefusals = new Map<string, number>()
+const WAKE_RETRIES = 3
+
+async function rearmWake($: EngineInterface, runId: string, reason: string): Promise<void> {
+  const n = (wakeRefusals.get(runId) ?? 0) + 1
+  wakeRefusals.set(runId, n)
+  if (n <= WAKE_RETRIES) {
+    await update($, wakeAtom, (all) => (all.includes(runId) ? all : [...all, runId]))
+    return
+  }
+  $.ui.toast(`Couldn't tell Claude that ${runId} finished (${reason}). Use Ask Claude… on the run instead.`, { timeoutMs: 10_000 })
 }
 
 /** The Refresh button: the run list and everything on screen, now. */
@@ -992,7 +1029,9 @@ export const register: Register = (on) => {
         const state = d?.state ?? run?.state ?? 'unknown'
         const live = isLive(state)
         // Each worker's spend over all its attempts, from the run's events, where read.
-        const workers = lifetimeWorkers(d?.workers ?? [], timeline && timeline.runId === selected && Array.isArray(timeline.lanes) ? timeline.lanes : [])
+        const workers = lifetimeWorkers(d?.workers ?? [], timeline && timeline.runId === selected && Array.isArray(timeline.lanes) ? timeline.lanes : [], live).map(
+          (w) => ({ ...w, state: shownState(w.state, live) }),
+        )
         const runCost = workers.reduce((sum, w) => sum + (w.cost ?? 0), 0)
         const agents = workers.filter((w) => w.kind === 'agent')
         const counts = progress(workers)
@@ -1015,7 +1054,8 @@ export const register: Register = (on) => {
         }
         // A timeline cached by an older version of this module (no `entries`) reads as none
       // until the next poll replaces it.
-      const tl = timeline && timeline.runId === selected && Array.isArray(timeline.entries) ? timeline : null
+      const read_ = timeline && timeline.runId === selected && Array.isArray(timeline.entries) ? timeline : null
+      const tl = read_ && !live ? { ...read_, lanes: read_.lanes.map((l) => ({ ...l, state: shownState(l.state, false) })) } : read_
         // The label of a lane or phase row: an agent's opens its thread.
         const workerLabel = (key: string, kind: 'agent' | 'step', index: number | null, label: string) =>
           kind === 'agent' && index !== null ? btn(key, `#${index}  ${label}`, () => openAgent($, index), 'plain', true) : <Text wrap="truncate-end">⚙ {label}</Text>
@@ -1249,6 +1289,11 @@ export const register: Register = (on) => {
                       : '—',
                 )}
                 {tile('cost', 'Cost', runCost ? fmtCost(runCost) : '—')}
+                {timelineFailedFor === selected ? (
+                  <Text dimColor wrap="wrap">
+                    This run's events could not be read just now; totals include what status reports for attempts not read yet.
+                  </Text>
+                ) : null}
                 {tl?.currentPhase
                   ? tile('phase', `Phase ${tl.currentPhase.index + 1}`, tl.currentPhase.title)
                   : d.phases.length

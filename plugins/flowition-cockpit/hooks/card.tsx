@@ -11,11 +11,11 @@ export type CardProps = {
   lines: { text: string; isError: boolean }[]
 }
 
-type CardState = { isHover: boolean; isCancelled: boolean }
+type CardState = { isHover: boolean; isCancelled: boolean; isPressed: boolean }
 
 const Card: ClientModule<CardProps, CardState> = (props, surface) => {
   const { Box, Text } = surface.elements
-  const state = surface.state ?? { isHover: false, isCancelled: false }
+  const state = surface.state ?? { isHover: false, isCancelled: false, isPressed: false }
   // A press is the button's release inside the region, unless the pointer left it since
   // the press (dragged away: cancelled, as a click is). Nothing waits on a redraw after
   // the `down` (a trackpad tap delivers down and up in one frame): the flag is set on
@@ -25,17 +25,23 @@ const Card: ClientModule<CardProps, CardState> = (props, surface) => {
   const isOutside = (x: number, y: number) =>
     x < 0 || y < 0 || (surface.columns > 0 && x >= surface.columns) || (surface.rows > 0 && y >= surface.rows)
   surface.onPointer((e) => {
-    if (e.type === 'enter') surface.setState({ isHover: true, isCancelled: false })
-    else if (e.type === 'leave') surface.setState({ isHover: false, isCancelled: true })
-    else if (e.type === 'down') {
+    if (e.type === 'enter') surface.setState({ ...state, isHover: true, isCancelled: false })
+    else if (e.type === 'leave') surface.setState({ ...state, isHover: false, isCancelled: true })
+    else if (e.type === 'down' && e.button === 'left' && !isOutside(e.x, e.y)) {
+      state.isPressed = true
       state.isCancelled = false
-      surface.setState({ isHover: true, isCancelled: false })
+      surface.setState({ isHover: true, isCancelled: false, isPressed: true })
     } else if (e.type === 'move' && e.button !== undefined && isOutside(e.x, e.y)) {
       // Captured after a down, moves arrive from outside too, with or without a leave.
       state.isCancelled = true
-      surface.setState({ isHover: false, isCancelled: true })
-    } else if (e.type === 'up' && e.button !== 'right' && e.button !== 'middle' && !state.isCancelled && !isOutside(e.x, e.y)) {
-      surface.post({ press: true })
+      surface.setState({ ...state, isHover: false, isCancelled: true })
+    } else if (e.type === 'up' && e.button === 'left') {
+      // Only a release that ends this face's own press, inside it, presses; and only
+      // once (the press is consumed), whatever up arrives after.
+      const isPress = state.isPressed && !state.isCancelled && !isOutside(e.x, e.y)
+      state.isPressed = false
+      surface.setState({ ...state, isPressed: false })
+      if (isPress) surface.post({ press: true })
     }
   })
   surface.onKey((e) => {
