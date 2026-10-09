@@ -545,6 +545,8 @@ type World4 = {
   hugeResult: boolean
   slimFails: boolean
   slimEnv: string | undefined
+  questions: object[]
+  toasts: string[]
 }
 
 function world4(on: On) {
@@ -566,9 +568,11 @@ function world4(on: On) {
     hugeResult: false,
     slimFails: false,
     slimEnv: undefined,
+    questions: [],
+    toasts: [],
   }
   const TEMP = '/tmp/flowition-cockpit-runs.TEST'
-  const statusOf = (runId: string) => ({ runId, state: w.states[runId], agents: w.agents, steps: [], questions: [], phases: [], result: w.hugeResult ? { status: 'completed', result: 'x'.repeat(4_200_000) } : null, live: null })
+  const statusOf = (runId: string) => ({ runId, state: w.states[runId], agents: w.agents, steps: [], questions: w.questions, phases: [], result: w.hugeResult ? { status: 'completed', result: 'x'.repeat(4_200_000) } : null, live: null })
   mock.env(on, { HOME: '/home/t', FLOWITION_HOME: '/home/t/.flowition', FLOWITION_BIN: '/bin/flowition', PATH: '/usr/bin' })
   on('session.start', ($, e) => ({ cwd: e.cwd }))
   on('command.register', ($, e) => ({ value: { command: e.name } }))
@@ -577,7 +581,10 @@ function world4(on: On) {
   on('ui.open', () => ({ value: { isPlaced: true } }))
   on('ui.panes', () => ({ value: [] }))
   on('ui.status', () => ({ value: undefined }))
-  on('ui.toast', () => ({ value: undefined }))
+  on('ui.toast', ($, e) => {
+    w.toasts.push(e.text)
+    return { value: undefined }
+  })
   on('ui.log', () => ({ value: undefined }))
   on('ui.scroll', () => ({}))
   on('prompt.submit', ($, e) => {
@@ -978,6 +985,43 @@ test('R6-F18: many agents, or a long log, never push the run\'s controls out of 
   expect([!!(await ui.find({ key: 'resume' })), !!(await ui.find({ text: /log 299 / }))]).toEqual([true, true])
   await ui.press({ key: 'tab:timeline' })
   expect(!!(await ui.find({ key: 'resume' }))).toBe(true)
+  await ui.unmount()
+})
+
+test('P2: the Phases tab draws its agents within the budget, so the run\'s controls still draw', async ($, on) => {
+  const { w } = world4(on)
+  w.states.flo_a = 'failed'
+  w.agents = Array.from({ length: 600 }, (_, i) => ({ index: i, label: `agent ${i} `.padEnd(300, 'l'), state: 'done', phase: 'Fan out', phaseIndex: 0 }))
+  w.events = lines([
+    { t: 1, type: 'run', state: 'started' },
+    { t: 2, type: 'phase', title: 'Fan out', phaseIndex: 0 },
+    ...Array.from({ length: 600 }, (_, i) => ({ t: 3, type: 'agent', index: i, label: `agent ${i} `.padEnd(300, 'l'), state: 'done', phaseIndex: 0 })),
+    { t: 400, type: 'run', state: 'failed' },
+  ])
+  await $.command.run(flo('flo_a'))
+  const ui = await $.ui.mount(PANE('terminal'))
+  await ui.press({ key: 'tab:phases' })
+  expect([!!(await ui.find({ key: 'resume' })), !!(await ui.find({ key: 'delete' })), !!(await ui.find({ text: /more not drawn here/ }))]).toEqual([true, true, true])
+  await ui.unmount()
+})
+
+test('P2: a question an ended run left unanswered toasts again when a resume asks it', async ($, on) => {
+  const { w } = world4(on)
+  w.states.flo_a = 'stale'
+  // Status lists the unanswered question, as src/cli.js reports it, before and after the resume.
+  w.questions = [{ qid: 'q0', question: 'Ship it?' }]
+  on('tool.call', { tool: 'Bash' }, () => ({ result: 'mock resume', text: 'started detached run flo_a' }))
+  await $.tool.call({ tool: 'Bash', command: 'flowition run a.workflow.mjs --resume flo_a --detach' })
+  const ui = await $.ui.mount(PANE('terminal'))
+  await ui.press({ key: 'refresh' })
+  await ui.press({ key: 'refresh' })
+  const asked = () => w.toasts.filter((t) => t.includes('Ship it?')).length
+  const before = asked()
+  w.states.flo_a = 'running'
+  await ui.press({ key: 'refresh' })
+  const afterResume = asked()
+  await ui.press({ key: 'refresh' })
+  expect([afterResume - before, asked() - afterResume]).toEqual([1, 0])
   await ui.unmount()
 })
 

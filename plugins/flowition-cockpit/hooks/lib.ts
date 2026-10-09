@@ -258,7 +258,10 @@ export const shouldWake = (_prev: Detail | undefined, next: Detail, isArmed: boo
 /** Toasts owed between two polls of one run: it ended, or it asked something new. */
 export function transitions(prev: Detail | undefined, next: Detail): string[] {
   const out: string[] = []
-  const asked = new Set(prev?.questions.map((q) => q.qid) ?? [])
+  // A question an ended run left unanswered is asked again, under the same qid, when the
+  // run is resumed: a run coming back from an end has asked nothing yet.
+  const isBack = prev !== undefined && isTerminal(prev.state) && !isTerminal(next.state)
+  const asked = new Set(isBack ? [] : (prev?.questions.map((q) => q.qid) ?? []))
   for (const q of next.questions) {
     if (!asked.has(q.qid)) out.push(`${next.runId} asks: ${q.question}`)
   }

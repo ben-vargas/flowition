@@ -1257,6 +1257,19 @@ export const register: Register = (on) => {
         const phasesView = () => {
           const groups = phaseGroups(tl, workers, d?.phases ?? [])
           if (!groups.length) return <Text dimColor>{tl ? 'No agents or phases yet.' : 'Loading the phases…'}</Text>
+          // Each phase's rows within what is left of the tab's budget, in order, so the
+          // run's controls below always draw; a phase says how many it leaves out.
+          let room = TAB_BUDGET
+          const rowsOf = (list: Worker[]) => {
+            const shown: Worker[] = []
+            for (const w of list) {
+              const n = w.label.length + 80
+              if (n > room) break
+              room -= n
+              shown.push(w)
+            }
+            return shown
+          }
           return (
             <Box key="phases" flexDirection="column" gap={1}>
               {groups.map((g) => {
@@ -1267,6 +1280,7 @@ export const register: Register = (on) => {
                   g.cost ? fmtCost(g.cost) : null,
                 ].filter(Boolean)
                 const badgeState = g.state === 'pending' ? (live ? 'not reached' : 'never reached') : g.state
+                const rows = rowsOf(g.workers)
                 return (
                   <Box
                     key={`phase:${g.index ?? 'none'}`}
@@ -1285,7 +1299,7 @@ export const register: Register = (on) => {
                       </Box>
                       <Text dimColor>{facts.join(' · ')}</Text>
                     </Box>
-                    {g.workers.map((w) => (
+                    {rows.map((w) => (
                       <Box key={`pw:${w.id}`} justifyContent="space-between" gap={1}>
                         <Box gap={1} flexShrink={1} flexGrow={1} minWidth={0} overflow="hidden">
                           <Text color={stateColor(w.state)}>●</Text>
@@ -1294,6 +1308,9 @@ export const register: Register = (on) => {
                         <Text dimColor>{[w.state, w.durationMs !== null ? fmtDuration(w.durationMs) : null].filter(Boolean).join(' · ')}</Text>
                       </Box>
                     ))}
+                    {rows.length < g.workers.length ? (
+                      <Text dimColor>{g.workers.length - rows.length} more not drawn here (a pane draws so much text); the viewer lists every one.</Text>
+                    ) : null}
                     {!g.workers.length ? <Text dimColor>{g.isReached ? 'No agents ran in this phase.' : 'Not reached.'}</Text> : null}
                   </Box>
                 )
