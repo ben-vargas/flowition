@@ -21,7 +21,8 @@ function setup(on: On) {
   on('ui.toast',($,e)=>{w.toasts.push(e.text);return {value:undefined}})
   on('ui.log',()=>({value:undefined}))
   on('ui.scroll',()=>({}))
-  on('tool.call', {tool:'Bash'},()=>({result:w.output,text:w.output}))
+  // (duringBash: what the command does while it runs, e.g. a resume making its run live.)
+  on('tool.call', {tool:'Bash'},()=>{(w as {duringBash?:()=>void}).duringBash?.();return {result:w.output,text:w.output}})
   on('process.run', async ($,e)=>{
     const args=e.argv.slice(1).join(' '); w.calls.push(args)
     if(e.argv[0]==='/bin/sh') {const from=Number(e.argv[4])-1; return ok(w.transcript.slice(from,from+Number(e.argv[6])))}
@@ -62,7 +63,7 @@ test('A6: backgrounded foreground resume attaches despite old createdAt',async($
   const {w,clock}=setup(on)
   await $.session.start({cwd:'/home/t',surface:'terminal',isInteractive:true})
   w.output='Command running in background with ID: abc'
-  w.states.flo_old='running'
+  ;(w as {duringBash?:()=>void}).duringBash=()=>{w.states.flo_old='running'}
   await $.tool.call({tool:'Bash',command:'flowition resume flo_old'})
   await clock.advance(20_000)
   await $.command.run(flo('flo_old')); const ui=await $.ui.mount(PANE('terminal')); expect(await ui.find({text:/launched here/})).toBeDefined(); await ui.unmount()

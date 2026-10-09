@@ -16,7 +16,7 @@ function setup(on:On){
  on('fs.stat',($,e)=>({value:{kind:'file',size:e.path.includes('/agents/')?w.transcript.length:e.path.endsWith('events.jsonl')?w.events.length:0,mtimeMs:w.mtime,isLink:false}}))
  on('fs.list',()=>({value:[]}));on('ui.open',()=>({value:{isPlaced:true}}));on('ui.panes',()=>({value:[]}));on('ui.status',()=>({value:undefined}));on('ui.log',()=>({value:undefined}));on('ui.scroll',()=>({}))
  on('ui.toast',($,e)=>{w.toasts.push(e.text);return {value:undefined}})
- on('tool.call',{tool:'Bash'},async()=>{const gate=w.toolGate;w.toolGate=null;if(gate){w.toolEntered?.resolve();await gate.promise};return {result:w.output,text:w.output}})
+ on('tool.call',{tool:'Bash'},async()=>{(w as {duringBash?:()=>void}).duringBash?.();const gate=w.toolGate;w.toolGate=null;if(gate){w.toolEntered?.resolve();await gate.promise};return {result:w.output,text:w.output}})
  on('process.run',async($,e)=>{
    const argv=[...e.argv];w.calls.push(argv)
    if(argv[0]==='head')return ok(JSON.stringify({t:1,type:'run',state:'started',workflowFile:'/w.mjs'}))
@@ -57,7 +57,8 @@ for(const launches of [1,2])test(`A15 every explicit resume in a backgrounded Ba
  await $.session.start({cwd:'/home/t',surface:'terminal',isInteractive:true})
  await $.command.run(flo(''));const ui=await $.ui.mount(PANE('terminal'))
  w.output='Command running in background with ID: bash123'
- for(const id of ids)w.states[id]='running'
+ // The resumes make their runs live while the command runs (not before it).
+ ;(w as {duringBash?:()=>void}).duringBash=()=>{for(const id of ids)w.states[id]='running'}
  w.questions=[{qid:'q0',t:100_000,question:'Need input'}]
  await $.tool.call({tool:'Bash',command:ids.map(id=>`flowition resume ${id} --json`).join(' & ')+' & wait'})
  await ui.press({key:'refresh'});await clock.advance(30_000)

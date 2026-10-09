@@ -65,6 +65,7 @@ import {
   staleDetailIds,
   parseTranscript,
   appendEvents,
+  baselineOf,
   extractRunIds,
   launchesIn,
   boundThread,
@@ -993,8 +994,18 @@ export const register: Register = (on) => {
     home = ''
     await ensureHome($)
     // A reload may bring new shapes for what $.state still holds from the old module:
-    // drop every cache the polls rebuild (details, timeline, thread, workflow files).
-    await update($, detailsAtom, () => ({}))
+    // drop every cache the polls rebuild (details, timeline, thread, workflow files) —
+    // except each watched run's notice baseline (its state and question identities), so
+    // a run that ended or asked during the reload is still announced, once.
+    const watchedIds = new Set([...(await read($, attachedAtom)), ...(await read($, wakeAtom))])
+    await update($, detailsAtom, (all) =>
+      Object.fromEntries(
+        Object.entries(all as Record<string, unknown>)
+          .filter(([id]) => watchedIds.has(id))
+          .map(([id, cached]) => [id, baselineOf(cached)] as const)
+          .filter((e): e is [string, Detail] => e[1] !== null),
+      ),
+    )
     await update($, timelineAtom, () => null)
     await update($, workflowsAtom, () => [])
     await update($, threadAtom, () => null)
@@ -1039,7 +1050,18 @@ export const register: Register = (on) => {
     const known = new Set(before.map((r) => r.runId))
     const launches = isBash ? launchesIn(e.command).invocations : [{ file: null, target: null, isBackground: false }]
     const resumeIds = [...new Set(launches.map((l) => l.target).filter((id): id is string => id !== null))]
-    const resumeFrom = await Promise.all(resumeIds.map(async (runId) => ({ runId, wasLive: isLive(before.find((r) => r.runId === runId)?.state ?? ''), size: await eventsSize($, runId) })))
+    // Read fresh, just before the command: a cached listing may be behind (another
+    // session resumed it meanwhile). A state that cannot be read counts as live, so it is
+    // no evidence; the events boundary still is.
+    const freshState = async (runId: string): Promise<string> => {
+      try {
+        const ran = await flo($, ['status', runId, '--json'])
+        return ran.exitCode === 0 ? readStatus(ran.stdout, ran.isStdoutTruncated, undefined, runId, 0).state : 'running'
+      } catch {
+        return 'running'
+      }
+    }
+    const resumeFrom = await Promise.all(resumeIds.map(async (runId) => ({ runId, wasLive: isLive(await freshState(runId)), size: await eventsSize($, runId) })))
     const startedAt = await $.clock.now()
     const ran = await next(e)
     if (ran.deny !== undefined) return ran

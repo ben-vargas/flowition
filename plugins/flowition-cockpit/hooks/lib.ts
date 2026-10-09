@@ -337,7 +337,7 @@ export function extractRunIds(text: string, max = Infinity): string[] {
       (event && RUN_LINE_STATES.test(event[2] ?? '') ? event[1] : undefined) ??
       ranId ??
       /^run (\S+)$/.exec(s)?.[1] ??
-      (envelope && (envelope.isDetached || !isInResult) ? envelope.runId : undefined)
+      (envelope && (envelope.isDetached || envelope.isOutcome || !isInResult) ? envelope.runId : undefined)
     if (ranId) isInResult = true
     if (id && RUN_ID.test(id) && !out.includes(id)) out.push(id)
   }
@@ -351,14 +351,18 @@ export function extractRunIds(text: string, max = Infinity): string[] {
  * CLI writes runId first, then detached or status, so a line cut short (a large result
  * Bash keeps only the head of) still names it; a runId nested in a result never does.
  */
-function launchEnvelope(line: string): { runId: string; isDetached: boolean } | null {
+function launchEnvelope(line: string): { runId: string; isDetached: boolean; isOutcome: boolean } | null {
   if (!line.startsWith('{')) return null
   try {
     const o = obj(JSON.parse(line))
-    return typeof o.runId === 'string' && (o.detached === true || typeof o.status === 'string') ? { runId: o.runId, isDetached: o.detached === true } : null
+    if (typeof o.runId !== 'string' || (o.detached !== true && typeof o.status !== 'string')) return null
+    // A foreground --json run's whole outcome, exactly as the CLI writes it: runId,
+    // status, then its result or error (a following launch's, after another's result).
+    const keys = Object.keys(o).join(',')
+    return { runId: o.runId, isDetached: o.detached === true, isOutcome: keys === 'runId,status,result' || keys === 'runId,status,error' }
   } catch {
     const m = /^\{"runId":"([^"\\]+)","(detached|status)":/.exec(line)
-    return m ? { runId: m[1] as string, isDetached: m[2] === 'detached' } : null
+    return m ? { runId: m[1] as string, isDetached: m[2] === 'detached', isOutcome: false } : null
   }
 }
 
@@ -1086,6 +1090,7 @@ export function foldTimeline(prev: Timeline, text: string): Timeline {
         out.endedAt = null
         out.attemptAt = t
         out.attemptPhases = []
+        out.currentPhase = null
       }
       if (state) entry(t, 'run', `run ${state}${str(r.error) ? `: ${str(r.error)}` : ''}`, null, RUN_ENDED.has(state) ? stateColor(state) : 'suggestion')
     } else if (r.type === 'phase') {
@@ -1263,7 +1268,8 @@ export function phaseGroups(tl: Timeline | null, workers: Worker[], observed: st
   // is reached or the run completes, interrupted if the run stopped there.
   // Progression is the current attempt's: a resume replays from its first phase, so a
   // later phase reached only by an earlier attempt is not passed yet.
-  const current = tl?.currentPhase?.index ?? (observed.length ? observed.length - 1 : -1)
+  // (With events read, a new attempt that entered no phase yet has none: not the last.)
+  const current = tl ? (tl.currentPhase?.index ?? -1) : observed.length ? observed.length - 1 : -1
   const inAttempt = tl?.attemptPhases
   const emptyState = (index: number | null): PhaseGroup['state'] => {
     if (index === null || runState === undefined || runState === 'completed') return 'done'
@@ -1579,6 +1585,23 @@ export function reconcileWorkers(workers: Worker[], lanes: Lane[]): Worker[] {
  * but the open ones emptied (partial: the events fill in the workers). Every question
  * entry stays, so none is announced twice.
  */
+/**
+ * A cached detail of any shape (one an earlier version of this module stored) as a
+ * notice baseline: its state and its questions' identities, or null when unreadable.
+ */
+export function baselineOf(cached: unknown): Detail | null {
+  const d = obj(cached)
+  const runId = str(d.runId)
+  const state = str(d.state)
+  if (!runId || !state) return null
+  const questions = (Array.isArray(d.questions) ? d.questions : []).flatMap((q) => {
+    const o = obj(q)
+    const qid = str(o.qid)
+    return qid ? [{ qid, question: '', t: num(o.t), isOpen: o.isOpen === true, wasOpen: o.wasOpen === true || o.isOpen === true }] : []
+  })
+  return { ...placeholder(runId, num(d.fetchedAt) ?? 0), state, questions, isPartial: true }
+}
+
 /**
  * The least a watched run's detail can be and still carry what its notices compare: its
  * state, and each question's identity (qid, event, open). Partial: nothing else is known.
