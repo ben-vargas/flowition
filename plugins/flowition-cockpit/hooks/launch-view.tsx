@@ -73,6 +73,9 @@ export function launchView(
           {Input ? (
             <Input
               key={`launch-args:${chosen.path}`}
+              // Bound to the form's args, which Start and Enter launch with: what the
+              // field shows is what runs, whatever draft a surface kept under this key.
+              value={launch.args}
               label="Args (JSON, optional)"
               placeholder='{"topic": "..."}'
               submitLabel="Start"
