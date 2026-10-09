@@ -24,6 +24,9 @@ const TERMINAL = new Set(['completed', 'failed', 'cancelled', 'interrupted', 'st
 
 export const isTerminal = (state: string): boolean => TERMINAL.has(state)
 
+/** The states that end a paid attempt: each one's event carries that attempt's usage. */
+const PAID = new Set(['done', 'failed', 'cancelled'])
+
 /** An agent that can still be steered or cancelled. */
 export const isActive = (state: string): boolean => isLive(state) || state === 'queued'
 
@@ -59,25 +62,76 @@ export function parseRuns(stdout: string): Run[] {
 /** How many of the newest runs a history too long for one read keeps (with every unfinished one). */
 export const RUNS_KEPT = 2000
 
-/**
- * Filters `flowition runs --json` on stdin down to every unfinished run plus the newest
- * RUNS_KEPT (argv[1]): line 1 is the full count, line 2 the rows. Run by node, which the
- * CLI itself needs, when a listing is too long for $.process.run's 4 MiB stdout.
- */
-export const RUNS_FILTER_JS = `let s='';process.stdin.setEncoding('utf8');process.stdin.on('data',(d)=>{s+=d});process.stdin.on('end',()=>{const rows=JSON.parse(s);const done=new Set(${JSON.stringify([...TERMINAL])});const n=Number(process.argv[1]);process.stdout.write(rows.length+'\\n'+JSON.stringify(rows.filter((r,i)=>i<n||!done.has(r&&r.state)))+'\\n')})`
+// Node programs run on `flowition … --json` output when it is too large for one
+// $.process.run read (4 MiB of stdout). node is the CLI's own runtime, so it is there
+// wherever the CLI runs; each program reads stdin and takes its options in argv.
+const ON_STDIN = (body: string) => `let s='';process.stdin.setEncoding('utf8');process.stdin.on('data',(d)=>{s+=d});process.stdin.on('end',()=>{${body}})`
 
-/** The filter's output: the rows it kept and how many there were in all. */
-export function parseFilteredRuns(stdout: string): { runs: Run[]; total: number | null } {
-  const nl = stdout.indexOf('\n')
-  const total = Number(stdout.slice(0, nl))
-  return { runs: parseRuns(stdout.slice(nl + 1)), total: nl > 0 && Number.isInteger(total) ? total : null }
+/**
+ * `runs --json` filtered down to every unfinished run plus the newest RUNS_KEPT
+ * (argv[1]), one JSON row per line after a first line holding the full count. It is
+ * written to a file and read back in chunks, so no number of rows is too many.
+ */
+export const RUNS_FILTER_JS = ON_STDIN(
+  `const rows=JSON.parse(s);const done=new Set(${JSON.stringify([...TERMINAL])});const n=Number(process.argv[1]);process.stdout.write([String(rows.length),...rows.filter((r,i)=>i<n||!done.has(r&&r.state)).map((r)=>JSON.stringify(r))].join('\\n')+'\\n')`,
+)
+
+/**
+ * `status --json` with the completed result's value left out (`resultOmitted`), which is
+ * what makes a status too large: its workers, phases and questions stay whole.
+ */
+export const STATUS_SLIM_JS = ON_STDIN(
+  `const d=JSON.parse(s);if(d.result&&typeof d.result==='object'){if('result' in d.result){d.result.result=null;d.resultOmitted=true}if(typeof d.result.error==='string'&&d.result.error.length>20000)d.result.error=d.result.error.slice(0,20000)+'…'}process.stdout.write(JSON.stringify(d))`,
+)
+
+/** The filtered listing's lines: the rows it kept, and how many runs there are in all. */
+export function parseFilteredRuns(lines: string[]): { runs: Run[]; total: number | null } {
+  const total = Number(lines[0])
+  const runs: Run[] = []
+  for (const line of lines.slice(1)) {
+    try {
+      runs.push(...parseRuns(`[${line}]`))
+    } catch {
+      // a row cut short: the reader stops at whole lines, so none should be
+    }
+  }
+  return { runs, total: lines.length > 0 && Number.isSafeInteger(total) ? total : null }
 }
 
 const grouped = (n: number): string => String(n).replace(/\B(?=(\d{3})+(?!\d))/g, ',')
 
-/** What the run list says it leaves out, or null when it shows every run. */
-export function listNoteOf(shown: number, total: number | null): string | null {
+/** The characters of run rows kept in $.state, which refuses a value over 4 MiB. */
+export const RUNS_STATE_BUDGET = 3 << 20
+
+/**
+ * The runs the pane keeps, newest first: every unfinished run, the ones `pinned` (this
+ * session's), and the newest RUNS_KEPT, within RUNS_STATE_BUDGET. Past the budget the
+ * live and pinned runs are kept first, then the rest newest first; `isCut` says
+ * whether any wanted run was left out.
+ */
+export function keepRuns(runs: Run[], pinned: string[]): { runs: Run[]; isCut: boolean } {
+  const pin = new Set(pinned)
+  const wanted = runs.filter((r, i) => i < RUNS_KEPT || !isTerminal(r.state) || pin.has(r.runId))
+  const isFirst = (r: Run) => isLive(r.state) || pin.has(r.runId)
+  const keep = new Set<Run>()
+  let budget = RUNS_STATE_BUDGET
+  for (const r of [...wanted.filter(isFirst), ...wanted.filter((r) => !isFirst(r))]) {
+    const n = JSON.stringify(r).length + 1
+    if (n > budget) break
+    budget -= n
+    keep.add(r)
+  }
+  return { runs: wanted.filter((r) => keep.has(r)), isCut: keep.size < wanted.length }
+}
+
+/**
+ * What the run list says it leaves out, or null when it shows every run: `total` is
+ * null when only the newest rows could be read, and `isComplete` false when the
+ * unfinished runs could not all be read or kept.
+ */
+export function listNoteOf(shown: number, total: number | null, isComplete = true): string | null {
   if (total === null) return 'The run history is too long to list in full: older runs are not shown.'
+  if (!isComplete) return `The run history (${grouped(total)} runs) is too large to list in full: some unfinished runs may not be shown.`
   return total > shown ? `Showing every unfinished run and the newest ${grouped(RUNS_KEPT)} of ${grouped(total)} runs.` : null
 }
 
@@ -100,7 +154,10 @@ function toWorker(raw: unknown, kind: 'agent' | 'step'): Worker {
     lastAt: isActive(str(a.state) ?? '') ? null : num(a.t),
     lastOutputAt: num(a.lastOutputAt),
     tool: str(a.tool),
-    outputTokens: num(a.outputTokens) ?? num(usage.output),
+    // A finished attempt's spend is its final usage (`usage: null`, as for one cancelled
+    // before it started, spent nothing); the progress counter is the live estimate, and
+    // status keeps an earlier attempt's until new progress arrives.
+    outputTokens: PAID.has(str(a.state) ?? '') && 'usage' in a ? (a.usage === null ? 0 : (num(usage.output) ?? num(a.outputTokens))) : (num(a.outputTokens) ?? num(usage.output)),
     cost: num(usage.cost),
     error: str(a.error),
     phase: str(a.phase),
@@ -132,7 +189,8 @@ export function parseStatus(stdout: string, fetchedAt: number): Detail {
     questions,
     spentOutputTokens: num(obj(d.live).spentOutputTokens),
     cost: costs.length ? costs.reduce((s, c) => s + c, 0) : null,
-    resultMarkdown: result.status === 'completed' && result.result !== undefined ? toMarkdown(result.result) : null,
+    resultMarkdown:
+      d.resultOmitted === true ? (isLive(str(d.state) ?? '') ? null : TOO_LARGE(runId)) : result.status === 'completed' && result.result !== undefined ? toMarkdown(result.result) : null,
     error: str(result.error),
     fetchedAt,
   }
@@ -157,7 +215,8 @@ export function readStatus(stdout: string, isTruncated: boolean, prev: Detail | 
   }
   const state = /^\{"runId":"[^"]*","state":"([a-z-]+)"/.exec(stdout)?.[1] ?? prev?.state ?? 'unknown'
   const base = prev ?? placeholder(runId, now)
-  return { ...base, runId, state, fetchedAt: now, resultMarkdown: isLive(state) ? null : TOO_LARGE(runId) }
+  // With no whole status read before, its workers are not known: they are not "none".
+  return { ...base, runId, state, fetchedAt: now, resultMarkdown: isLive(state) ? null : TOO_LARGE(runId), isPartial: prev === undefined || prev.isPartial === true }
 }
 
 /** A detail standing in for a run this session launched, before its first poll. */
@@ -949,6 +1008,30 @@ export async function catchUpTimeline(tl: Timeline, size: number, file: string, 
   return { ...out, total: size }
 }
 
+/**
+ * The whole lines of a file's first `size` bytes, read a chunk at a time (each well under
+ * the stdout cap); `isComplete` is false when a read failed or a line outgrew a chunk.
+ */
+export async function readLines(file: string, size: number, run: RunCommand, chunk = 2 << 20, maxChunks = 64): Promise<{ lines: string[]; isComplete: boolean }> {
+  const lines: string[] = []
+  let at = 0
+  for (let k = 0; k < maxChunks && at < size; k++) {
+    let ran: Awaited<ReturnType<RunCommand>>
+    try {
+      ran = await run(['/bin/sh', '-c', READ, 'sh', String(at + 1), file, String(Math.min(chunk, size - at))])
+    } catch {
+      break // a read refused or timed out: what was read stands, marked incomplete
+    }
+    if (ran.exitCode !== 0 || ran.isStdoutTruncated) break
+    const last = ran.stdout.lastIndexOf('\n')
+    if (last < 0) break
+    const body = ran.stdout.slice(0, last + 1)
+    for (const line of body.split('\n')) if (line) lines.push(line)
+    at += byteLength(body)
+  }
+  return { lines, isComplete: at === size }
+}
+
 // ---- reconciling cached details with the run list ---------------------------------
 
 /**
@@ -958,9 +1041,6 @@ export async function catchUpTimeline(tl: Timeline, size: number, file: string, 
  */
 export const staleDetailIds = (list: Run[], details: Record<string, Detail>): string[] =>
   list.filter((r) => details[r.runId] !== undefined && details[r.runId]!.state !== r.state).map((r) => r.runId)
-
-/** The states that end a paid attempt: each one's event carries that attempt's usage. */
-const PAID = new Set(['done', 'failed', 'cancelled'])
 
 /**
  * Workers with their spend over every attempt. The timeline's lanes hold every paid
@@ -993,6 +1073,32 @@ export function lifetimeWorkers(workers: Worker[], lanes: Lane[], isRunLive: boo
     return { ...w, cost: cost || null, outputTokens: tokens || null }
   })
 }
+
+/**
+ * Workers rebuilt from the timeline's lanes, for a run whose status could not be read
+ * whole: what the events say of each (label, adapter, state, timing); its spend comes
+ * from the lanes through lifetimeWorkers.
+ */
+export const lanesAsWorkers = (lanes: Lane[]): Worker[] =>
+  lanes.map((l) => ({
+    id: l.id,
+    kind: l.kind,
+    index: l.index,
+    label: l.label,
+    adapter: l.adapter,
+    model: null,
+    effort: null,
+    state: l.state,
+    durationMs: l.startedAt !== null && l.endedAt !== null ? l.endedAt - l.startedAt : null,
+    lastAt: l.endedAt,
+    lastOutputAt: null,
+    tool: null,
+    outputTokens: null,
+    cost: null,
+    error: null,
+    phase: null,
+    phaseIndex: l.phaseIndex,
+  }))
 
 /** Work an ended run left running or queued was abandoned: it shows as interrupted. */
 export const shownState = (state: string, isRunLive: boolean): string => (!isRunLive && isActive(state) ? 'interrupted' : state)

@@ -43,6 +43,8 @@ export type FlowitionCockpitDetail = {
   resultMarkdown: string | null
   error: string | null
   fetchedAt: number
+  /** Set when no status could be read whole: its workers and totals are not known. */
+  isPartial?: boolean
 }
 
 /** One record of an agent's transcript (`agents/<n>.jsonl`), trimmed for drawing. */

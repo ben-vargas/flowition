@@ -40,9 +40,13 @@ import {
   parseRuns,
   parseFilteredRuns,
   listNoteOf,
+  keepRuns,
+  readLines,
   RUNS_FILTER_JS,
   RUNS_KEPT,
+  STATUS_SLIM_JS,
   lifetimeWorkers,
+  lanesAsWorkers,
   pairToolResults,
   shownState,
   readStatus,
@@ -193,21 +197,54 @@ async function flo($: EngineInterface, args: string[], timeoutMs = 15_000): Prom
   throw failure
 }
 
+/** The environment a node program (lib's *_JS) runs in after the resolved CLI. */
+async function nodeEnv($: EngineInterface, js: string): Promise<Record<string, string>> {
+  const env: Record<string, string> = { FLOWITION_COCKPIT_JS: js }
+  if (bin?.includes('/')) env.PATH = `${dirname(bin)}:${(await $.env.get('PATH')) ?? '/usr/bin:/bin'}`
+  return env
+}
+
+// The filtered listing goes to a private temp file whose path and size come back; the
+// file is then read in chunks and removed.
+const LIST_TO_FILE =
+  'f=$(mktemp "${TMPDIR:-/tmp}/flowition-cockpit-runs.XXXXXX") || exit 1; ' +
+  'if "$0" runs --json | node -e "$FLOWITION_COCKPIT_JS" "$1" > "$f"; then printf "%s\\n" "$f"; wc -c < "$f"; else rm -f "$f"; exit 1; fi'
+
 /**
  * Every run, for a history too long for one `runs --json` read (over $.process.run's
- * 4 MiB stdout): the listing is piped through node, which the CLI itself runs on, and
- * comes back as every unfinished run plus the newest RUNS_KEPT, with the full count.
- * Null when that cannot run: the caller falls back to the newest rows it did read.
+ * 4 MiB stdout): every unfinished run plus the newest RUNS_KEPT, with the full count,
+ * however many rows that is. Null when it cannot run: the caller falls back to the
+ * newest rows it did read.
  */
-async function listLongHistory($: EngineInterface): Promise<{ runs: Run[]; total: number | null } | null> {
+async function listLongHistory($: EngineInterface): Promise<{ runs: Run[]; total: number | null; isComplete: boolean } | null> {
   if (!bin) return null
-  const env: Record<string, string> = { FLOWITION_COCKPIT_FILTER: RUNS_FILTER_JS }
-  if (bin.includes('/')) env.PATH = `${dirname(bin)}:${(await $.env.get('PATH')) ?? '/usr/bin:/bin'}`
+  let file = ''
   try {
-    const ran = await $.process.run(['/bin/sh', '-c', '"$0" runs --json | node -e "$FLOWITION_COCKPIT_FILTER" "$1"', bin, String(RUNS_KEPT)], { env, timeoutMs: 60_000 })
-    if (ran.exitCode !== 0) return null
-    const out = parseFilteredRuns(ran.stdout)
-    return out.total === null ? null : out
+    const made = await $.process.run(['/bin/sh', '-c', LIST_TO_FILE, bin, String(RUNS_KEPT)], { env: await nodeEnv($, RUNS_FILTER_JS), timeoutMs: 60_000 })
+    const [path, size] = made.stdout.split('\n')
+    if (made.exitCode !== 0 || !path?.startsWith('/')) return null
+    file = path
+    const bytes = Number(size?.trim())
+    if (!Number.isSafeInteger(bytes)) return null
+    const read = await readLines(file, bytes, (argv) => $.process.run(argv, { timeoutMs: 10_000 }))
+    const out = parseFilteredRuns(read.lines)
+    return out.total === null ? null : { ...out, isComplete: read.isComplete }
+  } catch {
+    return null
+  } finally {
+    if (file) await $.process.run(['rm', '-f', file]).catch(() => undefined)
+  }
+}
+
+/**
+ * A status too large to read whole (a huge completed result) read again without the
+ * result's value, so its workers and totals still show. Null when that is not possible.
+ */
+async function slimStatus($: EngineInterface, runId: string): Promise<ProcessRunResult | null> {
+  if (!bin) return null
+  try {
+    const ran = await $.process.run(['/bin/sh', '-c', '"$0" status "$1" --json | node -e "$FLOWITION_COCKPIT_JS"', bin, runId], { env: await nodeEnv($, STATUS_SLIM_JS), timeoutMs: 30_000 })
+    return ran.exitCode === 0 && !ran.isStdoutTruncated ? ran : null
   } catch {
     return null
   }
@@ -263,20 +300,29 @@ async function refresh($: EngineInterface, force = false): Promise<void> {
     // watched runs' polls below (their toasts and wakes).
     let listError: string | null = null
     let listNote: string | null = await read($, listNoteAtom)
+    let attached: string[] = await read($, attachedAtom)
     if (mustList || mtime !== runsDirMtime || now - lastListAt >= listEvery) {
       try {
         const ran = await flo($, ['runs', '--json'])
         if (ran.exitCode !== 0) throw new Error(firstLine(ran.stderr) || `flowition runs exited ${ran.exitCode}`)
+        let all: Run[]
+        let total: number | null
+        let isComplete = true
         if (ran.isStdoutTruncated) {
           // Cut short, the listing holds only the newest rows: an older run still live
           // would be missed, so the whole history is filtered down instead.
           const long = await listLongHistory($)
-          list = long ? long.runs : parseRuns(ran.stdout)
-          listNote = listNoteOf(list.length, long ? long.total : null)
+          all = long ? long.runs : parseRuns(ran.stdout)
+          total = long ? long.total : null
+          isComplete = long?.isComplete ?? false
         } else {
-          list = parseRuns(ran.stdout)
-          listNote = null
+          all = parseRuns(ran.stdout)
+          total = all.length
         }
+        // What the pane keeps of it ($.state holds 4 MiB a value), and says it left out.
+        const kept = keepRuns(all, attached)
+        list = kept.runs
+        listNote = listNoteOf(list.length, total, isComplete && !kept.isCut)
         lastListAt = now
         runsDirMtime = mtime
         mustList = false
@@ -285,7 +331,6 @@ async function refresh($: EngineInterface, force = false): Promise<void> {
       }
     }
 
-    let attached: string[] = await read($, attachedAtom)
     if (attachNextSince !== null) {
       const since = attachNextSince
       const fresh = list.find((r) => r.createdAt >= since && !attached.includes(r.runId))
@@ -331,6 +376,7 @@ async function refresh($: EngineInterface, force = false): Promise<void> {
         continue
       }
       if (ran.exitCode !== 0) continue
+      if (ran.isStdoutTruncated) ran = (await slimStatus($, id)) ?? ran
       polledAt.set(id, now)
       const size = await eventsSize($, id)
       if (size !== null) eventsSizeAt.set(id, size)
@@ -1072,10 +1118,11 @@ export const register: Register = (on) => {
         const run = runs.find((r) => r.runId === selected)
         const state = d?.state ?? run?.state ?? 'unknown'
         const live = isLive(state)
-        // Each worker's spend over all its attempts, from the run's events, where read.
-        const workers = lifetimeWorkers(d?.workers ?? [], timeline && timeline.runId === selected && Array.isArray(timeline.lanes) ? timeline.lanes : [], live).map(
-          (w) => ({ ...w, state: shownState(w.state, live) }),
-        )
+        // Each worker's spend over all its attempts, from the run's events, where read. A
+        // run with no status read whole shows the workers its events name.
+        const lanes = timeline && timeline.runId === selected && Array.isArray(timeline.lanes) ? timeline.lanes : []
+        const known = d?.isPartial && !d.workers.length ? lanesAsWorkers(lanes) : (d?.workers ?? [])
+        const workers = lifetimeWorkers(known, lanes, live).map((w) => ({ ...w, state: shownState(w.state, live) }))
         const runCost = workers.reduce((sum, w) => sum + (w.cost ?? 0), 0)
         const agents = workers.filter((w) => w.kind === 'agent')
         const counts = progress(workers)
@@ -1319,7 +1366,7 @@ export const register: Register = (on) => {
             {errorBanner}
             {d ? (
               <Box key="tiles" gap={1} flexWrap="wrap">
-                {tile('agents', 'Agents', `${done}/${workers.length} done`)}
+                {tile('agents', 'Agents', d.isPartial && !workers.length ? '—' : `${done}/${workers.length} done`)}
                 {tile('time', live ? 'Elapsed' : 'Took', took !== null ? fmtDuration(took) : '—')}
                 {tile(
                   'tokens',
@@ -1398,6 +1445,10 @@ export const register: Register = (on) => {
                   {workers.map(workerCard)}
                 </Box>
               </Box>
+            ) : d?.isPartial ? (
+              <Text dimColor wrap="wrap">
+                This run's status is too large for the pane to read, so its agents are not shown here. Open it in the viewer, or see `flowition status {selected}`.
+              </Text>
             ) : d ? (
               <Text dimColor>No agents yet.</Text>
             ) : null}

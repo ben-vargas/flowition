@@ -2,7 +2,7 @@
 // on the code before its fix.
 import { expect, mock, test } from 'claude-code/testing'
 import type { On } from 'claude-code'
-import { lifetimeWorkers, parseStatus, parseTimeline, RUNS_FILTER_JS } from './lib'
+import { lifetimeWorkers, parseStatus, parseTimeline, RUNS_FILTER_JS, STATUS_SLIM_JS } from './lib'
 
 type World = { states: Record<string, string>; listFails: boolean; transcriptFails: boolean; transcriptGrowth: number; calls: string[]; submitted: string[] }
 
@@ -537,11 +537,38 @@ type World4 = {
   bigList: object[] | null
   filterFails: boolean
   filterEnv: string | undefined
+  // The filtered listing's temp file, and whether reads of it past the first chunk fail.
+  listFile: string | null
+  listReadsFail: boolean
+  removed: string[]
+  // A completed result too large for one status read, and whether the slim re-read works.
+  hugeResult: boolean
+  slimFails: boolean
+  slimEnv: string | undefined
 }
 
 function world4(on: On) {
   const clock = mock.clock(on, { now: 100_000 })
-  const w: World4 = { states: { flo_a: 'failed', flo_b: 'running' }, agents: [], events: '', transcript: '', eventsDenied: false, calls: [], submits: 0, bigList: null, filterFails: false, filterEnv: undefined }
+  const w: World4 = {
+    states: { flo_a: 'failed', flo_b: 'running' },
+    agents: [],
+    events: '',
+    transcript: '',
+    eventsDenied: false,
+    calls: [],
+    submits: 0,
+    bigList: null,
+    filterFails: false,
+    filterEnv: undefined,
+    listFile: null,
+    listReadsFail: false,
+    removed: [],
+    hugeResult: false,
+    slimFails: false,
+    slimEnv: undefined,
+  }
+  const TEMP = '/tmp/flowition-cockpit-runs.TEST'
+  const statusOf = (runId: string) => ({ runId, state: w.states[runId], agents: w.agents, steps: [], questions: [], phases: [], result: w.hugeResult ? { status: 'completed', result: 'x'.repeat(4_200_000) } : null, live: null })
   mock.env(on, { HOME: '/home/t', FLOWITION_HOME: '/home/t/.flowition', FLOWITION_BIN: '/bin/flowition', PATH: '/usr/bin' })
   on('session.start', ($, e) => ({ cwd: e.cwd }))
   on('command.register', ($, e) => ({ value: { command: e.name } }))
@@ -561,12 +588,27 @@ function world4(on: On) {
     const args = e.argv.slice(1).join(' ')
     w.calls.push(args)
     if (e.argv[0] === '/bin/sh' && e.argv[2]?.includes('runs --json | node')) {
-      w.filterEnv = e.init?.env?.FLOWITION_COCKPIT_FILTER
-      if (w.filterFails || !w.bigList) return { value: { exitCode: 127, stdout: '', stderr: 'node: not found', isStdoutTruncated: false, isStderrTruncated: false } }
-      // What the filter computes: every unfinished run plus the newest N, after the count.
+      w.filterEnv = e.init?.env?.FLOWITION_COCKPIT_JS
+      if (w.filterFails || !w.bigList) return { value: { exitCode: 1, stdout: '', stderr: 'node: not found', isStdoutTruncated: false, isStderrTruncated: false } }
+      // What the filter writes: the count, then every unfinished run and the newest N, a row a line.
       const n = Number(e.argv[4])
       const kept = w.bigList.filter((r, i) => i < n || !['completed', 'failed', 'cancelled', 'interrupted', 'stale', 'corrupt', 'corrupt-result'].includes((r as { state: string }).state))
-      return ok(`${w.bigList.length}\n${JSON.stringify(kept)}\n`)
+      w.listFile = `${[String(w.bigList.length), ...kept.map((r) => JSON.stringify(r))].join('\n')}\n`
+      return ok(`${TEMP}\n   ${w.listFile.length}\n`)
+    }
+    if (e.argv[0] === '/bin/sh' && e.argv[2]?.includes('status "$1" --json | node')) {
+      w.slimEnv = e.init?.env?.FLOWITION_COCKPIT_JS
+      if (w.slimFails) return { value: { exitCode: 1, stdout: '', stderr: 'node: not found', isStdoutTruncated: false, isStderrTruncated: false } }
+      return ok(JSON.stringify({ ...statusOf(e.argv[4] as string), result: { status: 'completed', result: null }, resultOmitted: true }))
+    }
+    if (e.argv[0] === '/bin/sh' && e.argv[5] === TEMP) {
+      const from = Number(e.argv[4]) - 1
+      if (w.listReadsFail && from > 0) return { deny: 'read refused' }
+      return ok((w.listFile ?? '').slice(from, from + Number(e.argv[6])))
+    }
+    if (e.argv[0] === 'rm') {
+      w.removed.push(e.argv[2] as string)
+      return ok('')
     }
     if (e.argv[0] === '/bin/sh') {
       if (w.eventsDenied && e.argv[5]?.endsWith('events.jsonl')) return { deny: 'event read denied' }
@@ -576,7 +618,10 @@ function world4(on: On) {
     if (args === 'runs --json' && w.bigList)
       return { value: { exitCode: 0, stdout: JSON.stringify(w.bigList).slice(0, 4_194_304), stderr: '', isStdoutTruncated: true, isStderrTruncated: false } }
     if (args === 'runs --json') return ok(JSON.stringify(Object.entries(w.states).map(([runId, state]) => ({ runId, state, file: `${runId}.workflow.mjs`, createdAt: 1000 }))))
-    if (args.startsWith('status ')) return ok(JSON.stringify({ runId: e.argv[2], state: w.states[e.argv[2] as string], agents: w.agents, steps: [], questions: [], phases: [], result: null, live: null }))
+    if (args.startsWith('status ')) {
+      const text = JSON.stringify(statusOf(e.argv[2] as string))
+      return { value: { exitCode: 0, stdout: text.slice(0, 4_194_304), stderr: '', isStdoutTruncated: text.length > 4_194_304, isStderrTruncated: false } }
+    }
     return ok('{"ok":true}')
   })
   return { w, clock }
@@ -671,6 +716,7 @@ test('R4-F4: a history too long for one read still finds an older live run, and 
   await ui.press({ key: 'refresh' })
   expect([w.calls.includes('status flo_b --json'), !!(await ui.find({ key: 'open:flo_b' })), w.filterEnv === RUNS_FILTER_JS]).toEqual([true, true, true])
   expect(await ui.find({ text: 'Showing every unfinished run and the newest 2,000 of 11,001 runs.' })).toBeDefined()
+  expect(w.removed.length > 0 && w.removed.every((f) => f === '/tmp/flowition-cockpit-runs.TEST')).toBe(true)
   await ui.unmount()
 })
 
@@ -684,5 +730,123 @@ test('R4-F4: when the filter cannot run, the newest rows show and the list says 
   // The newest rows that were read still list (folded: one workflow, repeated).
   expect(await ui.find({ text: /0 live · \d+ shown/ })).toBeDefined()
   expect(await ui.find({ text: /too long to list in full/ })).toBeDefined()
+  await ui.unmount()
+})
+
+// ---- round 5 -----------------------------------------------------------------------
+
+const firstAttempt = () =>
+  lines([
+    { t: 1, type: 'run', state: 'started' },
+    { t: 2, type: 'agent', index: 0, state: 'running' },
+    { t: 3, type: 'agent', index: 0, state: 'progress', outputTokens: 100, lastOutputAt: 3 },
+    { t: 4, type: 'agent', index: 0, state: 'failed', usage: { output: 100, cost: 1 } },
+    { t: 5, type: 'run', state: 'failed' },
+  ])
+
+test('R5-F11: an unread failed attempt counts its final usage, not the progress counter status kept', async ($, on) => {
+  const { w } = world4(on)
+  w.agents = [{ index: 0, label: 'a', state: 'failed', t: 4, outputTokens: 100, usage: { output: 100, cost: 1 }, lastOutputAt: 3 }]
+  w.events = firstAttempt()
+  await $.command.run(flo('flo_a'))
+  const ui = await $.ui.mount(PANE('terminal'))
+  // As src/events.js folds it: the resumed attempt's usage merged over the old outputTokens.
+  w.agents = [{ index: 0, label: 'a', state: 'failed', t: 10, outputTokens: 100, usage: { output: 200, cost: 2 }, lastOutputAt: 9 }]
+  w.events += lines([{ t: 6, type: 'run', state: 'resumed' }, { t: 8, type: 'agent', index: 0, state: 'running' }, { t: 10, type: 'agent', index: 0, state: 'failed', usage: { output: 200, cost: 2 } }, { t: 11, type: 'run', state: 'failed' }])
+  w.eventsDenied = true
+  await ui.press({ key: 'refresh' })
+  expect([(await ui.find({ key: 't:tokens' }))?.text, (await ui.find({ key: 't:cost' }))?.text]).toEqual(['Output300 tokens', 'Cost$3.00'])
+  await ui.unmount()
+})
+
+test('R5-F11: an attempt cancelled before it started (usage: null) spends nothing', async ($, on) => {
+  const { w } = world4(on)
+  w.agents = [{ index: 0, label: 'a', state: 'failed', t: 4, outputTokens: 100, usage: { output: 100, cost: 1 }, lastOutputAt: 3 }]
+  w.events = firstAttempt()
+  await $.command.run(flo('flo_a'))
+  const ui = await $.ui.mount(PANE('terminal'))
+  w.agents = [{ index: 0, label: 'a', state: 'cancelled', t: 10, outputTokens: 100, usage: null, lastOutputAt: null }]
+  w.events += lines([{ t: 6, type: 'run', state: 'resumed' }, { t: 7, type: 'agent', index: 0, state: 'queued' }, { t: 10, type: 'agent', index: 0, state: 'cancelled', usage: null }, { t: 11, type: 'run', state: 'failed' }])
+  w.eventsDenied = true
+  await ui.press({ key: 'refresh' })
+  expect([(await ui.find({ key: 't:tokens' }))?.text, (await ui.find({ key: 't:cost' }))?.text]).toEqual(['Output100 tokens', 'Cost$1.00'])
+  await ui.unmount()
+})
+
+const unfinishedFlood = () => [
+  ...Array.from({ length: 30_000 }, (_, i) => ({ runId: `flo_${String(i).padStart(5, '0')}_${'r'.repeat(95)}`, state: 'unknown', file: '?', createdAt: 0 })),
+  { runId: 'flo_b', state: 'running', file: '?', createdAt: 0 },
+]
+
+test('R5-F4: a filtered listing itself over the stdout cap is read whole, in chunks', async ($, on) => {
+  const { w } = world4(on)
+  w.bigList = unfinishedFlood()
+  await $.command.run(flo(''))
+  const ui = await $.ui.mount(PANE('terminal'))
+  await ui.press({ key: 'refresh' })
+  expect((w.listFile ?? '').length).toBeGreaterThan(4_194_304)
+  const listings = w.calls.filter((c) => c.includes('runs --json | node')).length
+  expect([w.calls.includes('status flo_b --json'), !!(await ui.find({ key: 'open:flo_b' })), w.removed.length === listings]).toEqual([true, true, true])
+  // $.state holds 4 MiB a value: rows past its budget are left out, and the list says so.
+  expect(await ui.find({ text: /too large to list in full: some unfinished runs may not be shown/ })).toBeDefined()
+  await ui.unmount()
+})
+
+test('R5-F4: a filtered listing that cannot be read to its end never claims every unfinished run', async ($, on) => {
+  const { w } = world4(on)
+  w.bigList = unfinishedFlood()
+  w.listReadsFail = true
+  await $.command.run(flo(''))
+  const ui = await $.ui.mount(PANE('terminal'))
+  await ui.press({ key: 'refresh' })
+  expect(await ui.find({ text: /too large to list in full: some unfinished runs may not be shown/ })).toBeDefined()
+  expect(await ui.find({ text: /Showing every unfinished run/ })).toBeUndefined()
+  expect(w.removed.length).toBe(w.calls.filter((c) => c.includes('runs --json | node')).length)
+  await ui.unmount()
+})
+
+test('R5-F15: first opening a run with a huge result still shows its workers and totals', async ($, on) => {
+  const { w } = world4(on)
+  w.states.flo_a = 'completed'
+  w.hugeResult = true
+  w.agents = [{ index: 0, label: 'a', adapter: 'claude', state: 'done', t: 4, usage: { output: 100, cost: 1 } }]
+  w.events = lines([{ t: 1, type: 'run', state: 'started' }, { t: 2, type: 'agent', index: 0, label: 'a', state: 'running' }, { t: 4, type: 'agent', index: 0, state: 'done', usage: { output: 100, cost: 1 } }, { t: 5, type: 'run', state: 'completed' }])
+  await $.command.run(flo('flo_a'))
+  const ui = await $.ui.mount(PANE('terminal'))
+  for (let i = 0; i < 3; i++) await ui.press({ key: 'refresh' })
+  expect(w.slimEnv).toBe(STATUS_SLIM_JS)
+  expect([(await ui.find({ key: 't:agents' }))?.text, (await ui.find({ key: 't:tokens' }))?.text, (await ui.find({ key: 't:cost' }))?.text]).toEqual(['Agents1/1 done', 'Output100 tokens', 'Cost$1.00'])
+  expect(await ui.find({ text: /too large for the pane to read/ })).toBeDefined()
+  await ui.unmount()
+})
+
+test('R5-F15: when no whole status can be read, the agents are unknown, not none', async ($, on) => {
+  const { w } = world4(on)
+  w.states.flo_a = 'completed'
+  w.hugeResult = true
+  w.slimFails = true
+  w.agents = [{ index: 0, label: 'a', state: 'done', t: 4, usage: { output: 100, cost: 1 } }]
+  await $.command.run(flo('flo_a'))
+  const ui = await $.ui.mount(PANE('terminal'))
+  await ui.press({ key: 'refresh' })
+  expect((await ui.find({ key: 't:agents' }))?.text).toBe('Agents—')
+  expect(await ui.find({ text: /its agents are not shown here/ })).toBeDefined()
+  expect(await ui.find({ text: 'No agents yet.' })).toBeUndefined()
+  await ui.unmount()
+})
+
+test('R5-F15: with no whole status at all, the agents come from the run\'s events', async ($, on) => {
+  const { w } = world4(on)
+  w.states.flo_a = 'completed'
+  w.hugeResult = true
+  w.slimFails = true
+  w.events = lines([{ t: 1, type: 'run', state: 'started' }, { t: 2, type: 'agent', index: 0, label: 'a', adapter: 'claude', state: 'running' }, { t: 4, type: 'agent', index: 0, state: 'done', usage: { output: 100, cost: 1 } }, { t: 5, type: 'run', state: 'completed' }])
+  await $.command.run(flo('flo_a'))
+  const ui = await $.ui.mount(PANE('terminal'))
+  for (let i = 0; i < 3; i++) await ui.press({ key: 'refresh' })
+  await ui.press({ key: 'tab:timeline' })
+  expect(await ui.find({ key: 'lane:a:0' })).toBeDefined()
+  await ui.press({ key: 'tab:agents' })
+  expect([(await ui.find({ key: 't:agents' }))?.text, (await ui.find({ key: 't:tokens' }))?.text, (await ui.find({ key: 't:cost' }))?.text]).toEqual(['Agents1/1 done', 'Output100 tokens', 'Cost$1.00'])
   await ui.unmount()
 })
