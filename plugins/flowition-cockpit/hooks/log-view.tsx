@@ -5,7 +5,7 @@ import type { RenderElement } from 'claude-code'
 
 import type { FlowitionCockpitTimeline as Timeline } from '../types'
 import type { Ctx } from './ctx'
-import { fmtClock } from './lib'
+import { fmtClock, newestWithin, TAB_BUDGET } from './lib'
 
 const TAG: Record<Timeline['entries'][number]['kind'], string> = {
   log: 'log',
@@ -22,10 +22,12 @@ export function logView(c: Ctx, tl: Timeline | null): RenderElement {
   const { Box, Text } = c
   if (!tl) return <Text dimColor>Loading the log…</Text>
   if (!tl.entries.length) return <Text dimColor>Nothing logged yet.</Text>
+  // The newest entries within what a pane draws, so the run's controls below still draw.
+  const { shown, hidden } = newestWithin(tl.entries, (en) => en.text.length + 40, TAB_BUDGET)
   return (
     <Box key="log" flexDirection="column">
-      {tl.isEntriesCut ? <Text dimColor>Showing the newest {tl.entries.length} entries; the viewer has the rest.</Text> : null}
-      {tl.entries.map((en, i) => (
+      {tl.isEntriesCut || hidden ? <Text dimColor>Showing the newest {shown.length} entries; the viewer has the rest.</Text> : null}
+      {shown.map((en, i) => (
         <Box key={`log:${i}`} gap={1}>
           <Box minWidth={9} flexShrink={0}>
             <Text dimColor>{fmtClock(en.t)}</Text>

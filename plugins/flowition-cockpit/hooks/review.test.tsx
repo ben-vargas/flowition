@@ -592,7 +592,8 @@ function world4(on: On) {
       if (w.filterFails || !w.bigList) return { value: { exitCode: 1, stdout: '', stderr: 'node: not found', isStdoutTruncated: false, isStderrTruncated: false } }
       // What the filter writes: the count, then every unfinished run and the newest N, a row a line.
       const n = Number(e.argv[4])
-      const kept = w.bigList.filter((r, i) => i < n || !['completed', 'failed', 'cancelled', 'interrupted', 'stale', 'corrupt', 'corrupt-result'].includes((r as { state: string }).state))
+      const pin: string[] = JSON.parse(e.argv[5] ?? '[]')
+      const kept = w.bigList.filter((r, i) => i < n || pin.includes((r as { runId: string }).runId) || !['completed', 'failed', 'cancelled', 'interrupted', 'stale', 'corrupt', 'corrupt-result'].includes((r as { state: string }).state))
       w.listFile = `${[String(w.bigList.length), ...kept.map((r) => JSON.stringify(r))].join('\n')}\n`
       return ok(`${TEMP}\n   ${w.listFile.length}\n`)
     }
@@ -662,7 +663,7 @@ test('R4-F11: spend is matched to terminal events, not to timestamps alone', asy
   // A terminal sharing its running event's millisecond is still unread.
   const open = parseTimeline(lines([{ t: 10, type: 'agent', index: 0, state: 'running' }]), 'r', 0).lanes
   const done = parseStatus(JSON.stringify({ runId: 'r', state: 'completed', agents: [{ index: 0, state: 'done', t: 10, usage: { output: 100, cost: 1 } }] }), 11).workers
-  expect(lifetimeWorkers(done, open, false)[0]?.outputTokens).toBe(100)
+  expect(lifetimeWorkers(done, open)[0]?.outputTokens).toBe(100)
   // The events read ahead of status (a resume began after it): its done is counted once.
   const ahead = parseTimeline(
     lines([{ t: 2, type: 'agent', index: 0, state: 'running' }, { t: 4, type: 'agent', index: 0, state: 'done', usage: { output: 100, cost: 1 } }, { t: 6, type: 'agent', index: 0, state: 'running' }]),
@@ -670,7 +671,7 @@ test('R4-F11: spend is matched to terminal events, not to timestamps alone', asy
     0,
   ).lanes
   const behind = parseStatus(JSON.stringify({ runId: 'r', state: 'running', agents: [{ index: 0, state: 'done', t: 4, usage: { output: 100, cost: 1 } }] }), 7).workers
-  expect([lifetimeWorkers(behind, ahead, true)[0]?.outputTokens, lifetimeWorkers(behind, ahead, true)[0]?.cost]).toEqual([100, 1])
+  expect([lifetimeWorkers(behind, ahead)[0]?.outputTokens, lifetimeWorkers(behind, ahead)[0]?.cost]).toEqual([100, 1])
 })
 
 test('R4-F12: an agent thread of an ended run shows its abandoned work as interrupted', async ($, on) => {
@@ -830,7 +831,7 @@ test('R5-F15: when no whole status can be read, the agents are unknown, not none
   const ui = await $.ui.mount(PANE('terminal'))
   await ui.press({ key: 'refresh' })
   expect((await ui.find({ key: 't:agents' }))?.text).toBe('Agents—')
-  expect(await ui.find({ text: /its agents are not shown here/ })).toBeDefined()
+  expect(await ui.find({ text: /agents are not known here yet/ })).toBeDefined()
   expect(await ui.find({ text: 'No agents yet.' })).toBeUndefined()
   await ui.unmount()
 })
@@ -848,5 +849,133 @@ test('R5-F15: with no whole status at all, the agents come from the run\'s event
   expect(await ui.find({ key: 'lane:a:0' })).toBeDefined()
   await ui.press({ key: 'tab:agents' })
   expect([(await ui.find({ key: 't:agents' }))?.text, (await ui.find({ key: 't:tokens' }))?.text, (await ui.find({ key: 't:cost' }))?.text]).toEqual(['Agents1/1 done', 'Output100 tokens', 'Cost$1.00'])
+  await ui.unmount()
+})
+
+// ---- round 6 -----------------------------------------------------------------------
+
+test('R6-F15: an auto-attached run whose first status is too large shows the agents its events name', async ($, on) => {
+  const { w } = world4(on)
+  w.states.flo_a = 'completed'
+  w.hugeResult = true
+  w.slimFails = true
+  w.events = lines([{ t: 1, type: 'run', state: 'started' }, { t: 2, type: 'agent', index: 0, label: 'a', state: 'running' }, { t: 4, type: 'agent', index: 0, state: 'done', usage: { output: 100, cost: 1 } }, { t: 5, type: 'run', state: 'completed' }])
+  on('tool.call', { tool: 'Bash' }, () => ({ result: 'mock launch', text: 'started detached run flo_a' }))
+  await $.tool.call({ tool: 'Bash', command: 'flowition run a.workflow.mjs --detach' })
+  const ui = await $.ui.mount(PANE('terminal'))
+  for (let i = 0; i < 3; i++) await ui.press({ key: 'refresh' })
+  await ui.press({ key: 'tab:timeline' })
+  await ui.press({ key: 'tab:agents' })
+  expect([(await ui.find({ key: 't:agents' }))?.text, (await ui.find({ key: 't:tokens' }))?.text, (await ui.find({ key: 't:cost' }))?.text]).toEqual(['Agents1/1 done', 'Output100 tokens', 'Cost$1.00'])
+  await ui.unmount()
+})
+
+test('R6-F15: a cached earlier worker list never hides an agent a later attempt journaled', async ($, on) => {
+  const { w } = world4(on)
+  w.agents = [{ index: 0, label: 'a', state: 'failed', t: 4, usage: { output: 100, cost: 1 } }]
+  w.events = firstAttempt()
+  await $.command.run(flo('flo_a'))
+  const ui = await $.ui.mount(PANE('terminal'))
+  w.states.flo_a = 'completed'
+  w.hugeResult = true
+  w.slimFails = true
+  w.events += lines([{ t: 6, type: 'run', state: 'resumed' }, { t: 7, type: 'agent', index: 0, state: 'cached' }, { t: 8, type: 'agent', index: 1, label: 'b', state: 'running' }, { t: 10, type: 'agent', index: 1, state: 'done', usage: { output: 200, cost: 2 } }, { t: 11, type: 'run', state: 'completed' }])
+  for (let i = 0; i < 3; i++) await ui.press({ key: 'refresh' })
+  await ui.press({ key: 'tab:timeline' })
+  await ui.press({ key: 'tab:agents' })
+  expect([(await ui.find({ key: 't:agents' }))?.text, (await ui.find({ key: 't:tokens' }))?.text, (await ui.find({ key: 't:cost' }))?.text]).toEqual(['Agents2/2 done', 'Output300 tokens', 'Cost$3.00'])
+  await ui.unmount()
+})
+
+for (const filterFails of [false, true]) {
+  test(`R6-F16: this session's older finished run survives a long history (${filterFails ? 'filter unavailable' : 'filtered'})`, async ($, on) => {
+    const { w } = world4(on)
+    w.states.flo_a = 'completed'
+    on('tool.call', { tool: 'Bash' }, () => ({ result: 'mock launch', text: 'started detached run flo_a' }))
+    await $.tool.call({ tool: 'Bash', command: 'flowition run a.workflow.mjs --detach' })
+    const ui = await $.ui.mount(PANE('terminal'))
+    await ui.press({ key: 'refresh' })
+    await ui.press({ key: 'back' })
+    const before = !!(await ui.find({ key: 'open:flo_a' }))
+    w.bigList = [...longHistory(), { runId: 'flo_a', state: 'completed', file: 'a.workflow.mjs', createdAt: 0 }]
+    w.filterFails = filterFails
+    await ui.press({ key: 'refresh' })
+    expect([before, !!(await ui.find({ key: 'open:flo_a' }))]).toEqual([true, true])
+    await ui.unmount()
+  })
+}
+
+test('R6-F11: an ended run keeps the output its abandoned agent was known to make', async ($, on) => {
+  const { w } = world4(on)
+  w.states.flo_a = 'running'
+  w.agents = [{ index: 0, label: 'a', state: 'running', t: 3, outputTokens: 100, lastOutputAt: 3 }]
+  w.events = lines([{ t: 1, type: 'run', state: 'started' }, { t: 2, type: 'agent', index: 0, label: 'a', state: 'running' }, { t: 3, type: 'agent', index: 0, state: 'progress', outputTokens: 100, lastOutputAt: 3 }])
+  await $.command.run(flo('flo_a'))
+  const ui = await $.ui.mount(PANE('terminal'))
+  expect((await ui.find({ key: 't:tokens' }))?.text).toBe('Output100 tokens')
+  w.states.flo_a = 'stale'
+  await ui.press({ key: 'refresh' })
+  expect((await ui.find({ key: 't:tokens' }))?.text).toBe('Output100 tokens')
+  await ui.unmount()
+})
+
+test('R6-F17: details too large for $.state together never stop a completion wake', async ($, on) => {
+  const { w, clock } = started(on)
+  // Two runs whose statuses each fit a read but together pass $.state's 4 MiB.
+  w.agents = Array.from({ length: 1500 }, (_, i) => ({ index: i, label: `agent ${i}`, state: 'done', error: 'E'.repeat(1_500) }))
+  w.errors.flo_bad = 'E'.repeat(2_150_000)
+  on('tool.call', { tool: 'Bash' }, () => ({ result: 'mock launch', text: 'started detached run flo_bad' }))
+  await $.session.start({ cwd: '/home/t', surface: 'terminal', isInteractive: true })
+  await $.tool.call({ tool: 'Bash', command: 'flowition run a.workflow.mjs --detach' })
+  await $.command.run(flo('flo_live'))
+  const ui = await $.ui.mount(PANE('terminal'))
+  await ui.press({ key: 'wake' })
+  w.errors.flo_live = 'F'.repeat(2_150_000)
+  w.states.flo_live = 'failed'
+  await clock.advance(10_000)
+  await ui.redraw()
+  const texts = (await ui.findAll({ type: 'Text' })).map((n) => n.text)
+  expect(w.submitted.some((text) => text.includes('flo_live'))).toBe(true)
+  expect(texts.some((t) => /\$\.state|over the 4194304 limit/.test(t))).toBe(false)
+  // The run's own error draws, held to what a pane can draw beside its controls.
+  expect(texts.some((t) => t.startsWith('FFFF') && t.length < 5_000)).toBe(true)
+  expect(!!(await ui.find({ key: 'refresh' }))).toBe(true)
+  await ui.unmount()
+})
+
+test('R6-F18: a long run error never pushes the run\'s controls out of the drawing', async ($, on) => {
+  const { w } = started(on)
+  w.errors.flo_bad = 'E'.repeat(120_000)
+  await $.command.run(flo('flo_bad'))
+  const ui = await $.ui.mount(PANE('terminal'))
+  expect([!!(await ui.find({ key: 'refresh' })), !!(await ui.find({ key: 'resume' }))]).toEqual([true, true])
+  await ui.unmount()
+})
+
+test('R6-F18: a long thread draws its newest reply and its controls, saying what it leaves out', async ($, on) => {
+  const { w } = world4(on)
+  w.states.flo_a = 'running'
+  w.agents = [{ index: 0, label: 'a', adapter: 'claude', state: 'running' }]
+  w.transcript = lines([{ t: 1, kind: 'meta', prompt: 'p' }, ...Array.from({ length: 20 }, (_, i) => ({ t: 2 + i, kind: 'text', text: `reply ${i}: `.padEnd(6000, 'x') })), { t: 30, kind: 'text', text: 'LATEST REPLY' }])
+  await $.command.run(flo('flo_a'))
+  const ui = await $.ui.mount(PANE('terminal'))
+  await ui.press({ key: 'agent:0' })
+  expect([!!(await ui.find({ text: /LATEST REPLY/ })), !!(await ui.find({ key: 'follow' })), (await ui.findAll({ type: 'Input' })).some((n) => n.key?.startsWith('composer:'))]).toEqual([true, true, true])
+  expect(await ui.find({ text: /earlier events are not drawn here/ })).toBeDefined()
+  await ui.unmount()
+})
+
+test('R6-F18: many agents, or a long log, never push the run\'s controls out of the drawing', async ($, on) => {
+  const { w } = world4(on)
+  w.states.flo_a = 'failed'
+  w.agents = Array.from({ length: 600 }, (_, i) => ({ index: i, label: `agent ${i} `.padEnd(300, 'l'), state: 'failed', error: 'E'.repeat(5_000) }))
+  w.events = lines([{ t: 1, type: 'run', state: 'started' }, ...Array.from({ length: 300 }, (_, i) => ({ t: 2 + i, type: 'log', message: `log ${i} `.padEnd(2_000, 'm') })), { t: 400, type: 'run', state: 'failed' }])
+  await $.command.run(flo('flo_a'))
+  const ui = await $.ui.mount(PANE('terminal'))
+  expect([!!(await ui.find({ key: 'resume' })), !!(await ui.find({ text: /more not drawn here/ }))]).toEqual([true, true])
+  await ui.press({ key: 'tab:log' })
+  expect([!!(await ui.find({ key: 'resume' })), !!(await ui.find({ text: /log 299 / }))]).toEqual([true, true])
+  await ui.press({ key: 'tab:timeline' })
+  expect(!!(await ui.find({ key: 'resume' }))).toBe(true)
   await ui.unmount()
 })

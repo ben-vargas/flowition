@@ -20,6 +20,7 @@ import {
   emptyTimeline,
   stateColor,
   lifetimeWorkers,
+  reconcileWorkers,
   staleDetailIds,
   foldTimeline,
   parseTimeline,
@@ -484,9 +485,11 @@ describe('review loop round 1 (gpt-6.1-sol)', () => {
       0,
     ).lanes
     const worker = { ...parseStatus(STATUS, 1).workers[0]!, id: 'a:0', state: 'running', outputTokens: 100, lastOutputAt: 3 }
-    expect(lifetimeWorkers([worker], lanes, true)[0]?.outputTokens).toBe(100)
-    expect(lifetimeWorkers([{ ...worker, outputTokens: 20, lastOutputAt: 12 }], lanes, true)[0]?.outputTokens).toBe(120)
-    // The same live count on a run that has ended (a final status too large to read) is not added.
-    expect(lifetimeWorkers([{ ...worker, outputTokens: 20, lastOutputAt: 12 }], lanes, false)[0]?.outputTokens).toBe(100)
+    expect(lifetimeWorkers([worker], lanes)[0]?.outputTokens).toBe(100)
+    expect(lifetimeWorkers([{ ...worker, outputTokens: 20, lastOutputAt: 12 }], lanes)[0]?.outputTokens).toBe(120)
+    // A final status too large to read leaves an old worker on the detail (isPartial): it
+    // is reconciled with the lanes, so its stale live count is never added.
+    const stale = reconcileWorkers([{ ...worker, outputTokens: 20, lastOutputAt: 12 }], lanes)
+    expect(lifetimeWorkers(stale, lanes)[0]?.outputTokens).toBe(100)
   })
 })

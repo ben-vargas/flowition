@@ -46,7 +46,14 @@ import {
   RUNS_KEPT,
   STATUS_SLIM_JS,
   lifetimeWorkers,
-  lanesAsWorkers,
+  reconcileWorkers,
+  boundDetails,
+  clipDraw,
+  newestWithin,
+  firstWithin,
+  TAB_BUDGET,
+  DRAW_ITEM,
+  THREAD_BUDGET,
   pairToolResults,
   shownState,
   readStatus,
@@ -208,19 +215,20 @@ async function nodeEnv($: EngineInterface, js: string): Promise<Record<string, s
 // file is then read in chunks and removed.
 const LIST_TO_FILE =
   'f=$(mktemp "${TMPDIR:-/tmp}/flowition-cockpit-runs.XXXXXX") || exit 1; ' +
-  'if "$0" runs --json | node -e "$FLOWITION_COCKPIT_JS" "$1" > "$f"; then printf "%s\\n" "$f"; wc -c < "$f"; else rm -f "$f"; exit 1; fi'
+  'if "$0" runs --json | node -e "$FLOWITION_COCKPIT_JS" "$1" "$2" > "$f"; then printf "%s\\n" "$f"; wc -c < "$f"; else rm -f "$f"; exit 1; fi'
 
 /**
  * Every run, for a history too long for one `runs --json` read (over $.process.run's
- * 4 MiB stdout): every unfinished run plus the newest RUNS_KEPT, with the full count,
+ * 4 MiB stdout): every unfinished run, the newest RUNS_KEPT and this session's runs
+ * (`attached`, however old), with the full count,
  * however many rows that is. Null when it cannot run: the caller falls back to the
  * newest rows it did read.
  */
-async function listLongHistory($: EngineInterface): Promise<{ runs: Run[]; total: number | null; isComplete: boolean } | null> {
+async function listLongHistory($: EngineInterface, attached: string[]): Promise<{ runs: Run[]; total: number | null; isComplete: boolean } | null> {
   if (!bin) return null
   let file = ''
   try {
-    const made = await $.process.run(['/bin/sh', '-c', LIST_TO_FILE, bin, String(RUNS_KEPT)], { env: await nodeEnv($, RUNS_FILTER_JS), timeoutMs: 60_000 })
+    const made = await $.process.run(['/bin/sh', '-c', LIST_TO_FILE, bin, String(RUNS_KEPT), JSON.stringify(attached)], { env: await nodeEnv($, RUNS_FILTER_JS), timeoutMs: 60_000 })
     const [path, size] = made.stdout.split('\n')
     if (made.exitCode !== 0 || !path?.startsWith('/')) return null
     file = path
@@ -311,10 +319,17 @@ async function refresh($: EngineInterface, force = false): Promise<void> {
         if (ran.isStdoutTruncated) {
           // Cut short, the listing holds only the newest rows: an older run still live
           // would be missed, so the whole history is filtered down instead.
-          const long = await listLongHistory($)
+          const long = await listLongHistory($, attached)
           all = long ? long.runs : parseRuns(ran.stdout)
           total = long ? long.total : null
           isComplete = long?.isComplete ?? false
+          // A listing not read whole may lack this session's older runs: their last
+          // known rows stay (a complete listing without one means it was deleted).
+          if (total === null || !isComplete) {
+            const known = await read($, runsAtom)
+            const missing = known.filter((r) => attached.includes(r.runId) && !all.some((x) => x.runId === r.runId))
+            if (missing.length) all = [...all, ...missing].sort((a, b) => b.createdAt - a.createdAt)
+          }
         } else {
           all = parseRuns(ran.stdout)
           total = all.length
@@ -396,16 +411,28 @@ async function refresh($: EngineInterface, force = false): Promise<void> {
       const state = polled.has(r.runId) ? details[r.runId]?.state : undefined
       return state && state !== r.state ? { ...r, state } : r
     })
-    // Keep detail only for what the pane or the toasts still need.
+    // Keep detail only for what the pane or the toasts still need, within what $.state
+    // holds: the run on screen and the watched ones first.
     const keep = new Set([...ids, ...watched, ...(selected ? [selected] : [])])
     for (const id of Object.keys(details)) if (!keep.has(id)) delete details[id]
+    const kept = boundDetails(details, [...(selected ? [selected] : []), ...watched])
 
     // Write only what changed: every write redraws the pane, and a redraw landing
-    // mid-click can swallow the click on the desktop.
-    if (!sameJson(list, await read($, runsAtom))) await update($, runsAtom, () => list)
-    if (!sameJson(details, await read($, detailsAtom))) await update($, detailsAtom, () => details)
-    if ((await read($, errorAtom)) !== listError) await update($, errorAtom, () => listError)
-    if ((await read($, listNoteAtom)) !== listNote) await update($, listNoteAtom, () => listNote)
+    // mid-click can swallow the click on the desktop. A write refused never holds back
+    // the toasts and wakes below: they come from this poll, not from the cache.
+    let writeError: string | null = null
+    const write = async (fn: () => Promise<unknown>) => {
+      try {
+        await fn()
+      } catch (err) {
+        writeError = err instanceof Error ? err.message : String(err)
+      }
+    }
+    await write(async () => (sameJson(list, await read($, runsAtom)) ? undefined : update($, runsAtom, () => list)))
+    await write(async () => (sameJson(kept, await read($, detailsAtom)) ? undefined : update($, detailsAtom, () => kept)))
+    await write(async () => ((await read($, listNoteAtom)) === listNote ? undefined : update($, listNoteAtom, () => listNote)))
+    const shownError = listError ?? writeError
+    await write(async () => ((await read($, errorAtom)) === shownError ? undefined : update($, errorAtom, () => shownError)))
     for (const text of toasts) $.ui.toast(text, { timeoutMs: 8000 })
     const status = statusLine(list, details)
     if (status !== lastStatus) {
@@ -920,7 +947,7 @@ export const register: Register = (on) => {
       const errorBanner = error ? (
         <Box borderStyle="round" borderColor="error" paddingX={1}>
           <Text color="error" wrap="wrap">
-            {error}
+            {clipDraw(error, 2_000)}
           </Text>
         </Box>
       ) : null
@@ -933,14 +960,25 @@ export const register: Register = (on) => {
         const live = isLive(d?.state ?? 'unknown')
         // As the run's Agents tab shows it: spend over every attempt, and work an ended
         // run abandoned as interrupted.
-        const raw = d?.workers.filter((x) => x.kind === 'agent' && x.index === agentView) ?? []
         const lanes = timeline && timeline.runId === selected && Array.isArray(timeline.lanes) ? timeline.lanes : []
-        const w = lifetimeWorkers(raw, lanes, live).map((x) => ({ ...x, state: shownState(x.state, live) }))[0]
+        const known = d?.isPartial ? reconcileWorkers(d.workers, lanes) : (d?.workers ?? [])
+        const raw = known.filter((x) => x.kind === 'agent' && x.index === agentView)
+        const w = lifetimeWorkers(raw, lanes).map((x) => ({ ...x, state: shownState(x.state, live) }))[0]
         const canControl = live && w !== undefined && isActive(w.state)
         const label = w?.label ?? `agent ${agentView}`
         const wid = `${selected}:${agentView}`
         const events = th?.events ?? []
         const { byCall: results, paired } = pairToolResults(events)
+        // What a row draws, roughly, for the window below: the newest rows within the
+        // thread's budget, so the newest reply and the controls after it always draw.
+        const drawn = (ev: (typeof events)[number]): number => {
+          const isOpen = expanded.includes(`ev:${ev.seq}`)
+          const cap = (s: string | null | undefined, n = DRAW_ITEM) => Math.min((s ?? '').length, n)
+          if (ev.kind === 'tool') return 200 + cap(ev.summary, 300) + (isOpen ? cap(ev.input) + cap(results.get(ev.seq)?.output) : 0)
+          if (ev.kind === 'reasoning') return 80 + cap(ev.text, isOpen ? DRAW_ITEM : 280)
+          return 120 + cap(ev.text)
+        }
+        const { shown: windowed, hidden } = newestWithin(events, drawn, THREAD_BUDGET)
         const prompt = events.find((x) => x.kind === 'meta')?.text ?? null
         const toggle = (key: string) => update($, expandedAtom, (all) => (all.includes(key) ? all.filter((k) => k !== key) : [...all, key]))
         const facts = w
@@ -971,7 +1009,7 @@ export const register: Register = (on) => {
             case 'text':
               return (
                 <Box key={key} flexDirection="column">
-                  <Markdown key={`md:${ev.seq}`} text={ev.text ?? ''} />
+                  <Markdown key={`md:${ev.seq}`} text={clipDraw(ev.text ?? '')} />
                 </Box>
               )
             case 'reasoning': {
@@ -980,7 +1018,7 @@ export const register: Register = (on) => {
               return (
                 <Box key={key} flexDirection="column">
                   <Text dimColor italic wrap="wrap">
-                    {isLong && !isOpen ? `${text.slice(0, 280)}…` : text}
+                    {isLong && !isOpen ? `${text.slice(0, 280)}…` : clipDraw(text)}
                   </Text>
                   {isLong ? btn(`more:${ev.seq}`, isOpen ? 'less' : 'more', () => toggle(key), 'plain') : null}
                 </Box>
@@ -1008,8 +1046,8 @@ export const register: Register = (on) => {
                   ) : null}
                   {isOpen ? (
                     <Box key={`io:${ev.seq}`} flexDirection="column" borderStyle="round" borderDimColor paddingX={1}>
-                      {ev.input ? <Code source={ev.input} language="json" wrap="wrap" /> : null}
-                      {result?.output ? <Code source={result.output} wrap="wrap" /> : null}
+                      {ev.input ? <Code source={clipDraw(ev.input)} language="json" wrap="wrap" /> : null}
+                      {result?.output ? <Code source={clipDraw(result.output)} wrap="wrap" /> : null}
                     </Box>
                   ) : null}
                 </Box>
@@ -1028,7 +1066,7 @@ export const register: Register = (on) => {
                   <Text color="suggestion" bold>
                     You → {label} · {fmtClock(ev.t)}
                   </Text>
-                  <Text wrap="wrap">{ev.text ?? ''}</Text>
+                  <Text wrap="wrap">{clipDraw(ev.text ?? '')}</Text>
                 </Box>
               )
             case 'mail-out':
@@ -1037,13 +1075,13 @@ export const register: Register = (on) => {
                   <Text color="success" bold>
                     {label} → you · {fmtClock(ev.t)}
                   </Text>
-                  <Text wrap="wrap">{ev.text ?? ''}</Text>
+                  <Text wrap="wrap">{clipDraw(ev.text ?? '')}</Text>
                 </Box>
               )
             case 'status':
               return (
                 <Text dimColor wrap="wrap">
-                  · {ev.text ?? ''}
+                  · {clipDraw(ev.text ?? '', 2_000)}
                 </Text>
               )
             default:
@@ -1076,11 +1114,16 @@ export const register: Register = (on) => {
                   </Text>
                   {prompt.length > 400 ? btn('prompt-more', expanded.includes('prompt') ? 'less' : 'more', () => toggle('prompt'), 'plain') : null}
                 </Box>
-                <Text wrap="wrap">{prompt.length > 400 && !expanded.includes('prompt') ? `${prompt.slice(0, 400)}…` : prompt}</Text>
+                <Text wrap="wrap">{prompt.length > 400 && !expanded.includes('prompt') ? `${prompt.slice(0, 400)}…` : clipDraw(prompt)}</Text>
               </Box>
             ) : null}
+            {hidden ? (
+              <Text key="hidden" dimColor wrap="wrap">
+                {hidden} earlier {hidden === 1 ? 'event is' : 'events are'} not drawn here (a pane draws so much text); the viewer has the whole thread.
+              </Text>
+            ) : null}
             <Box key="events" flexDirection="column" gap={1}>
-              {events.map(row)}
+              {windowed.map(row)}
             </Box>
             {canControl && Input ? (
               <Box key="composer" borderStyle="round" borderColor="suggestion" paddingX={1} flexDirection="column">
@@ -1121,8 +1164,8 @@ export const register: Register = (on) => {
         // Each worker's spend over all its attempts, from the run's events, where read. A
         // run with no status read whole shows the workers its events name.
         const lanes = timeline && timeline.runId === selected && Array.isArray(timeline.lanes) ? timeline.lanes : []
-        const known = d?.isPartial && !d.workers.length ? lanesAsWorkers(lanes) : (d?.workers ?? [])
-        const workers = lifetimeWorkers(known, lanes, live).map((w) => ({ ...w, state: shownState(w.state, live) }))
+        const known = d?.isPartial ? reconcileWorkers(d.workers, lanes) : (d?.workers ?? [])
+        const workers = lifetimeWorkers(known, lanes).map((w) => ({ ...w, state: shownState(w.state, live) }))
         const runCost = workers.reduce((sum, w) => sum + (w.cost ?? 0), 0)
         const agents = workers.filter((w) => w.kind === 'agent')
         const counts = progress(workers)
@@ -1146,7 +1189,11 @@ export const register: Register = (on) => {
         // A timeline cached by an older version of this module (no `entries`) reads as none
       // until the next poll replaces it.
       const read_ = timeline && timeline.runId === selected && Array.isArray(timeline.entries) ? timeline : null
-      const tl = read_ && !live ? { ...read_, lanes: read_.lanes.map((l) => ({ ...l, state: shownState(l.state, false) })) } : read_
+      const shownLanes = read_ && !live ? read_.lanes.map((l) => ({ ...l, state: shownState(l.state, false) })) : (read_?.lanes ?? [])
+      // The lanes a tab draws: the first within what a pane draws, room left for controls.
+      const laneCut = firstWithin(shownLanes, (l) => l.label.length + 120, TAB_BUDGET)
+      const tl = read_ ? { ...read_, lanes: laneCut.shown } : read_
+      const cardCut = firstWithin(workers, (w) => w.label.length + (w.error ? Math.min(w.error.length, 300) : 0) + 160, TAB_BUDGET)
         // The label of a lane or phase row: an agent's opens its thread.
         const workerLabel = (key: string, kind: 'agent' | 'step', index: number | null, label: string) =>
           kind === 'agent' && index !== null ? btn(key, `#${index}  ${label}`, () => openAgent($, index), 'plain', true) : <Text wrap="truncate-end">⚙ {label}</Text>
@@ -1266,7 +1313,7 @@ export const register: Register = (on) => {
           const isFaced = Client !== null && w.kind === 'agent' && w.index !== null
           const lines = [
             ...(facts.length ? [{ text: facts.join(' · '), isError: false }] : []),
-            ...(w.error ? [{ text: w.error, isError: true }] : []),
+            ...(w.error ? [{ text: clipDraw(w.error, 300), isError: true }] : []),
           ]
           const border = isConfirming
             ? { borderColor: 'error' as const }
@@ -1302,7 +1349,7 @@ export const register: Register = (on) => {
               ) : null}
               {!isFaced && w.error ? (
                 <Text color="error" wrap="wrap">
-                  {w.error}
+                  {clipDraw(w.error, 300)}
                 </Text>
               ) : null}
               {canControl && steering === wid && Input ? (
@@ -1430,6 +1477,11 @@ export const register: Register = (on) => {
             {runTab !== 'agents' && tl && tl.consumed < tl.total ? (
               <Text dimColor>Reading this run's events… {Math.floor((tl.consumed / tl.total) * 100)}%</Text>
             ) : null}
+            {runTab !== 'agents' && runTab !== 'log' && laneCut.hidden ? (
+              <Text dimColor wrap="wrap">
+                Showing the first {laneCut.shown.length} of {shownLanes.length} agents and steps; the viewer has them all.
+              </Text>
+            ) : null}
             {runTab === 'timeline' ? (
               timelineView()
             ) : runTab === 'phases' ? (
@@ -1442,12 +1494,17 @@ export const register: Register = (on) => {
               <Box key="workers" flexDirection="column">
                 <Text bold>{agents.length === workers.length ? 'Agents' : 'Agents and steps'}</Text>
                 <Box flexWrap="wrap" gap={1}>
-                  {workers.map(workerCard)}
+                  {cardCut.shown.map(workerCard)}
                 </Box>
+                {cardCut.hidden ? (
+                  <Text dimColor wrap="wrap">
+                    {cardCut.hidden} more not drawn here (a pane draws so much text); the viewer lists every one.
+                  </Text>
+                ) : null}
               </Box>
             ) : d?.isPartial ? (
               <Text dimColor wrap="wrap">
-                This run's status is too large for the pane to read, so its agents are not shown here. Open it in the viewer, or see `flowition status {selected}`.
+                This run's agents are not known here yet: its status has not been read whole (it may be too large for the pane). Open it in the viewer, or see `flowition status {selected}`.
               </Text>
             ) : d ? (
               <Text dimColor>No agents yet.</Text>
@@ -1464,7 +1521,7 @@ export const register: Register = (on) => {
             {d?.error ? (
               <Box borderStyle="round" borderColor="error" paddingX={1}>
                 <Text color="error" wrap="wrap">
-                  {d.error}
+                  {clipDraw(d.error, 4_000)}
                 </Text>
               </Box>
             ) : null}

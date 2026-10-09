@@ -68,12 +68,12 @@ export const RUNS_KEPT = 2000
 const ON_STDIN = (body: string) => `let s='';process.stdin.setEncoding('utf8');process.stdin.on('data',(d)=>{s+=d});process.stdin.on('end',()=>{${body}})`
 
 /**
- * `runs --json` filtered down to every unfinished run plus the newest RUNS_KEPT
- * (argv[1]), one JSON row per line after a first line holding the full count. It is
+ * `runs --json` filtered down to every unfinished run, the newest RUNS_KEPT (argv[1])
+ * and the runs this session launched (argv[2], a JSON array of ids), one JSON row per line after a first line holding the full count. It is
  * written to a file and read back in chunks, so no number of rows is too many.
  */
 export const RUNS_FILTER_JS = ON_STDIN(
-  `const rows=JSON.parse(s);const done=new Set(${JSON.stringify([...TERMINAL])});const n=Number(process.argv[1]);process.stdout.write([String(rows.length),...rows.filter((r,i)=>i<n||!done.has(r&&r.state)).map((r)=>JSON.stringify(r))].join('\\n')+'\\n')`,
+  `const rows=JSON.parse(s);const done=new Set(${JSON.stringify([...TERMINAL])});const n=Number(process.argv[1]);const pin=new Set(JSON.parse(process.argv[2]||'[]'));process.stdout.write([String(rows.length),...rows.filter((r,i)=>i<n||!done.has(r&&r.state)||pin.has(r&&r.runId)).map((r)=>JSON.stringify(r))].join('\\n')+'\\n')`,
 )
 
 /**
@@ -143,7 +143,7 @@ function toWorker(raw: unknown, kind: 'agent' | 'step'): Worker {
     id: kind === 'agent' ? `a:${index ?? '?'}` : `s:${str(a.key) ?? str(a.name) ?? '?'}`,
     kind,
     index: kind === 'agent' ? index : null,
-    label: str(kind === 'agent' ? a.label : a.name) ?? (kind === 'agent' ? `agent ${index ?? '?'}` : 'step'),
+    label: clipped(str(kind === 'agent' ? a.label : a.name), 200) ?? (kind === 'agent' ? `agent ${index ?? '?'}` : 'step'),
     adapter: kind === 'agent' ? str(a.adapter) : null,
     model: kind === 'agent' ? str(a.model) : null,
     effort: str(a.effort),
@@ -159,7 +159,7 @@ function toWorker(raw: unknown, kind: 'agent' | 'step'): Worker {
     // status keeps an earlier attempt's until new progress arrives.
     outputTokens: PAID.has(str(a.state) ?? '') && 'usage' in a ? (a.usage === null ? 0 : (num(usage.output) ?? num(a.outputTokens))) : (num(a.outputTokens) ?? num(usage.output)),
     cost: num(usage.cost),
-    error: str(a.error),
+    error: clipped(str(a.error), 2_000),
     phase: str(a.phase),
     phaseIndex: num(a.phaseIndex),
   }
@@ -176,7 +176,7 @@ export function parseStatus(stdout: string, fetchedAt: number): Detail {
     ? d.questions.flatMap((q) => {
         const o = obj(q)
         const qid = str(o.qid)
-        return qid ? [{ qid, question: str(o.question) ?? '' }] : []
+        return qid ? [{ qid, question: clipped(str(o.question), 4_000) ?? '' }] : []
       })
     : []
   const result = obj(d.result)
@@ -191,7 +191,7 @@ export function parseStatus(stdout: string, fetchedAt: number): Detail {
     cost: costs.length ? costs.reduce((s, c) => s + c, 0) : null,
     resultMarkdown:
       d.resultOmitted === true ? (isLive(str(d.state) ?? '') ? null : TOO_LARGE(runId)) : result.status === 'completed' && result.result !== undefined ? toMarkdown(result.result) : null,
-    error: str(result.error),
+    error: clipped(str(result.error), 4_000),
     fetchedAt,
   }
 }
@@ -215,11 +215,15 @@ export function readStatus(stdout: string, isTruncated: boolean, prev: Detail | 
   }
   const state = /^\{"runId":"[^"]*","state":"([a-z-]+)"/.exec(stdout)?.[1] ?? prev?.state ?? 'unknown'
   const base = prev ?? placeholder(runId, now)
-  // With no whole status read before, its workers are not known: they are not "none".
-  return { ...base, runId, state, fetchedAt: now, resultMarkdown: isLive(state) ? null : TOO_LARGE(runId), isPartial: prev === undefined || prev.isPartial === true }
+  // Not read whole, its workers are whatever was known before (maybe nothing, maybe an
+  // earlier attempt's): the pane reconciles them with the run's events.
+  return { ...base, runId, state, fetchedAt: now, resultMarkdown: isLive(state) ? null : TOO_LARGE(runId), isPartial: true }
 }
 
-/** A detail standing in for a run this session launched, before its first poll. */
+/**
+ * A detail standing in for a run this session launched, before its first poll. It is
+ * partial: no status has been read, so its (empty) workers are not "no agents".
+ */
 export const placeholder = (runId: string, fetchedAt: number): Detail => ({
   runId,
   state: 'starting',
@@ -231,6 +235,7 @@ export const placeholder = (runId: string, fetchedAt: number): Detail => ({
   resultMarkdown: null,
   error: null,
   fetchedAt,
+  isPartial: true,
 })
 
 export const sameJson = (a: unknown, b: unknown): boolean => JSON.stringify(a) === JSON.stringify(b)
@@ -464,6 +469,39 @@ export function toMarkdown(value: unknown): string {
 // ---- agent transcripts -----------------------------------------------------------
 
 const clip = (s: string, n: number): string => (s.length > n ? `${s.slice(0, n)}… [+${s.length - n} chars]` : s)
+const clipped = (s: string | null, n: number): string | null => (s === null ? null : clip(s, n))
+
+// ---- what a pane draws -----------------------------------------------------------
+
+// A tree draws the first 100,000 characters of its texts in the order written; past
+// that its buttons and fields give way. So no one item draws more than DRAW_ITEM, and a
+// thread draws its newest events within THREAD_BUDGET, room left for its controls.
+export const DRAW_ITEM = 8_000
+export const THREAD_BUDGET = 45_000
+/** What a run's tab (its agents, lanes or log) may draw, room left for the run's controls. */
+export const TAB_BUDGET = 40_000
+
+/** A text as drawn: at most `n` characters, saying how many more there are. */
+export const clipDraw = (s: string, n = DRAW_ITEM): string => clip(s, n)
+
+/** The first items whose drawn size fits `budget` (always the first one), and how many later ones are left out. */
+export function firstWithin<T>(items: T[], size: (item: T) => number, budget: number): { shown: T[]; hidden: number } {
+  const { shown, hidden } = newestWithin([...items].reverse(), size, budget)
+  return { shown: shown.reverse(), hidden }
+}
+
+/** The newest items whose drawn size fits `budget` (always the newest one), and how many older ones are left out. */
+export function newestWithin<T>(items: T[], size: (item: T) => number, budget: number): { shown: T[]; hidden: number } {
+  let used = 0
+  let from = items.length
+  while (from > 0) {
+    const n = size(items[from - 1] as T)
+    if (from < items.length && used + n > budget) break
+    used += n
+    from--
+  }
+  return { shown: items.slice(from), hidden: from }
+}
 
 const SUMMARY_KEYS = ['command', 'cmd', 'query', 'url', 'file_path', 'path', 'pattern', 'description', 'prompt']
 
@@ -679,7 +717,7 @@ export function foldTimeline(prev: Timeline, text: string): Timeline {
         id,
         kind,
         index: kind === 'agent' ? index : null,
-        label: str(kind === 'agent' ? r.label : r.name) ?? (kind === 'agent' ? `agent ${index ?? '?'}` : 'step'),
+        label: clipped(str(kind === 'agent' ? r.label : r.name), 200) ?? (kind === 'agent' ? `agent ${index ?? '?'}` : 'step'),
         adapter: str(r.adapter),
         state: 'queued',
         phaseIndex: null,
@@ -1055,15 +1093,16 @@ export const staleDetailIds = (list: Run[], details: Record<string, Detail>): st
  *   so a terminal can share its running event's). A `cached` replay is no attempt:
  *   status keeps the replayed result's usage on it, which was counted when it was paid.
  */
-export function lifetimeWorkers(workers: Worker[], lanes: Lane[], isRunLive: boolean): Worker[] {
+export function lifetimeWorkers(workers: Worker[], lanes: Lane[]): Worker[] {
   const byId = new Map(lanes.map((l) => [l.id, l]))
   return workers.map((w) => {
     const lane = byId.get(w.id)
     if (!lane || typeof lane.cost !== 'number') return w
     const lastPaidAt = lane.lastPaidAt ?? null
     const isLaneOpen = isActive(lane.state) && lane.endedAt === null && lane.startedAt !== null
+    // An ended run's unfinished attempt (abandoned: shown as interrupted) keeps the
+    // output it was known to make; it ended with no final usage to replace it.
     const isCurrent =
-      isRunLive &&
       isActive(w.state) &&
       w.lastOutputAt !== null &&
       (isLaneOpen ? w.lastOutputAt >= (lane.startedAt ?? Infinity) : w.lastOutputAt > lane.lastSeenAt)
@@ -1074,31 +1113,65 @@ export function lifetimeWorkers(workers: Worker[], lanes: Lane[], isRunLive: boo
   })
 }
 
+/** A worker as a lane of the run's events knows it: label, adapter, state, timing. */
+const laneWorker = (l: Lane): Worker => ({
+  id: l.id,
+  kind: l.kind,
+  index: l.index,
+  label: l.label,
+  adapter: l.adapter,
+  model: null,
+  effort: null,
+  state: l.state,
+  durationMs: l.startedAt !== null && l.endedAt !== null ? l.endedAt - l.startedAt : null,
+  lastAt: l.endedAt,
+  lastOutputAt: null,
+  tool: null,
+  outputTokens: null,
+  cost: null,
+  error: null,
+  phase: null,
+  phaseIndex: l.phaseIndex,
+})
+
 /**
- * Workers rebuilt from the timeline's lanes, for a run whose status could not be read
- * whole: what the events say of each (label, adapter, state, timing); its spend comes
- * from the lanes through lifetimeWorkers.
+ * The workers of a run whose status could not be read whole (`isPartial`: a placeholder,
+ * or a status too large), reconciled with its events: every lane is a worker, in the
+ * lane's state, keeping what the last whole status knew of it (model, effort, error);
+ * a worker no lane has read stays as known. Spend then comes from the lanes alone
+ * (lifetimeWorkers), never from a stale status's counters.
  */
-export const lanesAsWorkers = (lanes: Lane[]): Worker[] =>
-  lanes.map((l) => ({
-    id: l.id,
-    kind: l.kind,
-    index: l.index,
-    label: l.label,
-    adapter: l.adapter,
-    model: null,
-    effort: null,
-    state: l.state,
-    durationMs: l.startedAt !== null && l.endedAt !== null ? l.endedAt - l.startedAt : null,
-    lastAt: l.endedAt,
-    lastOutputAt: null,
-    tool: null,
-    outputTokens: null,
-    cost: null,
-    error: null,
-    phase: null,
-    phaseIndex: l.phaseIndex,
-  }))
+export function reconcileWorkers(workers: Worker[], lanes: Lane[]): Worker[] {
+  if (!lanes.length) return workers
+  const byId = new Map(workers.map((w) => [w.id, w]))
+  const fromLanes = lanes.map((l) => {
+    const known = byId.get(l.id)
+    const lane = laneWorker(l)
+    return known ? { ...known, state: lane.state, durationMs: lane.durationMs ?? known.durationMs, lastAt: lane.lastAt, lastOutputAt: null, outputTokens: null, cost: null } : lane
+  })
+  const seen = new Set(lanes.map((l) => l.id))
+  const all = [...fromLanes, ...workers.filter((w) => !seen.has(w.id))]
+  const agents = all.filter((w) => w.kind === 'agent').sort((a, b) => (a.index ?? 0) - (b.index ?? 0))
+  return [...agents, ...all.filter((w) => w.kind === 'step')]
+}
+
+/**
+ * The details the pane keeps within `budget` characters ($.state refuses a value over
+ * 4 MiB): the ids in `first` (on screen, watched) before the rest. One left out is
+ * polled afresh when needed.
+ */
+export function boundDetails(details: Record<string, Detail>, first: string[], budget = 3 << 20): Record<string, Detail> {
+  const ids = [...new Set([...first.filter((id) => details[id]), ...Object.keys(details)])]
+  const out: Record<string, Detail> = {}
+  let used = 0
+  for (const id of ids) {
+    const n = JSON.stringify(details[id]).length + id.length + 8
+    if (used + n > budget) continue
+    used += n
+    out[id] = details[id] as Detail
+  }
+  return out
+}
 
 /** Work an ended run left running or queued was abandoned: it shows as interrupted. */
 export const shownState = (state: string, isRunLive: boolean): string => (!isRunLive && isActive(state) ? 'interrupted' : state)
