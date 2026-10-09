@@ -136,6 +136,8 @@ export type FlowitionCockpitTimeline = {
   /** The run's narrative, oldest first: the newest MAX_ENTRIES of it. */
   entries: FlowitionCockpitLogEntry[]
   isEntriesCut: boolean
+  /** The phase the run last entered (a resume replays its phases from the first). */
+  currentPhase: { index: number; title: string } | null
 }
 
 declare module 'claude-code' {

@@ -325,7 +325,7 @@ describe('reading a run incrementally', () => {
     expect(shouldWake(live, done, true)).toBe(true)
     expect(shouldWake(undefined, done, true)).toBe(true)
     expect(shouldWake(undefined, live, true)).toBe(false)
-    expect(shouldWake(done, done, true)).toBe(false)
+    expect(shouldWake(done, done, true)).toBe(true) // armed just as it ended: still owed a wake
     expect(shouldWake(live, done, false)).toBe(false)
   })
 })
@@ -414,4 +414,17 @@ describe('reading events.jsonl by raw byte offsets', () => {
     expect(stateColor('corrupt-result')).toBe('error')
     expect(filterRuns([{ runId: 'r', file: 'f', state: 'corrupt-result', createdAt: 0 }], 'attention', '', {}).length).toBe(1)
   })
+})
+
+test('a resumed run\'s current phase is the one it last entered, not a count of replays', async () => {
+  const ev = [
+    { t: 1, type: 'phase', phaseIndex: 0, title: 'Scout' },
+    { t: 2, type: 'phase', phaseIndex: 1, title: 'Build' },
+    { t: 3, type: 'run', state: 'failed' },
+    { t: 4, type: 'run', state: 'resumed' },
+    { t: 5, type: 'phase', phaseIndex: 0, title: 'Scout' },
+  ].map((r) => JSON.stringify(r)).join('\n') + '\n'
+  const tl = foldTimeline(emptyTimeline('r'), ev)
+  expect(tl.currentPhase).toEqual({ index: 0, title: 'Scout' })
+  expect(tl.phases.length).toBe(2)
 })

@@ -249,6 +249,8 @@ async function refresh($: EngineInterface, force = false): Promise<void> {
     const details: Record<string, Detail> = { ...(await read($, detailsAtom)) }
     const ids = new Set(list.filter((r) => isLive(r.state)).map((r) => r.runId))
     for (const id of watched) if (!details[id] || isLive(details[id].state)) ids.add(id)
+    // An armed run is polled until a poll reconciles it (finds it ended) and disarms it.
+    for (const id of wake) ids.add(id)
     if (selected && (force || !details[selected] || isLive(details[selected].state))) ids.add(selected)
 
     const toasts: string[] = []
@@ -936,7 +938,12 @@ export const register: Register = (on) => {
         const workers = (d?.workers ?? []).map((w) => {
           const lane = lanes.get(w.id)
           return lane && typeof lane.cost === 'number' && (lane.cost > 0 || lane.outputTokens > 0)
-            ? { ...w, cost: lane.cost || w.cost, outputTokens: lane.outputTokens || w.outputTokens }
+            ? {
+                ...w,
+                cost: lane.cost || w.cost,
+                // Finished attempts' tokens, plus the live attempt's so far.
+                outputTokens: lane.outputTokens + (isActive(w.state) ? (w.outputTokens ?? 0) : 0) || w.outputTokens,
+              }
             : w
         })
         const runCost = workers.reduce((sum, w) => sum + (w.cost ?? 0), 0)
@@ -1186,14 +1193,20 @@ export const register: Register = (on) => {
                 {tile(
                   'tokens',
                   'Output',
-                  d.spentOutputTokens
-                    ? `${fmtTokens(d.spentOutputTokens)} tokens`
-                    : agents.some((a) => a.outputTokens)
-                      ? `${fmtTokens(agents.reduce((s, a) => s + (a.outputTokens ?? 0), 0))} tokens`
+                  // Lifetime, every attempt: from the run's events where read (the
+                  // engine's live counter restarts with each resumed attempt).
+                  workers.some((a) => a.outputTokens)
+                    ? `${fmtTokens(workers.reduce((s, a) => s + (a.outputTokens ?? 0), 0))} tokens`
+                    : d.spentOutputTokens
+                      ? `${fmtTokens(d.spentOutputTokens)} tokens`
                       : '—',
                 )}
                 {tile('cost', 'Cost', runCost ? fmtCost(runCost) : '—')}
-                {d.phases.length ? tile('phase', `Phase ${d.phases.length}`, d.phases[d.phases.length - 1] ?? '') : null}
+                {tl?.currentPhase
+                  ? tile('phase', `Phase ${tl.currentPhase.index + 1}`, tl.currentPhase.title)
+                  : d.phases.length
+                    ? tile('phase', 'Phase', d.phases[d.phases.length - 1] ?? '')
+                    : null}
               </Box>
             ) : (
               <Text dimColor>Loading…</Text>

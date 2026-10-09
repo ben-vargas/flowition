@@ -139,12 +139,11 @@ export const hasEnded = (prev: Detail | undefined, next: Detail): boolean =>
   prev !== undefined && isLive(prev.state) && !isLive(next.state)
 
 /**
- * Whether a run armed with "Tell Claude when done" should wake Claude now: it ended
- * between two polls, or the pane's first look at it (after a reload cleared what it
- * knew) already finds it ended, which an armed run can only be once it has finished.
+ * Whether a run armed with "Tell Claude when done" should wake Claude now: whenever a
+ * poll finds it no longer live, however it got there (it ended between polls, a reload
+ * cleared what the pane knew, or it was armed just as it ended). Firing disarms it.
  */
-export const shouldWake = (prev: Detail | undefined, next: Detail, isArmed: boolean): boolean =>
-  isArmed && (hasEnded(prev, next) || (prev === undefined && !isLive(next.state)))
+export const shouldWake = (_prev: Detail | undefined, next: Detail, isArmed: boolean): boolean => isArmed && !isLive(next.state)
 
 /** Toasts owed between two polls of one run: it ended, or it asked something new. */
 export function transitions(prev: Detail | undefined, next: Detail): string[] {
@@ -513,6 +512,7 @@ export const emptyTimeline = (runId: string): Timeline => ({
   workflowFile: null,
   entries: [],
   isEntriesCut: false,
+  currentPhase: null,
 })
 
 /** `events.jsonl` text (whole lines) folded into a fresh timeline. */
@@ -554,6 +554,7 @@ export function foldTimeline(prev: Timeline, text: string): Timeline {
       const index = num(r.phaseIndex) ?? out.phases.length
       const title = str(r.title) ?? `phase ${index + 1}`
       if (!out.phases.some((p) => p.index === index)) out.phases.push({ index, title, t })
+      out.currentPhase = { index, title }
       entry(t, 'phase', `phase ${index + 1}: ${title}`)
     } else if (r.type === 'log') {
       entry(t, 'log', str(r.message) ?? '', null, str(r.level) === 'warn' ? 'warning' : str(r.level) === 'error' ? 'error' : null)
