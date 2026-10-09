@@ -306,6 +306,58 @@ export const isFlowitionLaunch = (command: string): boolean =>
 const RUN_ID = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/
 
 /** The runId a launch printed: detached text, --json, or the foreground `run <id>` line. */
+/** Run statuses the CLI's last line (`run <id>: <status>`) and event lines name. */
+const RUN_LINE_STATES = /^(started|resumed|completed|failed|interrupted|cancelled|stale)$/
+
+/**
+ * Every run a launch's output names, in order: the CLI's own lines (a detached launch,
+ * an event line, the run's last line with a real run status, a --json envelope that
+ * says detached or carries a status), at most `max` (the launches in the command). A
+ * workflow's result printed after a run line is not one of these, JSON with a runId
+ * field or not. With none, the whole text as one JSON object (an MCP tool's {runId}).
+ */
+export function extractRunIds(text: string, max = Infinity): string[] {
+  const out: string[] = []
+  for (const line of text.split('\n')) {
+    if (out.length >= max) break
+    const s = line.trim()
+    const ran = /^run (\S+?): (\w+)$/.exec(s)
+    const event = /^▶ run (\S+) — (\w+)/.exec(s)
+    const id =
+      /^started detached run (\S+)/.exec(s)?.[1] ??
+      (event && RUN_LINE_STATES.test(event[2] ?? '') ? event[1] : undefined) ??
+      (ran && RUN_LINE_STATES.test(ran[2] ?? '') ? ran[1] : undefined) ??
+      /^run (\S+)$/.exec(s)?.[1] ??
+      launchEnvelope(s)
+    if (id && RUN_ID.test(id) && !out.includes(id)) out.push(id)
+  }
+  if (out.length) return out
+  const whole = envelopeRunId(text.trim())
+  return whole && RUN_ID.test(whole) ? [whole] : []
+}
+
+/** A --json launch line: a JSON object naming its run beside `detached` or a status. */
+function launchEnvelope(line: string): string | null {
+  if (!line.startsWith('{')) return null
+  try {
+    const o = obj(JSON.parse(line))
+    return typeof o.runId === 'string' && (o.detached === true || typeof o.status === 'string') ? o.runId : null
+  } catch {
+    return null
+  }
+}
+
+/** The workflow files a command launches (`flowition run <file>`), by basename, in order; and how many launches or resumes it holds. */
+export function launchesIn(command: string): { files: (string | null)[]; count: number } {
+  const re = /(?:^|[\s;&|(/])(?:flo|flowition)(?:\.js)?\s+(run|resume)\s+([^\s;&|)]+)/g
+  const files: (string | null)[] = []
+  for (const m of command.matchAll(re)) {
+    const arg = (m[2] ?? '').replace(/^['"]|['"]$/g, '')
+    files.push(m[1] === 'run' && !command.slice(m.index ?? 0).split(/[;&|]/)[0]?.includes('--resume') ? (arg.split('/').pop() ?? null) : null)
+  }
+  return { files, count: files.length }
+}
+
 export function extractRunId(text: string): string | null {
   // The CLI's own lines, in the order written: the detached launch, the foreground event
   // lines (`▶ run <id> — started`) and last line (`run <id>: <status>`), and a --json

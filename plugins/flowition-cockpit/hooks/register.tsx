@@ -3,6 +3,7 @@ import type { EngineInterface, ProcessRunResult, Register } from 'claude-code'
 
 import type {
   FlowitionCockpitDetail as Detail,
+  FlowitionCockpitLane as Lane,
   FlowitionCockpitRun as Run,
   FlowitionCockpitTimeline as Timeline,
   FlowitionCockpitWorker as Worker,
@@ -64,6 +65,8 @@ import {
   staleDetailIds,
   parseTranscript,
   appendEvents,
+  extractRunIds,
+  launchesIn,
   boundThread,
   resumeTarget,
   phaseGroups,
@@ -140,7 +143,7 @@ let lastClockDraw = 0
 // (a backgrounded Bash call): the next new run created after it is attached.
 // Launches Bash backgrounded (no id in their output yet), by when each began: each is
 // matched to its own new run as runs are listed, an unmatched one kept until it expires.
-const pendingLaunches: number[] = []
+const pendingLaunches: { since: number; known: Set<string>; file: string | null }[] = []
 // Each attach (a launch, a resume, a re-attach) takes the next generation; a poll that
 // began before a run's generation neither writes nor announces anything for that run,
 // so its notices start from the baseline attach() installed.
@@ -312,6 +315,9 @@ async function refresh($: EngineInterface, force = false): Promise<void> {
     return
   }
   isBusy = true
+  // The attach generation this whole refresh is of (its listing, polls and writes): a run
+  // attached after this point keeps attach()'s baseline and gets no notice from it.
+  const pollSeq = attachSeq
   try {
     await ensureHome($)
     const now = await $.clock.now()
@@ -367,10 +373,13 @@ async function refresh($: EngineInterface, force = false): Promise<void> {
       }
     }
 
-    // Each backgrounded launch, oldest first, takes the oldest new run not yet attached.
+    // Each backgrounded launch, oldest first, takes the oldest run created since it began
+    // that was not listed before it and is not attached, preferring its own workflow file:
+    // never a run another session started just before.
     for (let i = 0; i < pendingLaunches.length; ) {
-      const since = pendingLaunches[i] as number
-      const fresh = [...list].reverse().find((r) => r.createdAt >= since && !attached.includes(r.runId))
+      const { since, known, file } = pendingLaunches[i] as (typeof pendingLaunches)[number]
+      const candidates = [...list].reverse().filter((r) => r.createdAt >= since && !known.has(r.runId) && !attached.includes(r.runId))
+      const fresh = candidates.find((r) => file !== null && r.file === file) ?? candidates[0]
       if (fresh) {
         pendingLaunches.splice(i, 1)
         attached = [...attached, fresh.runId]
@@ -386,9 +395,6 @@ async function refresh($: EngineInterface, force = false): Promise<void> {
     const wake: string[] = await read($, wakeAtom)
     const watched = new Set([...attached, ...wake])
     const selected = await read($, selectedAtom)
-    // The generation this poll's snapshot is of: a run attached after it (during a status
-    // read) keeps the cache's entry for it and gets no notice from this poll.
-    const pollSeq = attachSeq
     const details: Record<string, Detail> = { ...(await read($, detailsAtom)) }
     const snapshotIds = new Set(Object.keys(details))
     const ids = new Set(list.filter((r) => isLive(r.state)).map((r) => r.runId))
@@ -929,13 +935,18 @@ export const register: Register = (on) => {
     const startedAt = await $.clock.now()
     const ran = await next(e)
     if (ran.deny !== undefined) return ran
-    // A resume names its run on the command line: attach it even when Bash backgrounds it
-    // (no output yet) or its output names it in a form not recognized.
-    const runId = extractRunId(ran.text ?? '') ?? (isBash && ran.isError !== true ? resumeTarget(e.command) : null)
-    if (runId) await attach($, runId)
-    // No id in the output: only a launch Bash backgrounded (it reports no id until it
-    // ends) arms the fallback; a failed launch, or an MCP error, arms nothing.
-    else if (isBash && ran.isError !== true && /running in background/i.test(ran.text ?? '')) pendingLaunches.push(startedAt - 5000)
+    // Every run the output names (a command may launch several), else a resume's run from
+    // the command line (attached even when Bash backgrounds it, with no output yet).
+    const launches = isBash ? launchesIn(e.command) : { files: [null], count: 1 }
+    const named = extractRunIds(ran.text ?? '', Math.max(1, launches.count))
+    const runIds = named.length ? named : isBash && ran.isError !== true ? [resumeTarget(e.command)].filter((id): id is string => id !== null) : []
+    for (const runId of runIds) await attach($, runId)
+    // No id in the output: only launches Bash backgrounded (they report no id until they
+    // end) arm the fallback, one record each; a failed launch, or an MCP error, arms none.
+    if (!runIds.length && isBash && ran.isError !== true && /running in background/i.test(ran.text ?? '')) {
+      const known = new Set((await read($, runsAtom)).map((r) => r.runId))
+      for (const file of launches.files) pendingLaunches.push({ since: startedAt - 1000, known, file })
+    }
     void $.ui.open({ id: PANE, title: TITLE })
     return ran
   }).catch(($, e, next) => next(e))
@@ -1273,7 +1284,15 @@ export const register: Register = (on) => {
         // A timeline cached by an older version of this module (no `entries`) reads as none
       // until the next poll replaces it.
       const read_ = timeline && timeline.runId === selected && Array.isArray(timeline.entries) ? timeline : null
-      const shownLanes = read_ && !live ? read_.lanes.map((l) => ({ ...l, state: shownState(l.state, false) })) : (read_?.lanes ?? [])
+      // Lanes as they are now: an ended run's unfinished work, and work a resumed run has not
+      // taken up again (its attempt began before the latest start, or the engine does not
+      // run it), is interrupted and stops at its last sign of life.
+      const isStale = (l: Lane) =>
+        isActive(l.state) &&
+        (!live ||
+          (read_?.attemptAt != null && (l.startedAt ?? l.queuedAt ?? Infinity) < read_.attemptAt) ||
+          (l.state === 'running' && l.index !== null && d?.liveAgents !== undefined && !d.liveAgents.includes(l.index)))
+      const shownLanes = (read_?.lanes ?? []).map((l) => (isStale(l) ? { ...l, state: 'interrupted', endedAt: l.endedAt ?? l.lastSeenAt } : l))
       // The lanes a tab draws: the first within what a pane draws, room left for controls.
       const laneCut = firstWithin(shownLanes, (l) => l.label.length + 120, TAB_BUDGET)
       const tl = read_ ? { ...read_, lanes: laneCut.shown } : read_
