@@ -1099,7 +1099,6 @@ export const register: Register = (on) => {
     const startedAt = await $.clock.now()
     const ran = await next(e)
     if (ran.deny !== undefined) return ran
-    const isOk = ran.isError !== true
     // Bash's own record: its whole stdout (the model may read only a preview of a large
     // one) and whether the command went to the background (explicitly, on timeout, Ctrl+B).
     const record = isBash && ran.result !== null && typeof ran.result === 'object' ? (ran.result as { stdout?: unknown; backgroundTaskId?: unknown }) : {}
@@ -1119,13 +1118,15 @@ export const register: Register = (on) => {
     const targets = isBash ? resumeIds : []
     for (const r of resumeFrom) if (isBash && !named.includes(r.runId)) pendingResumes.push({ ...r, since: startedAt - 1000 })
     // New runs whose ids the output does not carry (launches Bash backgrounded report none
-    // until they end) arm the fallback, one record each; a failed launch, or an MCP error,
-    // arms none.
+    // until they end) arm the fallback, one record each.
     // Which new run each launch made is not known from the output (ids carry no file), so
     // every new-run launch Bash or the shell (`… &`) backgrounded keeps a record; the runs
     // the output named are attached already, which discovery skips, and a record nothing
     // matches expires.
-    if (isBash && isOk) {
+    // A failing exit does not mean a backgrounded launch did not run (`… & wait` on a
+    // workflow that fails, a later command in the list failing): the records are kept
+    // either way, and each takes only a new run of its own workflow.
+    if (isBash) {
       const unnamed = fresh.filter((l) => isBackgrounded || l.isBackground)
       const namedNew = named.filter((id) => !targets.includes(id))
       for (const l of unnamed) pendingLaunches.push({ since: startedAt - 1000, known, file: l.file, group })
