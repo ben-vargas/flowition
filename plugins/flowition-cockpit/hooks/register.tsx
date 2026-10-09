@@ -104,8 +104,12 @@ const launchAtom = atom({ plugin: 'flowition-cockpit', key: 'launch' } as const,
 const workflowsAtom = atom({ plugin: 'flowition-cockpit', key: 'workflows' } as const, [])
 const listNoteAtom = atom({ plugin: 'flowition-cockpit', key: 'listNote' } as const, null)
 
-/** States a run may be resumed from: `flowition run <file> --resume` re-enters them. */
-const RESUMABLE = new Set(['failed', 'interrupted', 'stale'])
+/**
+ * States a run may be resumed from: `flowition run <file> --resume` re-enters them. As
+ * in the viewer (control-bridge's RESUMABLE_STATES), a completed run is one: resuming it
+ * is a Replay, every finished agent replayed from the journal.
+ */
+const RESUMABLE = new Set(['completed', 'failed', 'interrupted', 'stale'])
 const FILTER_LABELS = { all: 'All', live: 'Live', attention: 'Needs attention', completed: 'Completed' } as const
 
 // A transcript is read from where the last read stopped; a first read (or one that
@@ -686,8 +690,9 @@ async function cancel($: EngineInterface, runId: string, index: number | null): 
   void refresh($, true)
 }
 
-/** Resumes a failed, interrupted or stale run, detached, as the viewer does. */
-async function resumeRun($: EngineInterface, runId: string): Promise<void> {
+/** Resumes a failed, interrupted or stale run (or replays a completed one), detached, as the viewer does. */
+async function resumeRun($: EngineInterface, runId: string, isReplay = false): Promise<void> {
+  const verb = isReplay ? 'Replay' : 'Resume'
   await update($, confirmAtom, () => null)
   // The run's first event names its workflow file; `run --resume --detach` installs the
   // resume handoff marker and restores the run's journaled adapter, cwd and args.
@@ -701,13 +706,13 @@ async function resumeRun($: EngineInterface, runId: string): Promise<void> {
     // reported below
   }
   if (!file) {
-    $.ui.toast(`Can't resume ${runId}: its first event names no workflow file.`, { timeoutMs: 8000 })
+    $.ui.toast(`Can't ${verb.toLowerCase()} ${runId}: its first event names no workflow file.`, { timeoutMs: 8000 })
     return
   }
   const res = await control($, ['run', file, '--resume', runId, '--detach', '--json'])
   const ok = res.error === null || res.reply.detached === true
-  $.ui.toast(ok ? `Resuming ${runId}` : `Resume failed: ${res.error}`, { timeoutMs: ok ? 4000 : 10_000 })
-  $.ui.log(`flowition-cockpit: resume ${runId} → ${ok ? 'started' : `failed: ${res.error}`}`)
+  $.ui.toast(ok ? `${isReplay ? 'Replaying' : 'Resuming'} ${runId}` : `${verb} failed: ${res.error}`, { timeoutMs: ok ? 4000 : 10_000 })
+  $.ui.log(`flowition-cockpit: ${verb.toLowerCase()} ${runId} → ${ok ? 'started' : `failed: ${res.error}`}`)
   if (ok) await attach($, runId)
   void refresh($, true)
 }
@@ -1545,12 +1550,16 @@ export const register: Register = (on) => {
               {!live && RESUMABLE.has(state) ? (
                 confirm === `resume:${selected}` ? (
                   <>
-                    <Text>Resume? Finished agents are reused; the rest run again, with full permissions, where the run first ran.</Text>
-                    {btn('resume-yes', 'Yes, resume', () => resumeRun($, selected), 'primary')}
+                    <Text>
+                      {state === 'completed'
+                        ? 'Replay? The run restarts in a detached process and its finished agents replay from the journal; anything not journaled runs again, with full permissions, where the run first ran.'
+                        : 'Resume? Finished agents are reused; the rest run again, with full permissions, where the run first ran.'}
+                    </Text>
+                    {btn('resume-yes', state === 'completed' ? 'Yes, replay' : 'Yes, resume', () => resumeRun($, selected, state === 'completed'), 'primary')}
                     {btn('resume-no', 'Not now', () => update($, confirmAtom, () => null))}
                   </>
                 ) : (
-                  btn('resume', 'Resume…', () => update($, confirmAtom, () => `resume:${selected}`))
+                  btn('resume', state === 'completed' ? 'Replay…' : 'Resume…', () => update($, confirmAtom, () => `resume:${selected}`))
                 )
               ) : null}
               {!live ? (

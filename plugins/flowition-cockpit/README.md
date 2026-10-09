@@ -30,7 +30,8 @@ nvm, Volta, Bun or Homebrew global install, or named by `FLOWITION_BIN`. It read
     per agent), **Phases**, **Log** (the workflow's `log()` lines, messages,
     questions, agent starts and ends) and **Structure** (its `parallel()` and
     `pipeline()` fan-outs). Footer: Open in viewer, Tell Claude when done, Cancel
-    run, Resume, Delete (to flowition's trash), Ask Claude.
+    run, Resume (Replay for a completed run, as in the viewer), Delete (to flowition's
+    trash), Ask Claude.
   - **An agent's thread**: its transcript as it streams (tool calls expand to their
     input and output), with a box to message it.
 - **Auto-attach**: a run Claude launches (`flowition run|resume` in Bash, or the

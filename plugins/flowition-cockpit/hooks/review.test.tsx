@@ -611,6 +611,7 @@ function world4(on: On) {
       w.removed.push(e.argv[2] as string)
       return ok('')
     }
+    if (e.argv[0] === 'head') return ok(`${w.events.split('\n')[0] ?? ''}\n`)
     if (e.argv[0] === '/bin/sh') {
       if (w.eventsDenied && e.argv[5]?.endsWith('events.jsonl')) return { deny: 'event read denied' }
       const from = Number(e.argv[4]) - 1
@@ -977,5 +978,22 @@ test('R6-F18: many agents, or a long log, never push the run\'s controls out of 
   expect([!!(await ui.find({ key: 'resume' })), !!(await ui.find({ text: /log 299 / }))]).toEqual([true, true])
   await ui.press({ key: 'tab:timeline' })
   expect(!!(await ui.find({ key: 'resume' }))).toBe(true)
+  await ui.unmount()
+})
+
+// ---- Codex bot review of ff013c3 ---------------------------------------------------
+
+test('P2: a completed run offers Replay, as the viewer does, and replays through run --resume', async ($, on) => {
+  const { w } = world4(on)
+  w.states.flo_a = 'completed'
+  w.events = lines([{ t: 1, type: 'run', state: 'started', workflowFile: '/home/t/wf/a.workflow.mjs' }, { t: 5, type: 'run', state: 'completed' }])
+  await $.command.run(flo('flo_a'))
+  const ui = await $.ui.mount(PANE('terminal'))
+  expect((await ui.find({ key: 'resume' }))?.props.label).toBe('Replay…')
+  await ui.press({ key: 'resume' })
+  expect((await ui.find({ key: 'resume-yes' }))?.props.label).toBe('Yes, replay')
+  expect(await ui.find({ text: /finished agents replay from the journal/ })).toBeDefined()
+  await ui.press({ key: 'resume-yes' })
+  expect(w.calls).toContain('run /home/t/wf/a.workflow.mjs --resume flo_a --detach --json')
   await ui.unmount()
 })
