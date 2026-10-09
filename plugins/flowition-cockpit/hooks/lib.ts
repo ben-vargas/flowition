@@ -351,24 +351,116 @@ function launchEnvelope(line: string): string | null {
   }
 }
 
+type ShellToken = { op: string } | { word: string; isDynamic: boolean }
+
+/**
+ * A shell command as words and operators: quotes and backslashes resolved, `;`, `&`,
+ * `&&`, `|`, `||`, newlines and parentheses as operators. A word the shell would expand
+ * ($VAR, `cmd`, a glob) is dynamic: its value is not known until it runs.
+ */
+export function shellTokens(command: string): ShellToken[] {
+  const out: ShellToken[] = []
+  let word = ''
+  let isWord = false
+  let isDynamic = false
+  const flush = () => {
+    if (isWord) out.push({ word, isDynamic })
+    word = ''
+    isWord = false
+    isDynamic = false
+  }
+  for (let i = 0; i < command.length; i++) {
+    const c = command[i] as string
+    if (c === "'") {
+      const close = command.indexOf("'", i + 1)
+      word += command.slice(i + 1, close < 0 ? undefined : close)
+      isWord = true
+      i = close < 0 ? command.length : close
+    } else if (c === '"') {
+      let j = i + 1
+      for (; j < command.length && command[j] !== '"'; j++) {
+        if (command[j] === '\\' && j + 1 < command.length) j++
+        if (command[j] === '$' || command[j] === '`') isDynamic = true
+        word += command[j]
+      }
+      isWord = true
+      i = j
+    } else if (c === '\\') {
+      word += command[i + 1] ?? ''
+      isWord = true
+      i++
+    } else if (/\s/.test(c) && c !== '\n') {
+      flush()
+    } else if (c === '\n' || c === ';' || c === '(' || c === ')') {
+      flush()
+      out.push({ op: c === '\n' ? ';' : c })
+    } else if (c === '&' || c === '|') {
+      flush()
+      const isDouble = command[i + 1] === c
+      out.push({ op: isDouble ? c + c : c })
+      if (isDouble) i++
+    } else {
+      if (c === '$' || c === '`' || c === '*' || c === '?' || c === '[') isDynamic = true
+      word += c
+      isWord = true
+    }
+  }
+  flush()
+  return out
+}
+
+// The CLI's options (src/cli.js): these take a value (`--opt v` or `--opt=v`); the rest
+// do not.
+const VALUE_FLAGS = new Set(['args', 'args-file', 'adapter', 'model', 'effort', 'cwd', 'concurrency', 'budget', 'resume', 'run-id', 'seed-from', 'agent', 'run', 'older-than', 'port', 'idle-timeout', 'tailscale-origin'])
+const WRAPPERS = new Set(['env', 'nohup', 'npx', 'time', 'exec', 'command', 'nice', 'caffeinate'])
+const isFlowitionWord = (w: string) => /(^|\/)(flo|flowition)(\.js)?$/.test(w)
+
 /**
  * The launches a command holds, in order (`flowition run <file>`, `flowition resume <id>`,
- * `run <file> --resume <id>`): each a new run of a workflow file (its basename) or a
- * resume of a named run.
+ * `run <file> --resume <id>`), read with the CLI's own option grammar from shell words:
+ * each a new run of a workflow file (its basename, or null when the shell expands it) or
+ * a resume of a named run, and whether the shell backgrounds it (`… &`).
  */
-export function launchesIn(command: string): { files: (string | null)[]; count: number; invocations: { file: string | null; target: string | null }[] } {
-  const re = /(?:^|[\s;&|(/])(?:flo|flowition)(?:\.js)?\s+(run|resume)\s+([^\s;&|)]+)/g
-  const invocations: { file: string | null; target: string | null }[] = []
-  for (const m of command.matchAll(re)) {
-    const arg = (m[2] ?? '').replace(/^['"]|['"]$/g, '')
-    const rest = command.slice(m.index ?? 0).split(/[;&|]/)[0] ?? ''
-    const resumed = m[1] === 'resume' ? arg : /--resume(?:=|\s+)([^\s;&|)]+)/.exec(rest)?.[1]?.replace(/^['"]|['"]$/g, '')
-    const target = resumed && RUN_ID.test(resumed) ? resumed : null
-    // A file named through the shell ($WF, a glob) is not known until it runs: any new run.
-    const file = m[1] === 'run' && target === null && !/[$`*?]/.test(arg) ? (arg.split('/').pop() ?? null) : null
-    invocations.push({ file, target })
+export function launchesIn(command: string): { files: (string | null)[]; count: number; invocations: { file: string | null; target: string | null; isBackground: boolean }[] } {
+  const tokens = shellTokens(command)
+  const invocations: { file: string | null; target: string | null; isBackground: boolean }[] = []
+  let i = 0
+  while (i < tokens.length) {
+    // One simple command: its words up to the next operator.
+    const words: { word: string; isDynamic: boolean }[] = []
+    while (i < tokens.length && !('op' in (tokens[i] as ShellToken))) words.push(tokens[i++] as { word: string; isDynamic: boolean })
+    const op = i < tokens.length ? (tokens[i] as { op: string }).op : null
+    i++
+    // The command word: past variable assignments and wrappers (env, nohup, npx, …); a
+    // flowition word anywhere else (echo flowition run …) is an argument, not a launch.
+    let at = 0
+    while (at < words.length && (/^[A-Za-z_][A-Za-z0-9_]*=/.test(words[at]?.word ?? '') || WRAPPERS.has(words[at]?.word ?? ''))) at++
+    if (!isFlowitionWord(words[at]?.word ?? '')) at = -1
+    const sub = at >= 0 ? words[at + 1]?.word : undefined
+    if (at < 0 || (sub !== 'run' && sub !== 'resume')) continue
+    let positional: { word: string; isDynamic: boolean } | null = null
+    let resume: { word: string; isDynamic: boolean } | null = null
+    const rest = words.slice(at + 2)
+    for (let k = 0; k < rest.length; k++) {
+      const w = rest[k] as { word: string; isDynamic: boolean }
+      if (w.word === '--') {
+        positional ??= rest[k + 1] ?? null
+        break
+      }
+      if (w.word.startsWith('--')) {
+        const eq = w.word.indexOf('=')
+        const name = eq < 0 ? w.word.slice(2) : w.word.slice(2, eq)
+        const value = eq >= 0 ? { word: w.word.slice(eq + 1), isDynamic: w.isDynamic } : VALUE_FLAGS.has(name) ? (rest[++k] ?? null) : null
+        if (name === 'resume') resume = value
+      } else if (w.word === '-a') k++
+      else if (w.word !== '-f') positional ??= w
+    }
+    const id = sub === 'resume' ? positional : resume
+    const target = id && !id.isDynamic && RUN_ID.test(id.word) ? id.word : null
+    const file = sub === 'run' && !resume && positional && !positional.isDynamic ? (positional.word.split('/').pop() ?? null) : null
+    invocations.push({ file, target, isBackground: op === '&' })
   }
-  return { files: invocations.map((i) => i.file), count: invocations.length, invocations }
+  return { files: invocations.map((v) => v.file), count: invocations.length, invocations }
 }
 
 export function extractRunId(text: string): string | null {

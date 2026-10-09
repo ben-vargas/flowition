@@ -148,6 +148,7 @@ const pendingLaunches: { since: number; known: Set<string>; file: string | null 
 // so its notices start from the baseline attach() installed.
 let attachSeq = 0
 const attachedSeqOf = new Map<string, number>()
+
 // The handlers behind the desktop's faces (button.tsx, card.tsx), by the face's key:
 // each render sets its own, stamped with the render's number, and a face's click
 // (`ui.message` with `{ press }`) runs the newest. Pruned at the end of a render (never
@@ -462,12 +463,14 @@ async function refresh($: EngineInterface, force = false): Promise<void> {
       }
     }
     await write(async () => (sameJson(list, await read($, runsAtom)) ? undefined : update($, runsAtom, () => list)))
-    // A run attached (or attached again: a resume) after this poll began keeps the cache's
-    // entry for it (attach()'s baseline), not this poll's, and none of this poll's notices:
-    // the next poll sees its change from that baseline.
-    const lateAttached = new Set([...attachedSeqOf].filter(([, seq]) => seq > pollSeq).map(([id]) => id))
+    // A run attached (or attached again: a resume) after this refresh began keeps the
+    // cache's entry for it (attach()'s baseline), not this poll's, and none of this poll's
+    // notices: the next poll sees its change from that baseline. Judged afresh wherever it
+    // decides (inside the cache update, retries included, and at each notice and wake),
+    // since attach() takes its generation before anything else it does.
+    const isLate = (id: string) => (attachedSeqOf.get(id) ?? 0) > pollSeq
     const withAdded = (cur: Record<string, Detail>) => {
-      const added = Object.entries(cur).filter(([id]) => (!snapshotIds.has(id) && !(id in kept)) || lateAttached.has(id))
+      const added = Object.entries(cur).filter(([id]) => (!snapshotIds.has(id) && !(id in kept)) || isLate(id))
       return added.length ? { ...kept, ...Object.fromEntries(added) } : kept
     }
     await write(async () => {
@@ -477,7 +480,7 @@ async function refresh($: EngineInterface, force = false): Promise<void> {
     await write(async () => ((await read($, listNoteAtom)) === listNote ? undefined : update($, listNoteAtom, () => listNote)))
     const shownError = listError ?? writeError
     await write(async () => ((await read($, errorAtom)) === shownError ? undefined : update($, errorAtom, () => shownError)))
-    for (const { id, text } of toasts) if (!lateAttached.has(id)) $.ui.toast(text, { timeoutMs: 8000 })
+    for (const { id, text } of toasts) if (!isLate(id)) $.ui.toast(text, { timeoutMs: 8000 })
     const status = statusLine(list, details)
     if (status !== lastStatus) {
       lastStatus = status
@@ -497,9 +500,14 @@ async function refresh($: EngineInterface, force = false): Promise<void> {
     if (woken.length) {
       // Only runs still armed now: one disarmed while this poll's status ran is skipped.
       const armed = await read($, wakeAtom)
-      const due = woken.filter((id) => armed.includes(id) && !lateAttached.has(id))
+      const due = woken.filter((id) => armed.includes(id) && !isLate(id))
       await update($, wakeAtom, (all) => all.filter((id) => !due.includes(id)))
       for (const id of due) {
+        if (isLate(id)) {
+          // Attached again just now (a resume): the next poll judges its end afresh.
+          await update($, wakeAtom, (all) => (all.includes(id) ? all : [...all, id]))
+          continue
+        }
         const run = list.find((r) => r.runId === id)
         const d = details[id]
         // Not awaited (it resolves only once the session is idle and the turn starts);
@@ -658,8 +666,9 @@ function refreshAll($: EngineInterface): Promise<void> {
 }
 
 async function attach($: EngineInterface, runId: string): Promise<void> {
-  const now = await $.clock.now()
+  // The generation first, before anything awaited: a poll committing meanwhile sees it.
   attachedSeqOf.set(runId, ++attachSeq)
+  const now = await $.clock.now()
   // Switching to another run leaves the last one's agent thread and pending prompts, as
   // select() does.
   if ((await read($, selectedAtom)) !== runId) {
@@ -955,16 +964,19 @@ export const register: Register = (on) => {
     const isBackgrounded = typeof record.backgroundTaskId === 'string' || /running in background|moved to the background|manually backgrounded/i.test(ran.text ?? '')
     // Every run the output names (a command may launch several), and every run a resume
     // names on the command line (attached even when Bash backgrounds it, no output yet).
-    const launches = isBash ? launchesIn(e.command).invocations : [{ file: null, target: null }]
+    const launches = isBash ? launchesIn(e.command).invocations : [{ file: null, target: null, isBackground: false }]
     const named = extractRunIds(output, Math.max(1, launches.length))
     const targets = isBash && isOk ? launches.map((l) => l.target).filter((id): id is string => id !== null) : []
     for (const runId of [...new Set([...named, ...targets])]) await attach($, runId)
     // New runs whose ids the output does not carry (launches Bash backgrounded report none
     // until they end) arm the fallback, one record each; a failed launch, or an MCP error,
     // arms none.
-    if (isBash && isOk && isBackgrounded) {
-      const fresh = launches.filter((l) => l.target === null).slice(named.filter((id) => !targets.includes(id)).length)
-      for (const l of fresh) pendingLaunches.push({ since: startedAt - 1000, known, file: l.file })
+    // Which new run each launch made is not known from the output (ids carry no file), so
+    // every new-run launch Bash or the shell (`… &`) backgrounded keeps a record; the runs
+    // the output named are attached already, which discovery skips, and a record nothing
+    // matches expires.
+    if (isBash && isOk) {
+      for (const l of launches) if (l.target === null && (isBackgrounded || l.isBackground)) pendingLaunches.push({ since: startedAt - 1000, known, file: l.file })
     }
     void $.ui.open({ id: PANE, title: TITLE })
     return ran
