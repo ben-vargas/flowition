@@ -146,7 +146,9 @@ const pendingLaunches: { since: number; known: Set<string>; file: string | null;
 // The runs a backgrounded command's output named (attached already) that no record has
 // been reconciled with yet, by command: once listed, each takes back the record of its
 // own workflow file, and until then that command's records match nothing.
-const namedByGroup = new Map<number, Set<string>>()
+// `foreground`: the command's new-run launches it did not background, by file (''
+// for a file the shell expands), which named runs account for before any record.
+const namedByGroup = new Map<number, { names: Set<string>; foreground: Map<string, number> }>()
 let launchGroup = 0
 // Each attach (a launch, a resume, a re-attach) takes the next generation; a poll that
 // began before a run's generation neither writes nor announces anything for that run,
@@ -386,16 +388,26 @@ async function refresh($: EngineInterface, force = false): Promise<void> {
     // that was not listed before it and is not attached, preferring its own workflow file:
     // never a run another session started just before.
     // First, a command's named runs, once listed, take back their own records.
-    for (const [group, named] of namedByGroup) {
-      for (const id of [...named]) {
+    // (A run listed before its journal exists reads file '?': it waits until it names its
+    // workflow.) A named run first accounts for a foreground launch of its own workflow,
+    // and only then takes back a backgrounded one's record.
+    for (const [group, { names, foreground }] of namedByGroup) {
+      for (const id of [...names]) {
         const run = list.find((r) => r.runId === id)
-        if (!run) continue
-        named.delete(id)
+        if (!run || run.file === '?') continue
+        names.delete(id)
+        const fg = foreground.has(run.file) ? run.file : foreground.has('') ? '' : null
+        if (fg !== null) {
+          const n = (foreground.get(fg) ?? 1) - 1
+          if (n > 0) foreground.set(fg, n)
+          else foreground.delete(fg)
+          continue
+        }
         const at = pendingLaunches.findIndex((p) => p.group === group && p.file === run.file)
         const loose = at >= 0 ? at : pendingLaunches.findIndex((p) => p.group === group && p.file === null)
         if (loose >= 0) pendingLaunches.splice(loose, 1)
       }
-      if (!named.size || !pendingLaunches.some((p) => p.group === group)) namedByGroup.delete(group)
+      if (!names.size || !pendingLaunches.some((p) => p.group === group)) namedByGroup.delete(group)
     }
     for (let i = 0; i < pendingLaunches.length; ) {
       const { since, known, file, group } = pendingLaunches[i] as (typeof pendingLaunches)[number]
@@ -1012,10 +1024,15 @@ export const register: Register = (on) => {
     // matches expires.
     if (isBash && isOk) {
       const group = ++launchGroup
-      const unnamed = launches.filter((l) => l.target === null && (isBackgrounded || l.isBackground))
+      const fresh = launches.filter((l) => l.target === null)
+      const unnamed = fresh.filter((l) => isBackgrounded || l.isBackground)
       const namedNew = named.filter((id) => !targets.includes(id))
       for (const l of unnamed) pendingLaunches.push({ since: startedAt - 1000, known, file: l.file, group })
-      if (unnamed.length && namedNew.length) namedByGroup.set(group, new Set(namedNew))
+      if (unnamed.length && namedNew.length) {
+        const foreground = new Map<string, number>()
+        for (const l of fresh) if (!(isBackgrounded || l.isBackground)) foreground.set(l.file ?? '', (foreground.get(l.file ?? '') ?? 0) + 1)
+        namedByGroup.set(group, { names: new Set(namedNew), foreground })
+      }
     }
     void $.ui.open({ id: PANE, title: TITLE })
     return ran

@@ -353,8 +353,10 @@ function launchEnvelope(line: string): string | null {
 type ShellToken = { op: string } | { word: string; isDynamic: boolean }
 
 /**
- * A shell command as words and operators: quotes and backslashes resolved, `;`, `&`,
- * `&&`, `|`, `||`, newlines and parentheses as operators. A word the shell would expand
+ * A shell command as words and operators: quotes and backslashes resolved (a
+ * backslash-newline continues the line), `;`, `&`, `&&`, `|`, `||`, newlines and
+ * parentheses as operators, a redirection's `&` (`2>&1`, `&>`) kept in its word, and a
+ * heredoc's body dropped (it is data, not commands). A word the shell would expand
  * ($VAR, `cmd`, a glob) is dynamic: its value is not known until it runs.
  */
 export function shellTokens(command: string): ShellToken[] {
@@ -362,6 +364,7 @@ export function shellTokens(command: string): ShellToken[] {
   let word = ''
   let isWord = false
   let isDynamic = false
+  const heredocs: { delim: string; strip: boolean }[] = []
   const flush = () => {
     if (isWord) out.push({ word, isDynamic })
     word = ''
@@ -391,11 +394,40 @@ export function shellTokens(command: string): ShellToken[] {
         isWord = true
       }
       i++
-    } else if (/\s/.test(c) && c !== '\n') {
+    } else if (c === '<' && command[i + 1] === '<' && command[i + 2] !== '<') {
+      // A heredoc: its delimiter word, then (from the next line) a body skipped below.
       flush()
-    } else if (c === '\n' || c === ';' || c === '(' || c === ')') {
+      i += 2
+      const strip = command[i] === '-'
+      if (strip) i++
+      while (command[i] === ' ' || command[i] === '\t') i++
+      let delim = ''
+      for (; i < command.length && !/[\s;&|()<>]/.test(command[i] as string); i++) if (command[i] !== "'" && command[i] !== '"' && command[i] !== '\\') delim += command[i]
+      i--
+      if (delim) heredocs.push({ delim, strip })
+    } else if (c === '\n') {
       flush()
-      out.push({ op: c === '\n' ? ';' : c })
+      out.push({ op: ';' })
+      // Heredoc bodies begin on the next line and end at their delimiter line.
+      for (const { delim, strip } of heredocs.splice(0)) {
+        let end = i
+        for (;;) {
+          const next = command.indexOf('\n', end + 1)
+          const line = command.slice(end + 1, next < 0 ? undefined : next)
+          end = next < 0 ? command.length : next
+          if ((strip ? line.replace(/^\t+/, '') : line) === delim || next < 0) break
+        }
+        i = end
+      }
+    } else if (/\s/.test(c)) {
+      flush()
+    } else if (c === ';' || c === '(' || c === ')') {
+      flush()
+      out.push({ op: c })
+    } else if (c === '&' && (word.endsWith('>') || word.endsWith('<') || command[i + 1] === '>')) {
+      // A redirection (`2>&1`, `>&2`, `&>file`): part of its word, not a background.
+      word += c
+      isWord = true
     } else if (c === '&' || c === '|') {
       flush()
       const isDouble = command[i + 1] === c
@@ -420,22 +452,78 @@ const WRAPPERS = new Set(['env', 'nohup', 'npx', 'node', 'bun', 'time', 'exec', 
 const WRAPPER_VALUE_OPTIONS = new Set(['-p', '--package', '-r', '--require', '--import', '-C', '--conditions'])
 const isFlowitionWord = (w: string) => /(^|\/)(flo|flowition)(\.js)?$/.test(w)
 
+type Word = { word: string; isDynamic: boolean }
+
+// Reserved words that open or close a compound command (a group whose commands share
+// what follows its close: `if …; fi &` backgrounds them all), and those within one.
+const OPENERS = new Set(['{', 'if', 'while', 'until', 'for', 'case', 'select'])
+const CLOSERS = new Set(['}', 'fi', 'done', 'esac'])
+const INNER = new Set(['then', 'do', 'else', 'elif', '!', 'in'])
+const isRedirect = (w: string) => /^(\d*|&)?(>>?|<)/.test(w) || /^\d*>&/.test(w)
+
 /**
  * The launches a command holds, in order (`flowition run <file>`, `flowition resume <id>`,
- * `run <file> --resume <id>`), read with the CLI's own option grammar from shell words:
- * each a new run of a workflow file (its basename, or null when the shell expands it) or
- * a resume of a named run, and whether the shell backgrounds it (`… &`).
+ * `run <file> --resume <id>`), read from the shell's structure: simple commands within
+ * lists, pipelines, subshells and compound commands, heredoc bodies excluded, and each
+ * launch's words read with the CLI's own option grammar. Each is a new run of a workflow
+ * file (its basename, or null when the shell expands it) or a resume of a named run, and
+ * whether the shell backgrounds it: `&` backgrounds its whole and-or list, groups and
+ * pipelines included.
  */
 export function launchesIn(command: string): { files: (string | null)[]; count: number; invocations: { file: string | null; target: string | null; isBackground: boolean }[] } {
-  const tokens = shellTokens(command)
+  // Simple commands, and the list items they belong to (per group depth).
+  const cmds: { words: Word[]; isBackground: boolean }[] = []
+  type Frame = { item: number[]; all: number[] }
+  const frames: Frame[] = [{ item: [], all: [] }]
+  const top = () => frames[frames.length - 1] as Frame
+  let cur: Word[] = []
+  const endCommand = () => {
+    if (cur.length) {
+      cmds.push({ words: cur, isBackground: false })
+      top().item.push(cmds.length - 1)
+      top().all.push(cmds.length - 1)
+    }
+    cur = []
+  }
+  const endItem = (isBackground: boolean) => {
+    if (isBackground) for (const i of top().item) (cmds[i] as (typeof cmds)[number]).isBackground = true
+    top().item = []
+  }
+  const open = () => {
+    endCommand()
+    frames.push({ item: [], all: [] })
+  }
+  const close = () => {
+    endCommand()
+    endItem(false)
+    if (frames.length > 1) {
+      const inner = frames.pop() as Frame
+      top().item.push(...inner.all)
+      top().all.push(...inner.all)
+    }
+  }
+  for (const t of shellTokens(command)) {
+    if ('op' in t) {
+      if (t.op === '(') open()
+      else if (t.op === ')') close()
+      else if (t.op === '&') {
+        endCommand()
+        endItem(true)
+      } else if (t.op === ';') {
+        endCommand()
+        endItem(false)
+      } else endCommand() // && || |: the same list item goes on
+    } else if (!cur.length && OPENERS.has(t.word)) open()
+    else if (!cur.length && CLOSERS.has(t.word)) close()
+    else if (!cur.length && INNER.has(t.word)) continue
+    else cur.push(t)
+  }
+  endCommand()
+  endItem(false)
+  while (frames.length > 1) close()
+
   const invocations: { file: string | null; target: string | null; isBackground: boolean }[] = []
-  let i = 0
-  while (i < tokens.length) {
-    // One simple command: its words up to the next operator.
-    const words: { word: string; isDynamic: boolean }[] = []
-    while (i < tokens.length && !('op' in (tokens[i] as ShellToken))) words.push(tokens[i++] as { word: string; isDynamic: boolean })
-    const op = i < tokens.length ? (tokens[i] as { op: string }).op : null
-    i++
+  for (const { words, isBackground } of cmds) {
     // The command word: past variable assignments and wrappers (env, nohup, npx, …); a
     // flowition word anywhere else (echo flowition run …) is an argument, not a launch.
     let at = 0
@@ -447,14 +535,19 @@ export function launchesIn(command: string): { files: (string | null)[]; count: 
         while (at < words.length && (words[at]?.word ?? '').startsWith('-')) at += WRAPPER_VALUE_OPTIONS.has(words[at]?.word ?? '') ? 2 : 1
       } else break
     }
-    if (!isFlowitionWord(words[at]?.word ?? '')) at = -1
-    const sub = at >= 0 ? words[at + 1]?.word : undefined
-    if (at < 0 || (sub !== 'run' && sub !== 'resume')) continue
-    let positional: { word: string; isDynamic: boolean } | null = null
-    let resume: { word: string; isDynamic: boolean } | null = null
+    if (!isFlowitionWord(words[at]?.word ?? '')) continue
+    const sub = words[at + 1]?.word
+    if (sub !== 'run' && sub !== 'resume') continue
+    let positional: Word | null = null
+    let resume: Word | null = null
     const rest = words.slice(at + 2)
     for (let k = 0; k < rest.length; k++) {
-      const w = rest[k] as { word: string; isDynamic: boolean }
+      const w = rest[k] as Word
+      if (isRedirect(w.word)) {
+        // A redirection: its target is the next word when not written into this one.
+        if (/^(\d*|&)?(>>?|<)$/.test(w.word)) k++
+        continue
+      }
       if (w.word === '--') {
         positional ??= rest[k + 1] ?? null
         break
@@ -470,7 +563,7 @@ export function launchesIn(command: string): { files: (string | null)[]; count: 
     const id = sub === 'resume' ? positional : resume
     const target = id && !id.isDynamic && RUN_ID.test(id.word) ? id.word : null
     const file = sub === 'run' && !resume && positional && !positional.isDynamic ? (positional.word.split('/').pop() ?? null) : null
-    invocations.push({ file, target, isBackground: op === '&' })
+    invocations.push({ file, target, isBackground })
   }
   return { files: invocations.map((v) => v.file), count: invocations.length, invocations }
 }
