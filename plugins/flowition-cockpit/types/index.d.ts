@@ -30,10 +30,11 @@ export type FlowitionCockpitWorker = {
 
 /**
  * An unanswered question: `t` is when its question event was written (a resume that
- * re-asks it writes a new one), and `isOpen` whether the engine is waiting on it now
- * (the live status's pending questions), which is when it can be answered.
+ * re-asks it writes a new one), `isOpen` whether the engine is waiting on it now (the
+ * live status's pending questions), which is when it can be answered, and `wasOpen`
+ * whether this question event was ever seen open (it has been announced).
  */
-export type FlowitionCockpitQuestion = { qid: string; question: string; t: number | null; isOpen: boolean }
+export type FlowitionCockpitQuestion = { qid: string; question: string; t: number | null; isOpen: boolean; wasOpen: boolean }
 
 /** A run's detail, trimmed from `flowition status --json`. */
 export type FlowitionCockpitDetail = {

@@ -182,7 +182,7 @@ export function parseStatus(stdout: string, fetchedAt: number): Detail {
         const o = obj(q)
         const qid = str(o.qid)
         const isOpen = isRunning && (pending ? pending.has(qid) : d.live !== null && d.live !== undefined)
-        return qid ? [{ qid, question: clipped(str(o.question), 4_000) ?? '', t: num(o.t), isOpen }] : []
+        return qid ? [{ qid, question: clipped(str(o.question), 4_000) ?? '', t: num(o.t), isOpen, wasOpen: isOpen }] : []
       })
     : []
   const result = obj(d.result)
@@ -261,16 +261,29 @@ export const hasEnded = (prev: Detail | undefined, next: Detail): boolean =>
  */
 export const shouldWake = (_prev: Detail | undefined, next: Detail, isArmed: boolean): boolean => isArmed && isTerminal(next.state)
 
+/** A question by its qid and its event: a resume that asks one again writes a new event. */
+const questionKey = (q: Detail['questions'][number]) => `${q.qid}@${q.t ?? ''}`
+
+/**
+ * The next poll with what the last knew of its questions: one seen open before stays
+ * `wasOpen` through a poll whose live status could not be read (which shows it closed),
+ * so it is never announced twice.
+ */
+export function withSeen(prev: Detail | undefined, next: Detail): Detail {
+  const seen = new Set(prev?.questions.filter((q) => q.isOpen || q.wasOpen).map(questionKey) ?? [])
+  if (!next.questions.some((q) => !q.isOpen && !q.wasOpen && seen.has(questionKey(q)))) return next
+  return { ...next, questions: next.questions.map((q) => (q.wasOpen || !seen.has(questionKey(q)) ? q : { ...q, wasOpen: true })) }
+}
+
 /** Toasts owed between two polls of one run: it ended, or it asked something new. */
 export function transitions(prev: Detail | undefined, next: Detail): string[] {
   const out: string[] = []
-  // Only a question the engine is waiting on now is announced, once: by its qid and its
-  // event (a resume that asks one again writes a new question event). An ended run's,
-  // or an earlier attempt's not asked again yet, is no request, a reload or not.
-  const key = (q: Detail['questions'][number]) => `${q.qid}@${q.t ?? ''}`
-  const asked = new Set(prev?.questions.filter((q) => q.isOpen).map(key) ?? [])
+  // Only a question the engine is waiting on now is announced, and once: when its event
+  // is seen open the first time. An ended run's, or an earlier attempt's not asked again
+  // yet, is no request, a reload or not.
+  const announced = new Set(prev?.questions.filter((q) => q.isOpen || q.wasOpen).map(questionKey) ?? [])
   for (const q of next.questions) {
-    if (q.isOpen && !asked.has(key(q))) out.push(`${next.runId} asks: ${q.question}`)
+    if (q.isOpen && !announced.has(questionKey(q))) out.push(`${next.runId} asks: ${q.question}`)
   }
   if (hasEnded(prev, next)) out.push(`${next.runId} ${next.state}${next.error ? `: ${next.error}` : ''}`)
   return out
@@ -490,6 +503,8 @@ export const DRAW_ITEM = 8_000
 export const THREAD_BUDGET = 45_000
 /** What a run's tab (its agents, lanes or log) may draw, room left for the run's controls. */
 export const TAB_BUDGET = 40_000
+/** What a run's question cards may draw, beside its tab, result and controls. */
+export const QUESTIONS_BUDGET = 20_000
 
 /** A text as drawn: at most `n` characters, saying how many more there are. */
 export const clipDraw = (s: string, n = DRAW_ITEM): string => clip(s, n)

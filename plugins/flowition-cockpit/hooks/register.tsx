@@ -52,6 +52,7 @@ import {
   newestWithin,
   firstWithin,
   TAB_BUDGET,
+  QUESTIONS_BUDGET,
   DRAW_ITEM,
   THREAD_BUDGET,
   pairToolResults,
@@ -75,6 +76,7 @@ import {
   timelineWindow,
   titleOf,
   transitions,
+  withSeen,
   WORKFLOW_FILE,
 } from './lib'
 
@@ -400,7 +402,7 @@ async function refresh($: EngineInterface, force = false): Promise<void> {
       const size = await eventsSize($, id)
       if (size !== null) eventsSizeAt.set(id, size)
       const prev = details[id]
-      const next = readStatus(ran.stdout, ran.isStdoutTruncated, prev, id, now)
+      const next = withSeen(prev, readStatus(ran.stdout, ran.isStdoutTruncated, prev, id, now))
       polled.add(id)
       if (watched.has(id)) toasts.push(...transitions(prev, next))
       if (hasEnded(prev, next)) mustList = true
@@ -1199,6 +1201,9 @@ export const register: Register = (on) => {
       const laneCut = firstWithin(shownLanes, (l) => l.label.length + 120, TAB_BUDGET)
       const tl = read_ ? { ...read_, lanes: laneCut.shown } : read_
       const cardCut = firstWithin(workers, (w) => w.label.length + (w.error ? Math.min(w.error.length, 300) : 0) + 160, TAB_BUDGET)
+      // The question cards within their own budget, the ones open to an answer first.
+      const qCut = firstWithin([...(d?.questions ?? [])].sort((a, b) => Number(b.isOpen) - Number(a.isOpen)), (q) => q.question.length + 240, QUESTIONS_BUDGET)
+      const qHidden = qCut.hidden ? (d?.questions ?? []).filter((q) => !qCut.shown.includes(q)).map((q) => q.qid) : []
         // The label of a lane or phase row: an agent's opens its thread.
         const workerLabel = (key: string, kind: 'agent' | 'step', index: number | null, label: string) =>
           kind === 'agent' && index !== null ? btn(key, `#${index}  ${label}`, () => openAgent($, index), 'plain', true) : <Text wrap="truncate-end">⚙ {label}</Text>
@@ -1482,7 +1487,7 @@ export const register: Register = (on) => {
 
             {d?.questions.length ? (
               <Box key="questions" flexDirection="column" gap={1}>
-                {d.questions.map((q) => (
+                {qCut.shown.map((q) => (
                   <Box key={`q:${q.qid}`} borderStyle="round" {...(q.isOpen ? { borderColor: 'warning' as const } : { borderDimColor: true })} paddingX={1} flexDirection="column">
                     <Text {...(q.isOpen ? { color: 'warning' as const } : { dimColor: true })} bold>
                       {q.isOpen
@@ -1508,6 +1513,11 @@ export const register: Register = (on) => {
                     )}
                   </Box>
                 ))}
+                {qHidden.length ? (
+                  <Text dimColor wrap="wrap">
+                    {qHidden.length} more {qHidden.length === 1 ? 'question' : 'questions'} not drawn here ({clipDraw(qHidden.join(', '), 200)}); the viewer shows them all, or {`flowition answer ${selected} <qid> "…"`}.
+                  </Text>
+                ) : null}
               </Box>
             ) : null}
 

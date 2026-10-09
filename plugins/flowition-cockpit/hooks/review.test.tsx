@@ -1097,3 +1097,44 @@ test('P2: only questions the engine waits on count as needing attention or waiti
   const r = { ...run, state: 'running' }
   expect([filterRuns([r], 'attention', '', { flo_a: asked }).length, /1 question waiting/.test(statusLine([r], { flo_a: asked }) ?? ''), transitions(undefined, asked)]).toEqual([1, true, ['flo_a asks: Ship it?']])
 })
+
+test('P2: a question is announced once, even when a poll cannot read the live status', async ($, on) => {
+  const { w } = world4(on)
+  w.states.flo_b = 'running'
+  w.questions = [{ qid: 'q0', question: 'Ship it?', t: 5 }]
+  w.liveQuestions = [{ qid: 'q0', question: 'Ship it?' }]
+  // Launched here, so watched from its first poll: its toasts are owed.
+  on('tool.call', { tool: 'Bash' }, () => ({ result: 'mock launch', text: 'started detached run flo_b' }))
+  await $.tool.call({ tool: 'Bash', command: 'flowition run b.workflow.mjs --detach' })
+  const ui = await $.ui.mount(PANE('terminal'))
+  await ui.press({ key: 'refresh' })
+  // One poll whose control socket did not answer: the question reads closed.
+  w.liveQuestions = null
+  await ui.press({ key: 'refresh' })
+  w.liveQuestions = [{ qid: 'q0', question: 'Ship it?' }]
+  await ui.press({ key: 'refresh' })
+  await ui.press({ key: 'refresh' })
+  // A question first seen with no live status is announced once it is seen open.
+  w.questions = [...w.questions, { qid: 'q1', question: 'Really?', t: 9 }]
+  w.liveQuestions = null
+  await ui.press({ key: 'refresh' })
+  w.liveQuestions = [{ qid: 'q0', question: 'Ship it?' }, { qid: 'q1', question: 'Really?' }]
+  await ui.press({ key: 'refresh' })
+  await ui.press({ key: 'refresh' })
+  expect([w.toasts.filter((t) => t.includes('Ship it?')).length, w.toasts.filter((t) => t.includes('Really?')).length]).toEqual([1, 1])
+  await ui.unmount()
+})
+
+test('P2: many long questions draw within a budget, the run\'s controls and the open ones first', async ($, on) => {
+  const { w } = world4(on)
+  w.states.flo_b = 'running'
+  w.questions = Array.from({ length: 40 }, (_, i) => ({ qid: `q${i}`, question: `question ${i} `.padEnd(3_900, 'x'), t: 5 + i }))
+  w.liveQuestions = w.questions.slice(30)
+  await $.command.run(flo('flo_b'))
+  const ui = await $.ui.mount(PANE('terminal'))
+  const fields = (await ui.findAll({ type: 'Input' })).filter((n) => n.key?.startsWith('answer:')).map((n) => n.key?.split(':')[1])
+  expect([!!(await ui.find({ key: 'refresh' })), !!(await ui.find({ key: 'cancel-run' })), !!(await ui.find({ text: /more questions not drawn here/ }))]).toEqual([true, true, true])
+  // The open questions (q30–q39) come first, so they can be answered.
+  expect(fields.slice(0, 3)).toEqual(['q30', 'q31', 'q32'])
+  await ui.unmount()
+})
