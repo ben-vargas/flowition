@@ -37,6 +37,7 @@ import {
   laneText,
   parseRuns,
   lifetimeWorkers,
+  pairToolResults,
   readStatus,
   staleDetailIds,
   parseTranscript,
@@ -113,6 +114,13 @@ const pressHandlers = new Map<string, { fn: () => unknown; render: number; surfa
 // Renders are counted per surface, and a render prunes only its own surface's handlers:
 // a terminal redraw never strands the faces a desktop pane still shows.
 const renderCounts = new Map<string, number>()
+// When each run's status was last read, and its events.jsonl size then: a cached
+// terminal detail is read again when the file has grown (a resume ran, here or
+// elsewhere) or a minute has passed, so a resume ending in the same state still shows.
+const polledAt = new Map<string, number>()
+const eventsSizeAt = new Map<string, number>()
+const REVALIDATE_MS = 60_000
+
 // Bumped by each message sent: part of the fields' keys, so a sent field draws empty.
 let sent = 0
 // The session's working directory: where a run started from the pane runs.
@@ -265,13 +273,27 @@ async function refresh($: EngineInterface, force = false): Promise<void> {
     // So is any run whose cached detail the list now contradicts (resumed elsewhere).
     for (const id of staleDetailIds(list, details)) ids.add(id)
     if (selected && (force || !details[selected] || isLive(details[selected].state))) ids.add(selected)
+    for (const id of Object.keys(details)) {
+      if (ids.has(id) || isLive(details[id]!.state)) continue
+      if (now - (polledAt.get(id) ?? 0) >= REVALIDATE_MS || (await eventsSize($, id)) !== eventsSizeAt.get(id)) ids.add(id)
+    }
 
     const toasts: string[] = []
     const woken: string[] = []
     const polled = new Set<string>()
     for (const id of ids) {
-      const ran = await flo($, ['status', id, '--json'])
+      // Each run on its own: one status that fails (denied, unstartable, timed out)
+      // never holds back the others' updates, toasts and wakes.
+      let ran: ProcessRunResult
+      try {
+        ran = await flo($, ['status', id, '--json'])
+      } catch {
+        continue
+      }
       if (ran.exitCode !== 0) continue
+      polledAt.set(id, now)
+      const size = await eventsSize($, id)
+      if (size !== null) eventsSizeAt.set(id, size)
       const prev = details[id]
       const next = readStatus(ran.stdout, ran.isStdoutTruncated, prev, id, now)
       polled.add(id)
@@ -414,6 +436,15 @@ async function refreshThread($: EngineInterface, now: number): Promise<void> {
 }
 
 // ---- actions ---------------------------------------------------------------------
+
+/** The size of a run's events.jsonl, or null when it cannot be read. */
+async function eventsSize($: EngineInterface, runId: string): Promise<number | null> {
+  try {
+    return (await $.fs.stat(`${await ensureHome($)}/runs/${runId}/events.jsonl`)).size
+  } catch {
+    return null
+  }
+}
 
 /** The Refresh button: the run list and everything on screen, now. */
 function refreshAll($: EngineInterface): Promise<void> {
@@ -782,8 +813,7 @@ export const register: Register = (on) => {
         const label = w?.label ?? `agent ${agentView}`
         const wid = `${selected}:${agentView}`
         const events = th?.events ?? []
-        const results = new Map(events.filter((x) => x.kind === 'tool-result' && x.toolUseId).map((x) => [x.toolUseId as string, x]))
-        const paired = new Set(events.filter((x) => x.kind === 'tool' && x.toolId && results.has(x.toolId)).map((x) => x.toolId as string))
+        const { byCall: results, paired } = pairToolResults(events)
         const prompt = events.find((x) => x.kind === 'meta')?.text ?? null
         const toggle = (key: string) => update($, expandedAtom, (all) => (all.includes(key) ? all.filter((k) => k !== key) : [...all, key]))
         const facts = w
@@ -830,7 +860,7 @@ export const register: Register = (on) => {
               )
             }
             case 'tool': {
-              const result = ev.toolId ? results.get(ev.toolId) : undefined
+              const result = results.get(ev.seq)
               const outcome = result
                 ? result.isError
                   ? `error · ${(result.output ?? '').split('\n')[0]?.slice(0, 120) ?? ''}`
@@ -859,7 +889,7 @@ export const register: Register = (on) => {
               )
             }
             case 'tool-result':
-              return ev.toolUseId && paired.has(ev.toolUseId) ? null : (
+              return paired.has(ev.seq) ? null : (
                 <Text color={ev.isError ? 'error' : 'inactive'} wrap="truncate-end">
                   {'   '}
                   {ev.isError ? 'error' : 'result'} · {(ev.output ?? '').split('\n')[0]}
@@ -1355,7 +1385,8 @@ export const register: Register = (on) => {
       ])
       if (launch) {
         return launchView(c, launch, workflows, sessionCwd || 'this session’s folder', {
-          pick: (file) => update($, launchAtom, (l) => (l ? { ...l, file, error: null } : l)),
+          // Another workflow starts from empty args: none carried over, unseen, from the last.
+        pick: (file) => update($, launchAtom, (l) => (l ? { ...l, file, args: l.file === file ? l.args : '', error: null } : l)),
         filter: (query) => update($, launchAtom, (l) => (l ? { ...l, query, limit: 20 } : l)),
         more: () => update($, launchAtom, (l) => (l ? { ...l, limit: l.limit + 20 } : l)),
           args: (text) => update($, launchAtom, (l) => (l ? { ...l, args: text } : l)),

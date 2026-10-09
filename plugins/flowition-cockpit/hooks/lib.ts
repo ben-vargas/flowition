@@ -936,3 +936,29 @@ export function lifetimeWorkers(workers: Worker[], lanes: Lane[]): Worker[] {
     return { ...w, cost: lane.cost || null, outputTokens: tokens || null }
   })
 }
+
+/**
+ * Each tool call's result, paired in transcript order within an attempt: a result goes
+ * to the earliest still-open call with its id. A resumed attempt restarts the adapters'
+ * synthesized ids (pi's `t1-tool1` recurs), so an attempt boundary (`attempt`, or a new
+ * `meta`) closes every open call rather than letting a later result match an earlier
+ * attempt's call. Returns results by the call's `seq`, and the results so paired.
+ */
+export function pairToolResults(events: ThreadEvent[]): { byCall: Map<number, ThreadEvent>; paired: Set<number> } {
+  const byCall = new Map<number, ThreadEvent>()
+  const paired = new Set<number>()
+  let open = new Map<string, number[]>()
+  for (const ev of events) {
+    if (ev.kind === 'attempt' || ev.kind === 'meta') open = new Map()
+    else if (ev.kind === 'tool' && ev.toolId) open.set(ev.toolId, [...(open.get(ev.toolId) ?? []), ev.seq])
+    else if (ev.kind === 'tool-result' && ev.toolUseId) {
+      const waiting = open.get(ev.toolUseId)
+      const call = waiting?.shift()
+      if (call !== undefined) {
+        byCall.set(call, ev)
+        paired.add(ev.seq)
+      }
+    }
+  }
+  return { byCall, paired }
+}
