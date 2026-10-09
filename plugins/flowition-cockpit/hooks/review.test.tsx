@@ -1180,3 +1180,42 @@ test('P2: a live fan-out with unfinished work spans to now, not to its last fini
   expect(await ui.find({ text: '1/2 done · 1m 00s so far' })).toBeDefined()
   await ui.unmount()
 })
+
+test('P2: a status slimmed by cutting its lists is partial, its workers then from the events', () => {
+  const d = parseStatus(JSON.stringify({ runId: 'flo_a', state: 'running', agents: [], steps: [], questions: [], phases: [], result: null, live: null, listsCut: true }), 1)
+  expect(d.isPartial).toBe(true)
+  expect(parseStatus(JSON.stringify({ runId: 'flo_a', state: 'running', agents: [], steps: [], questions: [], phases: [], result: null, live: null }), 1).isPartial).toBeUndefined()
+})
+
+test('P2: a watched run whose detail alone passes the cache budget is kept trimmed, its questions answerable and announced once', async ($, on) => {
+  const { w } = world4(on)
+  w.states.flo_b = 'running'
+  // About 3.1 MB of status (under the read cap), over the cache's 3 MiB once parsed.
+  w.questions = Array.from({ length: 780 }, (_, i) => ({ qid: `q${i}`, question: `question ${i} `.padEnd(3_990, 'x'), t: 5 + i }))
+  w.liveQuestions = w.questions.map((q) => ({ qid: (q as { qid: string }).qid }))
+  on('tool.call', { tool: 'Bash' }, () => ({ result: 'mock launch', text: 'started detached run flo_b' }))
+  await $.tool.call({ tool: 'Bash', command: 'flowition run b.workflow.mjs --detach' })
+  const ui = await $.ui.mount(PANE('terminal'))
+  for (let i = 0; i < 3; i++) await ui.press({ key: 'refresh' })
+  const fields = (await ui.findAll({ type: 'Input' })).filter((n) => n.key?.startsWith('answer:'))
+  expect([fields.length > 0, w.toasts.filter((t) => t.startsWith('flo_b asks: question 0 ')).length]).toEqual([true, 1])
+  await ui.unmount()
+})
+
+test('P2: a crashed run\'s agent spans to its last progress, not its start', async ($, on) => {
+  const { w } = world4(on)
+  w.states.flo_a = 'stale'
+  w.agents = [{ index: 0, label: 'worker', state: 'running' }]
+  w.events = lines([
+    { t: 1_000, type: 'run', state: 'started' },
+    { t: 1_000, type: 'agent', index: 0, label: 'worker', state: 'running' },
+    { t: 1_801_000, type: 'agent', index: 0, state: 'progress', outputTokens: 50, lastOutputAt: 1_801_000 },
+    { t: 3_601_000, type: 'agent', index: 0, state: 'progress', outputTokens: 90, lastOutputAt: 3_601_000 },
+  ])
+  await $.command.run(flo('flo_a'))
+  const ui = await $.ui.mount(PANE('terminal'))
+  await ui.press({ key: 'tab:timeline' })
+  // The axis ends at the last progress (1h), and so does the lane's own duration.
+  expect((await ui.findAll({ type: 'Text' })).filter((t) => t.text === '1h 00m').length).toBe(2)
+  await ui.unmount()
+})

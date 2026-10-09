@@ -119,7 +119,7 @@ export type FlowitionCockpitLane = {
   queuedAt: number | null
   startedAt: number | null
   endedAt: number | null
-  /** The last time any of its (non-progress) events was recorded. */
+  /** The last time any of its events was recorded, progress included (a crashed run's agent worked until then). */
   lastSeenAt: number
   path: FlowitionCockpitPathSeg[]
   /** Spend over every attempt: each attempt's final event carries that attempt's usage. */

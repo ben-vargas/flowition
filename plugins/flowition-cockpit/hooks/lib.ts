@@ -77,11 +77,14 @@ export const RUNS_FILTER_JS = ON_STDIN(
 )
 
 /**
- * `status --json` with the completed result's value left out (`resultOmitted`), which is
- * what makes a status too large: its workers, phases and questions stay whole.
+ * `status --json` made to fit one read (3 MB): the completed result's value left out
+ * (`resultOmitted`), then its long texts (errors, questions, labels, previews) clipped
+ * harder until it fits; past that the question texts are emptied and the worker lists
+ * capped (`listsCut`, so the pane treats the detail as partial). Every question entry
+ * (qid, its event) stays, so none is announced twice or lost.
  */
 export const STATUS_SLIM_JS = ON_STDIN(
-  `const d=JSON.parse(s);if(d.result&&typeof d.result==='object'){if('result' in d.result){d.result.result=null;d.resultOmitted=true}if(typeof d.result.error==='string'&&d.result.error.length>20000)d.result.error=d.result.error.slice(0,20000)+'…'}process.stdout.write(JSON.stringify(d))`,
+  `const d=JSON.parse(s);const clip=(x,n)=>typeof x==='string'&&x.length>n?x.slice(0,n)+'…':x;const arr=(x)=>Array.isArray(x)?x:[];const qs=[...arr(d.questions),...arr(d.live&&d.live.questions)];const ws=[...arr(d.agents),...arr(d.steps)];const r=d.result&&typeof d.result==='object'?d.result:null;if(r&&'result' in r){r.result=null;d.resultOmitted=true}const fits=()=>JSON.stringify(d).length<3e6;for(const n of [20000,4000,1000,200]){if(r)r.error=clip(r.error,n);for(const q of qs)q.question=clip(q.question,n);for(const w of ws){w.error=clip(w.error,n);for(const k of ['label','name','promptPreview','resultPreview'])w[k]=clip(w[k],200)}if(fits())break}if(!fits()){d.listsCut=true;for(const q of qs)q.question='';if(!fits()){d.agents=arr(d.agents).slice(0,500);d.steps=arr(d.steps).slice(0,500)}}process.stdout.write(JSON.stringify(d))`,
 )
 
 /** The filtered listing's lines: the rows it kept, and how many runs there are in all. */
@@ -199,6 +202,8 @@ export function parseStatus(stdout: string, fetchedAt: number): Detail {
       d.resultOmitted === true ? (isLive(str(d.state) ?? '') ? null : TOO_LARGE(runId)) : result.status === 'completed' && result.result !== undefined ? toMarkdown(result.result) : null,
     error: clipped(str(result.error), 4_000),
     fetchedAt,
+    // A status slimmed to fit by cutting its lists: its workers are not all known.
+    ...(d.listsCut === true ? { isPartial: true } : {}),
   }
 }
 
@@ -700,7 +705,15 @@ export function foldTimeline(prev: Timeline, text: string): Timeline {
     out.entries.push({ t, kind, text: clip(text, 2000), agent, tone })
   const agentName = (i: number | null) => (i === null ? 'an agent' : (lanes.get(`a:${i}`)?.label ?? `agent ${i}`))
   for (const line of text.split('\n')) {
-    if (!line.trim() || line.includes('"state":"progress"')) continue
+    if (!line.trim()) continue
+    // Progress lines (the many) are not parsed or narrated, but each says when its agent
+    // was last heard from: a crashed run's agent, with no final event, worked until then.
+    if (line.includes('"state":"progress"')) {
+      const t = Number(/"t":(\d+)/.exec(line)?.[1])
+      const lane = lanes.get(`a:${/"index":(\d+)/.exec(line)?.[1] ?? '?'}`)
+      if (lane && Number.isFinite(t)) lane.lastSeenAt = Math.max(lane.lastSeenAt, t)
+      continue
+    }
     let r: unknown
     try {
       r = JSON.parse(line)
@@ -1181,19 +1194,45 @@ export function reconcileWorkers(workers: Worker[], lanes: Lane[]): Worker[] {
 }
 
 /**
+ * A detail cut down to `room` characters, for one the pane must keep (on screen, or
+ * watched): long texts clipped, then the workers capped and the question texts of all
+ * but the open ones emptied (partial: the events fill in the workers). Every question
+ * entry stays, so none is announced twice.
+ */
+export function trimDetail(d: Detail, room: number): Detail {
+  const size = (x: Detail) => JSON.stringify(x).length
+  let out: Detail = {
+    ...d,
+    resultMarkdown: d.resultMarkdown === null ? null : clip(d.resultMarkdown, 4_000),
+    error: clipped(d.error, 1_000),
+    questions: d.questions.map((q) => ({ ...q, question: clip(q.question, 500) })),
+    workers: d.workers.map((w) => ({ ...w, error: clipped(w.error, 200) })),
+  }
+  if (size(out) <= room) return out
+  out = { ...out, isPartial: true, workers: out.workers.slice(0, 200), questions: out.questions.map((q) => (q.isOpen ? q : { ...q, question: '' })) }
+  if (size(out) <= room) return out
+  return { ...out, workers: [], questions: out.questions.map((q) => ({ ...q, question: q.isOpen ? clip(q.question, 100) : '' })) }
+}
+
+/**
  * The details the pane keeps within `budget` characters ($.state refuses a value over
- * 4 MiB): the ids in `first` (on screen, watched) before the rest. One left out is
- * polled afresh when needed.
+ * 4 MiB): the ids in `first` (on screen, watched) before the rest, each of those kept in
+ * a trimmed form if it is too large whole. Another left out is polled afresh when needed.
  */
 export function boundDetails(details: Record<string, Detail>, first: string[], budget = 3 << 20): Record<string, Detail> {
   const ids = [...new Set([...first.filter((id) => details[id]), ...Object.keys(details)])]
   const out: Record<string, Detail> = {}
   let used = 0
   for (const id of ids) {
-    const n = JSON.stringify(details[id]).length + id.length + 8
+    let d = details[id] as Detail
+    let n = JSON.stringify(d).length + id.length + 8
+    if (used + n > budget && first.includes(id)) {
+      d = trimDetail(d, budget - used - id.length - 8)
+      n = JSON.stringify(d).length + id.length + 8
+    }
     if (used + n > budget) continue
     used += n
-    out[id] = details[id] as Detail
+    out[id] = d
   }
   return out
 }
