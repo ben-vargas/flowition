@@ -1,0 +1,787 @@
+// Pure helpers: parsing flowition's --json output, formatting, rendering results and
+// badges, and deciding what changed between two polls. No `$` here, so the tests
+// exercise them directly.
+import type {
+  FlowitionCockpitDetail as Detail,
+  FlowitionCockpitLane as Lane,
+  FlowitionCockpitLogEntry as LogEntry,
+  FlowitionCockpitPathSeg as PathSeg,
+  FlowitionCockpitTimeline as Timeline,
+  FlowitionCockpitEvent as ThreadEvent,
+  FlowitionCockpitRun as Run,
+  FlowitionCockpitWorker as Worker,
+} from '../types'
+
+const LIVE = new Set(['running', 'starting', 'resuming'])
+
+export const isLive = (state: string): boolean => LIVE.has(state)
+
+/** An agent that can still be steered or cancelled. */
+export const isActive = (state: string): boolean => isLive(state) || state === 'queued'
+
+const str = (v: unknown): string | null => (typeof v === 'string' && v.length > 0 ? v : null)
+const num = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null)
+const isRecord = (v: unknown): v is Record<string, unknown> => v !== null && typeof v === 'object' && !Array.isArray(v)
+const obj = (v: unknown): Record<string, unknown> => (isRecord(v) ? v : {})
+
+/** `flowition runs --json`: newest first, as the CLI sorts it. */
+export function parseRuns(stdout: string): Run[] {
+  const rows: unknown = JSON.parse(stdout)
+  if (!Array.isArray(rows)) return []
+  const out: Run[] = []
+  for (const raw of rows) {
+    const r = obj(raw)
+    const runId = str(r.runId)
+    if (!runId) continue
+    out.push({ runId, state: str(r.state) ?? 'unknown', file: str(r.file) ?? '?', createdAt: num(r.createdAt) ?? 0 })
+  }
+  return out
+}
+
+function toWorker(raw: unknown, kind: 'agent' | 'step'): Worker {
+  const a = obj(raw)
+  const usage = obj(a.usage)
+  const index = num(a.index)
+  return {
+    id: kind === 'agent' ? `a:${index ?? '?'}` : `s:${str(a.key) ?? str(a.name) ?? '?'}`,
+    kind,
+    index: kind === 'agent' ? index : null,
+    label: str(kind === 'agent' ? a.label : a.name) ?? (kind === 'agent' ? `agent ${index ?? '?'}` : 'step'),
+    adapter: kind === 'agent' ? str(a.adapter) : null,
+    model: kind === 'agent' ? str(a.model) : null,
+    effort: str(a.effort),
+    state: str(a.state) ?? 'unknown',
+    durationMs: num(a.durationMs),
+    // `t` moves on every progress event; only a finished worker's is needed (the run's
+    // duration), so a live one carries none and its polls compare equal.
+    lastAt: isActive(str(a.state) ?? '') ? null : num(a.t),
+    tool: str(a.tool),
+    outputTokens: num(a.outputTokens) ?? num(usage.output),
+    cost: num(usage.cost),
+    error: str(a.error),
+    phase: str(a.phase),
+    phaseIndex: num(a.phaseIndex),
+  }
+}
+
+/** `flowition status <id> --json`, trimmed to what the pane draws. */
+export function parseStatus(stdout: string, fetchedAt: number): Detail {
+  const d = obj(JSON.parse(stdout))
+  const runId = str(d.runId) ?? '?'
+  const agents = Array.isArray(d.agents) ? d.agents.map((a) => toWorker(a, 'agent')) : []
+  agents.sort((x, y) => (x.index ?? 0) - (y.index ?? 0))
+  const steps = Array.isArray(d.steps) ? d.steps.map((s) => toWorker(s, 'step')) : []
+  const questions = Array.isArray(d.questions)
+    ? d.questions.flatMap((q) => {
+        const o = obj(q)
+        const qid = str(o.qid)
+        return qid ? [{ qid, question: str(o.question) ?? '' }] : []
+      })
+    : []
+  const result = obj(d.result)
+  const costs = agents.map((a) => a.cost).filter((c): c is number => c !== null)
+  return {
+    runId,
+    state: str(d.state) ?? 'unknown',
+    phases: Array.isArray(d.phases) ? d.phases.filter((p): p is string => typeof p === 'string') : [],
+    workers: [...agents, ...steps],
+    questions,
+    spentOutputTokens: num(obj(d.live).spentOutputTokens),
+    cost: costs.length ? costs.reduce((s, c) => s + c, 0) : null,
+    resultMarkdown: result.status === 'completed' && result.result !== undefined ? toMarkdown(result.result) : null,
+    error: str(result.error),
+    fetchedAt,
+  }
+}
+
+/** A detail standing in for a run this session launched, before its first poll. */
+export const placeholder = (runId: string, fetchedAt: number): Detail => ({
+  runId,
+  state: 'starting',
+  phases: [],
+  workers: [],
+  questions: [],
+  spentOutputTokens: null,
+  cost: null,
+  resultMarkdown: null,
+  error: null,
+  fetchedAt,
+})
+
+export const sameJson = (a: unknown, b: unknown): boolean => JSON.stringify(a) === JSON.stringify(b)
+
+/** Two polls of one run that would draw the same, `fetchedAt` aside. */
+export const sameDetail = (a: Detail, b: Detail): boolean => sameJson({ ...a, fetchedAt: 0 }, { ...b, fetchedAt: 0 })
+
+export const hasEnded = (prev: Detail | undefined, next: Detail): boolean =>
+  prev !== undefined && isLive(prev.state) && !isLive(next.state)
+
+/** Toasts owed between two polls of one run: it ended, or it asked something new. */
+export function transitions(prev: Detail | undefined, next: Detail): string[] {
+  const out: string[] = []
+  const asked = new Set(prev?.questions.map((q) => q.qid) ?? [])
+  for (const q of next.questions) {
+    if (!asked.has(q.qid)) out.push(`${next.runId} asks: ${q.question}`)
+  }
+  if (hasEnded(prev, next)) out.push(`${next.runId} ${next.state}${next.error ? `: ${next.error}` : ''}`)
+  return out
+}
+
+/** Did this shell command launch or resume a flowition run? */
+export const isFlowitionLaunch = (command: string): boolean =>
+  /(^|[\s;&|(/])(flo|flowition)(\.js)?\s+(run|resume)\b/.test(command)
+
+const RUN_ID = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/
+
+/** The runId a launch printed: detached text, --json, or the foreground `run <id>` line. */
+export function extractRunId(text: string): string | null {
+  const patterns = [/started detached run (\S+)/, /"runId"\s*:\s*"([^"]+)"/, /^run (\S+)$/m]
+  for (const p of patterns) {
+    const id = p.exec(text)?.[1]
+    if (id && RUN_ID.test(id)) return id
+  }
+  return null
+}
+
+/** `http://host/#/?t=…` → `http://host/#/run/<id>?t=…`, the viewer's run route. */
+export function deepLink(base: string, runId: string): string {
+  return base.includes('#/?') ? base.replace('#/?', `#/run/${encodeURIComponent(runId)}?`) : base
+}
+
+/** `review-r2.workflow.mjs` → `review-r2`: what a person calls the run. */
+export const titleOf = (file: string): string => file.replace(/(\.workflow)?\.(m?js|cjs|ts)$/, '') || file
+
+export function fmtDuration(ms: number): string {
+  const s = Math.max(0, Math.round(ms / 1000))
+  if (s < 60) return `${s}s`
+  const m = Math.floor(s / 60)
+  if (m < 60) return `${m}m ${String(s % 60).padStart(2, '0')}s`
+  return `${Math.floor(m / 60)}h ${String(m % 60).padStart(2, '0')}m`
+}
+
+export function fmtAge(now: number, t: number): string {
+  if (!t) return ''
+  const s = Math.max(0, Math.round((now - t) / 1000))
+  if (s < 60) return 'just now'
+  if (s < 3600) return `${Math.floor(s / 60)}m ago`
+  if (s < 86_400) return `${Math.floor(s / 3600)}h ago`
+  return `${Math.floor(s / 86_400)}d ago`
+}
+
+export const fmtTokens = (n: number): string =>
+  n >= 1_000_000 ? `${(n / 1_000_000).toFixed(1)}M` : n >= 1000 ? `${(n / 1000).toFixed(n >= 10_000 ? 0 : 1)}k` : String(n)
+
+export const fmtCost = (c: number): string => (c < 0.01 ? '<$0.01' : `$${c.toFixed(2)}`)
+
+/** How long the run took (or has taken): from its creation to its last agent event. */
+export function runDuration(run: Run | undefined, d: Detail | undefined, now: number): number | null {
+  if (!run?.createdAt) return null
+  if (d && isLive(d.state)) return now - run.createdAt
+  const last = Math.max(0, ...(d?.workers.map((w) => w.lastAt ?? 0) ?? []))
+  return last > run.createdAt ? last - run.createdAt : null
+}
+
+/** The status line: live runs and waiting questions, or nothing when all is quiet. */
+export function statusLine(runs: Run[], details: Record<string, Detail>): string | undefined {
+  const live = runs.filter((r) => isLive(r.state))
+  if (live.length === 0) return undefined
+  const questions = live.reduce((n, r) => n + (details[r.runId]?.questions.length ?? 0), 0)
+  const parts = [`flo · ${live.length} running`]
+  if (questions) parts.push(`${questions} question${questions === 1 ? '' : 's'} waiting`)
+  return parts.join(' · ')
+}
+
+export type Tone = 'success' | 'error' | 'warning' | 'suggestion' | 'inactive'
+
+/** Theme color for a run or worker state. */
+export function stateColor(state: string): Tone {
+  if (state === 'completed' || state === 'done' || state === 'cached') return 'success'
+  if (state === 'failed' || state === 'corrupt' || state === 'cancelled') return 'error'
+  if (state === 'interrupted' || state === 'stale' || state === 'unknown') return 'warning'
+  if (isLive(state)) return 'suggestion'
+  return 'inactive'
+}
+
+// Mid-tone hues that read on light and dark backgrounds alike.
+const HEX: Record<Tone, string> = {
+  success: '#2f9e5f',
+  error: '#d64545',
+  warning: '#c98a0b',
+  suggestion: '#3b7ddd',
+  inactive: '#8a8f98',
+}
+
+const xml = (s: string): string => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
+
+const FONT = `font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif"`
+
+/** A tinted pill with the state's name: the desktop's badge. */
+export function badgeSvg(state: string): { source: string; width: number; height: number } {
+  const hex = HEX[stateColor(state)]
+  const width = Math.round(22 + state.length * 6.4)
+  const height = 20
+  const source =
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">` +
+    `<rect x="0.5" y="0.5" width="${width - 1}" height="${height - 1}" rx="9.5" fill="${hex}" fill-opacity="0.14" stroke="${hex}" stroke-opacity="0.35"/>` +
+    `<circle cx="10" cy="10" r="3" fill="${hex}"/>` +
+    `<text x="17" y="14" ${FONT} font-size="11" font-weight="600" fill="${hex}">${xml(state)}</text></svg>`
+  return { source, width, height }
+}
+
+const GROUPS: { tone: Tone; states: string[] }[] = [
+  { tone: 'success', states: ['done', 'cached'] },
+  { tone: 'suggestion', states: ['running'] },
+  { tone: 'error', states: ['failed', 'cancelled'] },
+  { tone: 'inactive', states: [] },
+]
+
+/** Counts of workers per tone, in bar order; anything unlisted counts as inactive. */
+export function progress(workers: Worker[]): { tone: Tone; count: number }[] {
+  return GROUPS.map((g, i) => ({
+    tone: g.tone,
+    count: workers.filter((w) => (i === GROUPS.length - 1 ? !GROUPS.some((o) => o.states.includes(w.state)) : g.states.includes(w.state))).length,
+  }))
+}
+
+/**
+ * A segmented progress bar over the run's workers: the desktop's header bar. The
+ * markup is far wider than any pane and stretches (`preserveAspectRatio="none"`), so
+ * an Svg drawn with no `width` takes its slot's full width, which is all the room.
+ */
+export function progressSvg(workers: Worker[]): string {
+  const vw = 1000
+  const height = 6
+  const total = workers.length || 1
+  let x = 0
+  const parts = progress(workers)
+    .filter((p) => p.count > 0)
+    .map((p) => {
+      const w = (p.count / total) * vw
+      const rect = `<rect x="${x.toFixed(1)}" y="0" width="${w.toFixed(1)}" height="${height}" fill="${HEX[p.tone]}"/>`
+      x += w
+      return rect
+    })
+  return (
+    `<svg xmlns="http://www.w3.org/2000/svg" width="4000" height="${height}" viewBox="0 0 ${vw} ${height}" preserveAspectRatio="none">` +
+    `<rect width="${vw}" height="${height}" fill="${HEX.inactive}" fill-opacity="0.25"/>${parts.join('')}</svg>`
+  )
+}
+
+// ---- results as Markdown ---------------------------------------------------------
+
+const MAX_MARKDOWN = 20_000
+const TITLE_KEYS = ['headline', 'title', 'name', 'label', 'id']
+const LINK_KEYS = ['url', 'href', 'link']
+const isPrimitive = (v: unknown): boolean => v === null || ['string', 'number', 'boolean'].includes(typeof v)
+const esc = (s: string): string => s.replace(/([\\*_`[\]])/g, '\\$1')
+const oneLine = (s: string): string => s.replace(/\s+/g, ' ').trim()
+
+function inline(v: unknown): string {
+  if (typeof v === 'string') return esc(oneLine(v))
+  if (v === null || v === undefined) return '—'
+  if (typeof v === 'number' || typeof v === 'boolean') return `\`${String(v)}\``
+  if (Array.isArray(v) && v.every(isPrimitive)) return v.map(inline).join(', ')
+  const json = JSON.stringify(v)
+  return `\`${json.length > 160 ? `${json.slice(0, 159)}…` : json}\``
+}
+
+/** One object as a list item: its title (linked when it has a URL), facts, then prose. */
+function item(o: Record<string, unknown>): string {
+  const titleKey = TITLE_KEYS.find((k) => typeof o[k] === 'string')
+  const linkKey = LINK_KEYS.find((k) => typeof o[k] === 'string' && /^https?:\/\//.test(o[k] as string))
+  const title = titleKey ? esc(oneLine(o[titleKey] as string)) : null
+  const link = linkKey ? (o[linkKey] as string).replace(/[()\s]/g, (c) => (c === '(' ? '%28' : c === ')' ? '%29' : '%20')) : null
+  const head = title ? (link ? `**[${title}](${link})**` : `**${title}**`) : link ? `<${link}>` : ''
+  const rest = Object.entries(o).filter(([k]) => k !== titleKey && k !== linkKey)
+  const facts = rest.filter(([, v]) => !(typeof v === 'string' && v.length > 60) && isPrimitive(v))
+  const prose = rest.filter(([, v]) => typeof v === 'string' && v.length > 60)
+  const nested = rest.filter(([, v]) => !isPrimitive(v))
+  const lines = [head || inline(facts.shift()?.[1])]
+  if (facts.length) lines.push(`_${facts.map(([k, v]) => `${esc(k)}: ${inline(v)}`).join(' · ')}_`)
+  for (const [, v] of prose) lines.push(esc(oneLine(v as string)))
+  for (const [k, v] of nested) lines.push(`${esc(k)}: ${inline(v)}`)
+  return `- ${lines.join('  \n  ')}`
+}
+
+function block(v: unknown, depth: number): string {
+  if (typeof v === 'string') return v
+  if (isPrimitive(v)) return inline(v)
+  if (Array.isArray(v)) {
+    if (v.length === 0) return '_none_'
+    return v.map((x) => (isRecord(x) ? item(x) : `- ${inline(x)}`)).join('\n')
+  }
+  const entries = Object.entries(v as Record<string, unknown>)
+  if (depth >= 2) return entries.map(([k, x]) => `- **${esc(k)}:** ${inline(x)}`).join('\n')
+  const scalar = entries.filter(([, x]) => isPrimitive(x) && !(typeof x === 'string' && x.includes('\n')))
+  const scalarKeys = new Set(scalar.map(([k]) => k))
+  const complex = entries.filter(([k]) => !scalarKeys.has(k))
+  const out: string[] = []
+  if (scalar.length) out.push(scalar.map(([k, x]) => `- **${esc(k)}:** ${inline(x)}`).join('\n'))
+  for (const [k, x] of complex) out.push(`${'#'.repeat(depth + 3)} ${esc(k)}\n\n${block(x, depth + 1)}`)
+  return out.join('\n\n')
+}
+
+/** A workflow's JSON result as readable Markdown: headings per key, linked list items. */
+export function toMarkdown(value: unknown): string {
+  const md = block(value, 0)
+  return md.length > MAX_MARKDOWN ? `${md.slice(0, MAX_MARKDOWN)}\n\n_…cut here; open the run in the viewer for the rest._` : md
+}
+
+// ---- agent transcripts -----------------------------------------------------------
+
+const clip = (s: string, n: number): string => (s.length > n ? `${s.slice(0, n)}… [+${s.length - n} chars]` : s)
+
+const SUMMARY_KEYS = ['command', 'cmd', 'query', 'url', 'file_path', 'path', 'pattern', 'description', 'prompt']
+
+/** A tool call's input in one line: the field a person would name it by. */
+export function summarizeInput(input: unknown): string {
+  let v: unknown = input
+  if (typeof input === 'string') {
+    try {
+      v = JSON.parse(input)
+    } catch {
+      return oneLine(input).slice(0, 160)
+    }
+  }
+  if (isRecord(v)) {
+    for (const k of SUMMARY_KEYS) {
+      const x = v[k]
+      if (typeof x === 'string' && x) return oneLine(x).slice(0, 160)
+      if (Array.isArray(x) && x.length && x.every((y) => typeof y === 'string')) return oneLine(x.join(' ')).slice(0, 160)
+    }
+    const first = Object.values(v).find((x) => typeof x === 'string' && x)
+    if (typeof first === 'string') return oneLine(first).slice(0, 160)
+  }
+  if (typeof v === 'string') return oneLine(v).slice(0, 160)
+  return oneLine(JSON.stringify(v) ?? '').slice(0, 160)
+}
+
+function pretty(input: unknown): string {
+  if (typeof input === 'string') {
+    try {
+      return JSON.stringify(JSON.parse(input), null, 2)
+    } catch {
+      return input
+    }
+  }
+  return JSON.stringify(input, null, 2) ?? ''
+}
+
+/** Transcript JSONL (whole lines) → drawable events, numbered from `seq`. */
+export function parseTranscript(text: string, seq: number): ThreadEvent[] {
+  const out: ThreadEvent[] = []
+  for (const line of text.split('\n')) {
+    if (!line.trim()) continue
+    let r: unknown
+    try {
+      r = JSON.parse(line)
+    } catch {
+      continue
+    }
+    if (!isRecord(r)) continue
+    const kind = str(r.kind) ?? 'raw'
+    const text = typeof r.text === 'string' ? r.text : kind === 'meta' && typeof r.prompt === 'string' ? r.prompt : null
+    out.push({
+      seq: seq++,
+      t: num(r.t) ?? 0,
+      kind,
+      text: text === null ? null : clip(text, 6000),
+      name: str(r.name),
+      summary: kind === 'tool' ? summarizeInput(r.input) : null,
+      input: kind === 'tool' && r.input !== undefined ? clip(pretty(r.input), 1500) : null,
+      output: r.output === undefined ? null : clip(typeof r.output === 'string' ? r.output : JSON.stringify(r.output) ?? '', 2000),
+      isError: r.isError === true,
+      toolId: str(r.id),
+      toolUseId: str(r.toolUseId),
+      redacted: r.redacted === true,
+      attempt: num(r.attempt) ?? num(r.n),
+    })
+  }
+  return out
+}
+
+const utf8 = new TextEncoder()
+export const byteLength = (s: string): number => utf8.encode(s).length
+
+/**
+ * One read of a transcript's bytes [offset, size): the whole lines it holds, and the
+ * byte offset just past the last of them. A window that starts mid-line (a fresh read
+ * of a large file) drops its first, partial line.
+ */
+export function sliceLines(chunk: string, offset: number, size: number, isAligned: boolean): { body: string; consumed: number } {
+  const last = chunk.lastIndexOf('\n')
+  if (last < 0) return { body: '', consumed: offset }
+  const trailing = chunk.slice(last + 1)
+  let body = chunk.slice(0, last + 1)
+  if (!isAligned) body = body.slice(body.indexOf('\n') + 1)
+  return { body, consumed: size - byteLength(trailing) }
+}
+
+const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+const startOfDay = (t: number): number => new Date(t).setHours(0, 0, 0, 0)
+
+/** `Today`, `Yesterday`, `Wed, Oct 1`, or `Mon, Dec 29, 2025` in another year: local time. */
+export function dayLabel(t: number, now: number): string {
+  const days = Math.round((startOfDay(now) - startOfDay(t)) / 86_400_000)
+  if (days <= 0) return 'Today'
+  if (days === 1) return 'Yesterday'
+  const d = new Date(t)
+  const label = `${DAYS[d.getDay()]}, ${MONTHS[d.getMonth()]} ${d.getDate()}`
+  return d.getFullYear() === new Date(now).getFullYear() ? label : `${label}, ${d.getFullYear()}`
+}
+
+/** Runs (newest first) under consecutive day headings. */
+export function groupByDay<T extends { createdAt: number }>(runs: T[], now: number): { label: string; runs: T[] }[] {
+  const out: { label: string; runs: T[] }[] = []
+  for (const r of runs) {
+    const label = dayLabel(r.createdAt, now)
+    const last = out[out.length - 1]
+    if (last && last.label === label) last.runs.push(r)
+    else out.push({ label, runs: [r] })
+  }
+  return out
+}
+
+/** `14:05`, local time. */
+export function fmtTime(t: number): string {
+  const d = new Date(t)
+  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+}
+
+export function fmtClock(t: number): string {
+  const d = new Date(t)
+  return [d.getHours(), d.getMinutes(), d.getSeconds()].map((n) => String(n).padStart(2, '0')).join(':')
+}
+
+/** How a message reaches a running agent of this adapter. */
+export const steerHint = (adapter: string | null): string =>
+  adapter === 'claude' || adapter === 'amp' || adapter === 'mock'
+    ? 'Delivered live, into the turn it is running.'
+    : 'Queued: it runs as an extra turn after the current one, and the reply to that turn becomes this agent’s result.'
+
+// ---- timeline and phases ---------------------------------------------------------
+
+const ENDED = new Set(['done', 'cached', 'failed', 'cancelled'])
+const MAX_ENTRIES = 300
+
+const toSeg = (raw: unknown): PathSeg => {
+  const o = obj(raw)
+  return { kind: str(o.kind) ?? '?', ordinal: num(o.ordinal), count: num(o.count), stages: num(o.stages), i: num(o.i), s: num(o.s) }
+}
+const RUN_ENDED = new Set(['completed', 'failed', 'cancelled', 'interrupted'])
+
+/**
+ * The run's run/agent/step/phase events (progress lines already filtered out) folded
+ * into lanes. A lane's times are only ever its own events' times; a resumed lane starts
+ * over at its new `queued`.
+ */
+export function parseTimeline(text: string, runId: string, size: number): Timeline {
+  const out: Timeline = { runId, size, startedAt: null, endedAt: null, declaredPhases: [], phases: [], lanes: [], workflowFile: null, entries: [], isEntriesCut: false }
+  const lanes = new Map<string, Lane>()
+  const entry = (t: number, kind: LogEntry['kind'], text: string, agent: number | null = null, tone: LogEntry['tone'] = null) =>
+    out.entries.push({ t, kind, text: clip(text, 2000), agent, tone })
+  const agentName = (i: number | null) => (i === null ? 'an agent' : (lanes.get(`a:${i}`)?.label ?? `agent ${i}`))
+  for (const line of text.split('\n')) {
+    if (!line.trim()) continue
+    let r: unknown
+    try {
+      r = JSON.parse(line)
+    } catch {
+      continue
+    }
+    if (!isRecord(r)) continue
+    const t = num(r.t)
+    if (t === null) continue
+    const state = str(r.state) ?? ''
+    if (r.type === 'run') {
+      if (out.startedAt === null) out.startedAt = t
+      if (Array.isArray(r.phases)) out.declaredPhases = r.phases.map((p) => str(obj(p).title) ?? '').filter(Boolean)
+      out.workflowFile = str(r.workflowFile) ?? out.workflowFile
+      if (RUN_ENDED.has(state)) out.endedAt = t
+      else if (state === 'started' || state === 'resumed') out.endedAt = null
+      if (state) entry(t, 'run', `run ${state}${str(r.error) ? `: ${str(r.error)}` : ''}`, null, RUN_ENDED.has(state) ? stateColor(state) : 'suggestion')
+    } else if (r.type === 'phase') {
+      const index = num(r.phaseIndex) ?? out.phases.length
+      const title = str(r.title) ?? `phase ${index + 1}`
+      if (!out.phases.some((p) => p.index === index)) out.phases.push({ index, title, t })
+      entry(t, 'phase', `phase ${index + 1}: ${title}`)
+    } else if (r.type === 'log') {
+      entry(t, 'log', str(r.message) ?? '', null, str(r.level) === 'warn' ? 'warning' : str(r.level) === 'error' ? 'error' : null)
+    } else if (r.type === 'mail') {
+      const agent = num(r.agent)
+      const inbound = r.dir === 'in'
+      entry(t, inbound ? 'mail-in' : 'mail-out', inbound ? `→ ${agentName(agent)}: ${str(r.message) ?? ''}${str(r.delivery) ? ` (${str(r.delivery)})` : ''}` : `${agentName(agent)}: ${str(r.message) ?? ''}`, agent, inbound ? 'suggestion' : 'success')
+    } else if (r.type === 'question') {
+      entry(t, 'question', `${str(r.qid) ?? '?'}: ${str(r.question) ?? ''}`, null, 'warning')
+    } else if (r.type === 'answer') {
+      entry(t, 'answer', `${str(r.qid) ?? '?'} answered: ${str(r.value) ?? ''}`)
+    } else if (r.type === 'agent' || r.type === 'step') {
+      const kind = r.type
+      const index = num(r.index)
+      const id = kind === 'agent' ? `a:${index ?? '?'}` : `s:${str(r.key) ?? str(r.name) ?? '?'}`
+      const lane: Lane = lanes.get(id) ?? {
+        id,
+        kind,
+        index: kind === 'agent' ? index : null,
+        label: str(kind === 'agent' ? r.label : r.name) ?? (kind === 'agent' ? `agent ${index ?? '?'}` : 'step'),
+        adapter: str(r.adapter),
+        state: 'queued',
+        phaseIndex: null,
+        queuedAt: null,
+        startedAt: null,
+        endedAt: null,
+        lastSeenAt: t,
+        path: Array.isArray(r.path) ? r.path.map(toSeg) : [],
+      }
+      lanes.set(id, lane)
+      lane.lastSeenAt = Math.max(lane.lastSeenAt, t)
+      if (num(r.phaseIndex) !== null) lane.phaseIndex = num(r.phaseIndex)
+      if (state === 'queued') Object.assign(lane, { state, queuedAt: t, startedAt: null, endedAt: null })
+      else if (state === 'running') Object.assign(lane, { state, startedAt: t, endedAt: null })
+      else if (state === 'cached') {
+        // A resume replaying a finished result: its bar stays where the work ran. One
+        // with no earlier span here (seeded from another run) is a mark at the replay.
+        if (lane.endedAt === null || lane.startedAt === null) Object.assign(lane, { queuedAt: null, startedAt: t, endedAt: t })
+        lane.state = state
+      } else if (ENDED.has(state)) Object.assign(lane, { state, endedAt: t })
+      if (kind === 'agent' && (state === 'running' || ENDED.has(state))) {
+        const took = num(r.durationMs)
+        const error = str(r.error)
+        const text = state === 'running' ? `${lane.label} started` : `${lane.label} ${state}${took !== null ? ` in ${fmtDuration(took)}` : ''}${error ? `: ${error}` : ''}`
+        entry(t, 'agent', text, index, state === 'running' ? 'inactive' : stateColor(state))
+      }
+    }
+  }
+  if (out.entries.length > MAX_ENTRIES) {
+    out.entries = out.entries.slice(-MAX_ENTRIES)
+    out.isEntriesCut = true
+  }
+  out.lanes = [...lanes.values()].sort((a, b) =>
+    a.kind !== b.kind ? (a.kind === 'agent' ? -1 : 1) : a.kind === 'agent' ? (a.index ?? 0) - (b.index ?? 0) : (a.startedAt ?? 0) - (b.startedAt ?? 0),
+  )
+  return out
+}
+
+/** Where a lane's bar runs, in ms: an open bar reaches `now` only while the run is live. */
+export function laneSpan(lane: Lane, now: number, isRunLive: boolean): { waitFrom: number | null; from: number | null; to: number | null } {
+  const open = isRunLive ? now : lane.lastSeenAt
+  const from = lane.startedAt
+  const to = lane.endedAt ?? (from !== null ? open : null)
+  const waitFrom = lane.queuedAt
+  return { waitFrom, from, to: to !== null && from !== null ? Math.max(to, from) : to }
+}
+
+/** The chart's window: the run's start (or first lane) to its end (or now, while live). */
+export function timelineWindow(tl: Timeline, now: number, isRunLive: boolean): { start: number; end: number } {
+  const times = tl.lanes.flatMap((l) => [l.queuedAt, l.startedAt, l.endedAt, l.lastSeenAt]).filter((x): x is number => x !== null)
+  const start = Math.min(tl.startedAt ?? Infinity, ...times)
+  const end = isRunLive ? now : Math.max(tl.endedAt ?? 0, ...times)
+  return Number.isFinite(start) && end > start ? { start, end } : { start: Number.isFinite(start) ? start : now, end: (Number.isFinite(start) ? start : now) + 1000 }
+}
+
+/** A lane's bar for the desktop: hatched queue wait, then the run in its state's colour. */
+export function laneSvg(lane: Lane, start: number, end: number, now: number, isRunLive: boolean): string {
+  const vw = 1000
+  const h = 12
+  const x = (t: number) => Math.max(0, Math.min(vw, ((t - start) / (end - start)) * vw))
+  const span = laneSpan(lane, now, isRunLive)
+  const hex = HEX[stateColor(lane.state)]
+  const parts: string[] = []
+  // A segment at least `min` wide, kept inside the chart: one at the run's last instant
+  // (a closing step) would otherwise be drawn past the right edge.
+  const seg = (from: number, to: number, min: number) => {
+    const w = Math.max(min, x(to) - x(from))
+    return { a: Math.min(x(from), vw - w), w }
+  }
+  if (span.waitFrom !== null && span.from !== null && span.from > span.waitFrom) {
+    const { a, w } = seg(span.waitFrom, span.from, 0.5)
+    parts.push(`<rect x="${a.toFixed(1)}" y="2" width="${w.toFixed(1)}" height="${h - 4}" fill="url(#hatch)"/>`)
+  }
+  if (span.from !== null && span.to !== null) {
+    const { a, w } = seg(span.from, span.to, 3)
+    parts.push(`<rect x="${a.toFixed(1)}" y="0" width="${w.toFixed(1)}" height="${h}" fill="${hex}"/>`)
+  } else if (span.waitFrom !== null) {
+    // Still queued: the wait so far, to now while the run lives.
+    const { a, w } = seg(span.waitFrom, isRunLive ? now : lane.lastSeenAt, 0.5)
+    parts.push(`<rect x="${a.toFixed(1)}" y="2" width="${w.toFixed(1)}" height="${h - 4}" fill="url(#hatch)"/>`)
+  }
+  return (
+    `<svg xmlns="http://www.w3.org/2000/svg" width="4000" height="${h}" viewBox="0 0 ${vw} ${h}" preserveAspectRatio="none">` +
+    `<defs><pattern id="hatch" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><rect width="6" height="6" fill="${HEX.inactive}" fill-opacity="0.15"/><rect width="2" height="6" fill="${HEX.inactive}" fill-opacity="0.6"/></pattern></defs>` +
+    `<rect width="${vw}" height="${h}" fill="${HEX.inactive}" fill-opacity="0.08"/>${parts.join('')}</svg>`
+  )
+}
+
+/** A lane's bar for the terminal, `width` cells: spaces, `░` queue wait, `█` the run. */
+export function laneText(lane: Lane, start: number, end: number, width: number, now: number, isRunLive: boolean): { lead: string; wait: string; run: string } {
+  const cell = (t: number) => Math.max(0, Math.min(width, Math.round(((t - start) / (end - start)) * width)))
+  const span = laneSpan(lane, now, isRunLive)
+  const waitFrom = span.waitFrom !== null ? cell(span.waitFrom) : null
+  const from = span.from !== null ? cell(span.from) : null
+  const to = span.to !== null ? cell(span.to) : null
+  const leadEnd = waitFrom ?? from ?? 0
+  const waitEnd = from ?? (waitFrom !== null ? cell(isRunLive ? now : lane.lastSeenAt) : leadEnd)
+  const run = from !== null && to !== null ? Math.max(1, to - from) : 0
+  const wait = Math.max(0, waitEnd - leadEnd)
+  // Kept to `width` cells: a bar at the run's last instant gives up lead, not the bar.
+  const lead = Math.max(0, Math.min(leadEnd, width - wait - run))
+  return { lead: ' '.repeat(lead), wait: '░'.repeat(wait), run: '█'.repeat(run) }
+}
+
+export type PhaseGroup = {
+  index: number | null
+  title: string
+  isDeclared: boolean
+  isReached: boolean
+  state: 'pending' | 'running' | 'done' | 'failed'
+  workers: Worker[]
+  startedAt: number | null
+  endedAt: number | null
+  cost: number | null
+}
+
+/**
+ * Declared phases in order, then any observed beyond them, each with its workers
+ * (joined on `phaseIndex`), then a group for the workers outside every phase.
+ */
+export function phaseGroups(tl: Timeline | null, workers: Worker[], observed: string[]): PhaseGroup[] {
+  const titles = new Map<number, { title: string; isDeclared: boolean; isReached: boolean }>()
+  ;(tl?.declaredPhases ?? []).forEach((title, i) => titles.set(i, { title, isDeclared: true, isReached: false }))
+  const seen = tl?.phases.length ? tl.phases : observed.map((title, index) => ({ index, title, t: 0 }))
+  for (const p of seen) titles.set(p.index, { title: p.title, isDeclared: titles.get(p.index)?.isDeclared ?? false, isReached: true })
+  const lanes = new Map((tl?.lanes ?? []).map((l) => [l.id, l]))
+  const group = (index: number | null, title: string, isDeclared: boolean, isReached: boolean, ws: Worker[]): PhaseGroup => {
+    const spans = ws.map((w) => lanes.get(w.id)).filter((l): l is Lane => l !== undefined)
+    const starts = spans.map((l) => l.startedAt ?? l.queuedAt).filter((x): x is number => x !== null)
+    const ends = spans.map((l) => l.endedAt)
+    const costs = ws.map((w) => w.cost).filter((c): c is number => c !== null)
+    const state: PhaseGroup['state'] = ws.some((w) => w.state === 'failed' || w.state === 'cancelled')
+      ? 'failed'
+      : ws.some((w) => isActive(w.state))
+        ? 'running'
+        : ws.length || isReached
+          ? 'done'
+          : 'pending'
+    return {
+      index,
+      title,
+      isDeclared,
+      isReached: isReached || ws.length > 0,
+      state,
+      workers: ws,
+      startedAt: starts.length ? Math.min(...starts) : null,
+      endedAt: ends.length && ends.every((x) => x !== null) ? Math.max(...(ends as number[])) : null,
+      cost: costs.length ? costs.reduce((a, b) => a + b, 0) : null,
+    }
+  }
+  const out = [...titles.entries()]
+    .sort(([a], [b]) => a - b)
+    .map(([index, p]) => group(index, p.title, p.isDeclared, p.isReached, workers.filter((w) => w.phaseIndex === index)))
+  const loose = workers.filter((w) => w.phaseIndex === null || !titles.has(w.phaseIndex))
+  if (loose.length) out.push(group(null, out.length ? 'Outside any phase' : 'All work', false, true, loose))
+  return out
+}
+
+// ---- structure: the run's fan-outs, from each lane's path -----------------------
+
+export type StructureNode =
+  | { type: 'lane'; lane: Lane; stage: number | null }
+  | { type: 'fanout'; key: string; kind: string; ordinal: number; count: number | null; stages: number | null; items: { i: number; children: StructureNode[] }[] }
+
+const firstAt = (n: StructureNode): number =>
+  n.type === 'lane'
+    ? (n.lane.queuedAt ?? n.lane.startedAt ?? n.lane.lastSeenAt)
+    : Math.min(...n.items.flatMap((it) => it.children.map(firstAt)), Infinity)
+
+/**
+ * The tree the lanes' paths describe: top-level lanes and fan-outs in the order they
+ * began; a fan-out's items in index order, each holding its lanes (by pipeline stage)
+ * and any fan-outs nested inside it.
+ */
+export function buildStructure(lanes: Lane[]): StructureNode[] {
+  const root: StructureNode[] = []
+  for (const lane of lanes) {
+    let list = root
+    let stage: number | null = null
+    let prefix = ''
+    for (let k = 0; k < lane.path.length; k++) {
+      const seg = lane.path[k]!
+      if (seg.kind === 'parallel' || seg.kind === 'pipeline') {
+        prefix += `/${seg.kind}#${seg.ordinal ?? 0}`
+        let fan = list.find((n): n is Extract<StructureNode, { type: 'fanout' }> => n.type === 'fanout' && n.key === prefix)
+        if (!fan) {
+          fan = { type: 'fanout', key: prefix, kind: seg.kind, ordinal: seg.ordinal ?? 0, count: seg.count, stages: seg.stages, items: [] }
+          list.push(fan)
+        }
+        const next = lane.path[k + 1]
+        const i = next?.kind === 'item' ? (next.i ?? 0) : 0
+        if (next?.kind === 'item') k++
+        prefix += `/item${i}`
+        let item = fan.items.find((it) => it.i === i)
+        if (!item) {
+          item = { i, children: [] }
+          fan.items.push(item)
+          fan.items.sort((a, b) => a.i - b.i)
+        }
+        list = item.children
+      } else if (seg.kind === 'stage') {
+        stage = seg.s
+      }
+    }
+    list.push({ type: 'lane', lane, stage })
+  }
+  const order = (nodes: StructureNode[]) => {
+    nodes.sort((a, b) =>
+      a.type === 'lane' && b.type === 'lane' && a.stage !== null && b.stage !== null ? a.stage - b.stage : firstAt(a) - firstAt(b),
+    )
+    for (const n of nodes) if (n.type === 'fanout') for (const it of n.items) order(it.children)
+  }
+  order(root)
+  return root
+}
+
+// ---- the run list: filters, search, repeated runs folded --------------------------
+
+export type ListFilter = 'all' | 'live' | 'attention' | 'completed'
+
+/** Runs the filter and the search keep: by state, and by run id or workflow name. */
+export function filterRuns(runs: Run[], filter: ListFilter, query: string, details: Record<string, Detail>): Run[] {
+  const q = query.trim().toLowerCase()
+  return runs.filter((r) => {
+    const asks = (details[r.runId]?.questions.length ?? 0) > 0
+    const keep =
+      filter === 'all' ||
+      (filter === 'live' && isLive(r.state)) ||
+      (filter === 'completed' && r.state === 'completed') ||
+      (filter === 'attention' && (asks || ['failed', 'interrupted', 'stale', 'corrupt', 'cancelled'].includes(r.state)))
+    return keep && (!q || r.runId.toLowerCase().includes(q) || r.file.toLowerCase().includes(q))
+  })
+}
+
+/** Back-to-back runs of one workflow folded together (two or more), else one run each. */
+export function foldRepeats(runs: Run[]): ({ type: 'run'; run: Run } | { type: 'group'; key: string; runs: Run[] })[] {
+  const out: ({ type: 'run'; run: Run } | { type: 'group'; key: string; runs: Run[] })[] = []
+  let i = 0
+  while (i < runs.length) {
+    let j = i + 1
+    while (j < runs.length && runs[j]!.file === runs[i]!.file) j++
+    const span = runs.slice(i, j)
+    out.push(span.length > 1 ? { type: 'group', key: `${span[0]!.file}:${span[0]!.runId}`, runs: span } : { type: 'run', run: span[0]! })
+    i = j
+  }
+  return out
+}
+
+/** `4 completed · 1 failed`: a folded group's states, most common first. */
+export function stateTally(runs: Run[]): string {
+  const counts = new Map<string, number>()
+  for (const r of runs) counts.set(r.state, (counts.get(r.state) ?? 0) + 1)
+  return [...counts.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .map(([state, n]) => `${n} ${state}`)
+    .join(' · ')
+}
+
+/** The newest workflow files under ~/.flowition/workflows/<project>/, for the new-run form. */
+export const WORKFLOW_FILE = /\.(workflow\.)?(mjs|js)$/

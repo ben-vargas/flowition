@@ -5,6 +5,12 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- `plugins/flowition-cockpit`, a Claude Code plugin (installable with `/plugin install flowition-cockpit --marketplace ben-vargas/flowition`, from the new `.claude-plugin/marketplace.json`): a status line and a `/flo` pane to watch and steer runs from Claude Code — run cards with filters and search, a run view with Agents, Timeline, Phases, Log and Structure tabs, live agent threads, answer/steer/cancel/resume/delete controls, starting a workflow, and auto-attach to runs the session launches. It reads and acts only through the CLI and the run directory's append-only files.
+
 ## [0.7.2] — 2026-10-03
 
 ### Fixed

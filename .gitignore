@@ -4,3 +4,7 @@ node_modules/
 # Playwright's per-run artifact directory (traces, screenshots, videos). Written by
 # `npm --prefix viewer run test:e2e`; never part of the shipped package.
 viewer/test-results/
+# What Claude Code lays beside a plugin it loads from a folder you own (its API types
+# and a tsconfig that extends them): regenerated on every load, never committed.
+plugins/*/.claude-plugin/types/
+plugins/*/tsconfig.json

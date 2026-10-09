@@ -182,6 +182,18 @@ unknown or older fields instead of requiring a migration. The exact module,
 security, packaging, and on-disk contracts are documented in
 [ARCHITECTURE.md](ARCHITECTURE.md#viewer).
 
+### Claude Code pane (flowition-cockpit)
+
+The [`flowition-cockpit`](plugins/flowition-cockpit/README.md) plugin brings the
+viewer's essentials into Claude Code (terminal and desktop): a status line, a `/flo`
+pane with run cards, agent threads, timeline, phases, log and structure tabs, and
+controls to answer, steer, cancel, resume and start runs. Runs Claude launches open in
+it on their own. Install it from a Claude Code terminal session:
+
+```
+/plugin install flowition-cockpit --marketplace ben-vargas/flowition
+```
+
 ## Core concepts
 
 ### The workflow contract

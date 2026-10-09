@@ -1,0 +1,16 @@
+{
+  "name": "flowition",
+  "owner": {
+    "name": "Ben Vargas"
+  },
+  "metadata": {
+    "description": "Claude Code plugins for flowition, the deterministic multi-CLI agent workflow engine."
+  },
+  "plugins": [
+    {
+      "name": "flowition-cockpit",
+      "source": "./plugins/flowition-cockpit",
+      "description": "Watch and steer flowition runs from a Claude Code pane."
+    }
+  ]
+}
