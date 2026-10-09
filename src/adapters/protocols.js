@@ -5,6 +5,7 @@
 //   {k:'usage', input, output, cost?, cumulative?}
 //   {k:'result', text, structured?, isError?}            (one per completed turn)
 //   {k:'error', message}
+//   {k:'warning', message}          non-fatal provider notice — recorded, never fails the turn
 // push(obj) is called per parsed JSON line; finish() when the process closes.
 //
 // Tool ids (DESIGN §8 E11): `tool.id` and `tool-result.toolUseId` join a call to its
@@ -140,6 +141,11 @@ class CodexJsonlParser {
         const id = wireId(it.id)
         out.push({ k: 'tool', name: 'shell', input: it.command, ...(id !== undefined ? { id } : {}) })
         out.push({ k: 'tool-result', name: 'shell', output: it.aggregated_output ?? '', isError: it.status === 'failed', ...(id !== undefined ? { toolUseId: id } : {}) })
+      } else if (it.type === 'error') {
+        // an error ITEM is a non-fatal notice (e.g. "Under-development features
+        // enabled: …") — the turn carries on. Real failures arrive as top-level
+        // `error` / `turn.failed` messages below, so this must not set this.err.
+        out.push({ k: 'warning', message: typeof it.message === 'string' ? it.message : JSON.stringify(it).slice(0, 500) })
       } else if (typeof it.type === 'string') {
         const id = wireId(it.id)
         out.push({ k: 'tool', name: it.type, input: JSON.stringify(it).slice(0, 2000), ...(id !== undefined ? { id } : {}) })

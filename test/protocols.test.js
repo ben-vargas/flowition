@@ -64,6 +64,38 @@ test('codex usage preserves cumulative totals and cached input subset', () => {
   }])
 })
 
+test('codex error ITEMS are non-fatal warnings, not tool calls; top-level errors still fail', () => {
+  // observed in flo_4d922304: codex reports enabled under-development features as
+  // an item.completed of type "error" mid-turn, and the turn then completes normally
+  const parser = makeParser('codex-jsonl')
+  const message = 'Under-development features enabled: default_mode_request_user_input. Expect instability.'
+  assert.deepEqual(parser.push({ type: 'item.completed', item: { id: 'item_0', type: 'error', message } }),
+    [{ k: 'warning', message }])
+  assert.equal(parser.err, null)
+  assert.deepEqual(parser.push({ type: 'item.completed', item: { id: 'item_1', type: 'agent_message', text: 'done' } }),
+    [{ k: 'text', text: 'done' }])
+  parser.push({ type: 'turn.completed', usage: {} })
+  assert.equal(parser.sawTerminal, true)
+  assert.deepEqual(parser.finish(), [{ k: 'result', text: 'done' }])
+  // a message-less error item still records something rather than vanishing
+  const [bare] = makeParser('codex-jsonl').push({ type: 'item.completed', item: { id: 'item_2', type: 'error' } })
+  assert.equal(bare.k, 'warning')
+  assert.match(bare.message, /"type":"error"/)
+
+  // unrecognized item types keep the generic tool fallback
+  assert.equal(makeParser('codex-jsonl').push({ type: 'item.completed', item: { id: 'item_3', type: 'web_search' } })[0].k, 'tool')
+
+  // top-level error / turn.failed are unchanged: fatal, no result at finish
+  const top = makeParser('codex-jsonl')
+  top.push({ type: 'item.completed', item: { type: 'agent_message', text: 'partial' } })
+  assert.deepEqual(top.push({ type: 'error', message: 'stream disconnected' }), [{ k: 'error', message: 'stream disconnected' }])
+  assert.equal(top.err, 'stream disconnected')
+  assert.deepEqual(top.finish(), [])
+  const failed = makeParser('codex-jsonl')
+  assert.deepEqual(failed.push({ type: 'turn.failed', error: { message: 'quota' } }), [{ k: 'error', message: 'quota' }])
+  assert.deepEqual(failed.finish(), [])
+})
+
 test('malformed JSON event shapes are skipped without throwing', () => {
   for (const protocol of [
     'claude-stream',
