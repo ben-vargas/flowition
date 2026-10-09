@@ -347,15 +347,22 @@ function launchEnvelope(line: string): string | null {
   }
 }
 
-/** The workflow files a command launches (`flowition run <file>`), by basename, in order; and how many launches or resumes it holds. */
-export function launchesIn(command: string): { files: (string | null)[]; count: number } {
+/**
+ * The launches a command holds, in order (`flowition run <file>`, `flowition resume <id>`,
+ * `run <file> --resume <id>`): each a new run of a workflow file (its basename) or a
+ * resume of a named run.
+ */
+export function launchesIn(command: string): { files: (string | null)[]; count: number; invocations: { file: string | null; target: string | null }[] } {
   const re = /(?:^|[\s;&|(/])(?:flo|flowition)(?:\.js)?\s+(run|resume)\s+([^\s;&|)]+)/g
-  const files: (string | null)[] = []
+  const invocations: { file: string | null; target: string | null }[] = []
   for (const m of command.matchAll(re)) {
     const arg = (m[2] ?? '').replace(/^['"]|['"]$/g, '')
-    files.push(m[1] === 'run' && !command.slice(m.index ?? 0).split(/[;&|]/)[0]?.includes('--resume') ? (arg.split('/').pop() ?? null) : null)
+    const rest = command.slice(m.index ?? 0).split(/[;&|]/)[0] ?? ''
+    const resumed = m[1] === 'resume' ? arg : /--resume(?:=|\s+)([^\s;&|)]+)/.exec(rest)?.[1]?.replace(/^['"]|['"]$/g, '')
+    const target = resumed && RUN_ID.test(resumed) ? resumed : null
+    invocations.push({ file: m[1] === 'run' && target === null ? (arg.split('/').pop() ?? null) : null, target })
   }
-  return { files, count: files.length }
+  return { files: invocations.map((i) => i.file), count: invocations.length, invocations }
 }
 
 export function extractRunId(text: string): string | null {
@@ -986,7 +993,7 @@ export function laneSvg(lane: Lane, start: number, end: number, now: number, isR
     parts.push(`<rect x="${a.toFixed(1)}" y="0" width="${w.toFixed(1)}" height="${h}" fill="${hex}"/>`)
   } else if (span.waitFrom !== null) {
     // Still queued: the wait so far, to now while the run lives.
-    const { a, w } = seg(span.waitFrom, isRunLive ? now : lane.lastSeenAt, 0.5)
+    const { a, w } = seg(span.waitFrom, lane.endedAt ?? (isRunLive ? now : lane.lastSeenAt), 0.5)
     parts.push(`<rect x="${a.toFixed(1)}" y="2" width="${w.toFixed(1)}" height="${h - 4}" fill="url(#hatch)"/>`)
   }
   return (
@@ -1004,7 +1011,7 @@ export function laneText(lane: Lane, start: number, end: number, width: number, 
   const from = span.from !== null ? cell(span.from) : null
   const to = span.to !== null ? cell(span.to) : null
   const leadEnd = waitFrom ?? from ?? 0
-  const waitEnd = from ?? (waitFrom !== null ? cell(isRunLive ? now : lane.lastSeenAt) : leadEnd)
+  const waitEnd = from ?? (waitFrom !== null ? cell(lane.endedAt ?? (isRunLive ? now : lane.lastSeenAt)) : leadEnd)
   const run = from !== null && to !== null ? Math.max(1, to - from) : 0
   const wait = Math.max(0, waitEnd - leadEnd)
   // Kept to `width` cells: a bar at the run's last instant gives up lead, not the bar.

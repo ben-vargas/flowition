@@ -68,7 +68,6 @@ import {
   extractRunIds,
   launchesIn,
   boundThread,
-  resumeTarget,
   phaseGroups,
   placeholder,
   progress,
@@ -932,20 +931,25 @@ export const register: Register = (on) => {
     const isBash = e.tool === 'Bash'
     const isLaunch = isBash ? isFlowitionLaunch(e.command) : /flowition_(run|resume)$/.test(String(e.tool))
     if (!isLaunch) return next(e)
+    // The runs listed before the command starts: a poll may list the launched run while
+    // the command is still running, and it must stay eligible for its launch.
+    const known = new Set((await read($, runsAtom)).map((r) => r.runId))
     const startedAt = await $.clock.now()
     const ran = await next(e)
     if (ran.deny !== undefined) return ran
-    // Every run the output names (a command may launch several), else a resume's run from
-    // the command line (attached even when Bash backgrounds it, with no output yet).
-    const launches = isBash ? launchesIn(e.command) : { files: [null], count: 1 }
-    const named = extractRunIds(ran.text ?? '', Math.max(1, launches.count))
-    const runIds = named.length ? named : isBash && ran.isError !== true ? [resumeTarget(e.command)].filter((id): id is string => id !== null) : []
-    for (const runId of runIds) await attach($, runId)
-    // No id in the output: only launches Bash backgrounded (they report no id until they
-    // end) arm the fallback, one record each; a failed launch, or an MCP error, arms none.
-    if (!runIds.length && isBash && ran.isError !== true && /running in background/i.test(ran.text ?? '')) {
-      const known = new Set((await read($, runsAtom)).map((r) => r.runId))
-      for (const file of launches.files) pendingLaunches.push({ since: startedAt - 1000, known, file })
+    const isOk = ran.isError !== true
+    // Every run the output names (a command may launch several), and every run a resume
+    // names on the command line (attached even when Bash backgrounds it, no output yet).
+    const launches = isBash ? launchesIn(e.command).invocations : [{ file: null, target: null }]
+    const named = extractRunIds(ran.text ?? '', Math.max(1, launches.length))
+    const targets = isBash && isOk ? launches.map((l) => l.target).filter((id): id is string => id !== null) : []
+    for (const runId of [...new Set([...named, ...targets])]) await attach($, runId)
+    // New runs whose ids the output does not carry (launches Bash backgrounded report none
+    // until they end) arm the fallback, one record each; a failed launch, or an MCP error,
+    // arms none.
+    if (isBash && isOk && /running in background/i.test(ran.text ?? '')) {
+      const fresh = launches.filter((l) => l.target === null).slice(named.filter((id) => !targets.includes(id)).length)
+      for (const l of fresh) pendingLaunches.push({ since: startedAt - 1000, known, file: l.file })
     }
     void $.ui.open({ id: PANE, title: TITLE })
     return ran
@@ -964,8 +968,11 @@ export const register: Register = (on) => {
     try {
       const els = $.ui.resolve(e)
       const { Box, Text, Button, Markdown, Code } = els
-      const Svg = 'Svg' in els ? els.Svg : null
-      const Input = 'Input' in els ? els.Input : null
+      // What a surface draws, by its declared element table: the engine completes every
+      // table with stand-ins, so a name being present does not mean it draws (the terminal
+      // draws no Svg, so it gets the text badges and bars; mobile draws no Input).
+      const Svg = e.surface !== 'terminal' && 'Svg' in els ? els.Svg : null
+      const Input = e.surface !== 'mobile' && 'Input' in els ? els.Input : null
       // On the desktop, controls are Client faces that press on the first click (its
       // native Button takes a first click as focus alone); elsewhere native Buttons,
       // which the keyboard walks (Tab, arrows) where a Client takes keys only once clicked.

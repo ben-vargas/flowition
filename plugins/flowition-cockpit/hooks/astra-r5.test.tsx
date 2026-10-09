@@ -106,5 +106,6 @@ test('A15: a launch output yields every run it names, and no id from a workflow 
   expect(extractRunIds(foreground, 2)).toEqual(['flo_x'])
   // At most as many as the command launched.
   expect(extractRunIds('started detached run flo_1\nstarted detached run flo_2\n', 1)).toEqual(['flo_1'])
-  expect(launchesIn('flowition run a/one.mjs --detach && flo run two.mjs; flowition run w.mjs --resume flo_9 --detach')).toEqual({ files: ['one.mjs', 'two.mjs', null], count: 3 })
+  const l = launchesIn('flowition run a/one.mjs --detach && flo run two.mjs; flowition run w.mjs --resume flo_9 --detach & flowition resume flo_8')
+  expect([l.files, l.count, l.invocations.map((i) => i.target)]).toEqual([['one.mjs', 'two.mjs', null, null], 4, [null, null, 'flo_9', 'flo_8']])
 })
