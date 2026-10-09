@@ -63,6 +63,8 @@ import {
   staleDetailIds,
   parseTranscript,
   appendEvents,
+  boundThread,
+  resumeTarget,
   phaseGroups,
   placeholder,
   progress,
@@ -443,8 +445,13 @@ async function refresh($: EngineInterface, force = false): Promise<void> {
       }
     }
     await write(async () => (sameJson(list, await read($, runsAtom)) ? undefined : update($, runsAtom, () => list)))
+    // A run attached while this poll ran (not watched when it began) keeps the cache's
+    // entry for it (the placeholder), not this poll's: its notices were not computed here,
+    // so the next poll must see its change from that baseline.
+    const attachedNow = await read($, attachedAtom)
+    const lateAttached = new Set(attachedNow.filter((id) => !watched.has(id)))
     const withAdded = (cur: Record<string, Detail>) => {
-      const added = Object.entries(cur).filter(([id]) => !snapshotIds.has(id) && !(id in kept))
+      const added = Object.entries(cur).filter(([id]) => (!snapshotIds.has(id) && !(id in kept)) || lateAttached.has(id))
       return added.length ? { ...kept, ...Object.fromEntries(added) } : kept
     }
     await write(async () => {
@@ -595,6 +602,9 @@ async function refreshThread($: EngineInterface, now: number): Promise<void> {
     events = events.slice(-MAX_EVENTS)
     isPartial = true
   }
+  const bounded = boundThread(events)
+  events = bounded.events
+  isPartial ||= bounded.isCut
   await update($, threadAtom, () => ({ runId, index, consumed, isPartial, events, fetchedAt: now }))
   if (fresh.length && (await read($, followAtom))) void $.ui.scroll({ in: PANE, to: 'end' }).catch(() => undefined)
 }
@@ -901,7 +911,9 @@ export const register: Register = (on) => {
     const startedAt = await $.clock.now()
     const ran = await next(e)
     if (ran.deny !== undefined) return ran
-    const runId = extractRunId(ran.text ?? '')
+    // A resume names its run on the command line: attach it even when Bash backgrounds it
+    // (no output yet) or its output names it in a form not recognized.
+    const runId = extractRunId(ran.text ?? '') ?? (isBash && ran.isError !== true ? resumeTarget(e.command) : null)
     if (runId) await attach($, runId)
     // No id in the output: only a launch Bash backgrounded (it reports no id until it
     // ends) arms the fallback; a failed launch, or an MCP error, arms nothing.
@@ -1060,7 +1072,8 @@ export const register: Register = (on) => {
                 </Box>
               )
             case 'reasoning': {
-              const text = ev.redacted || !ev.text ? 'Thought privately (the provider withheld the text).' : ev.text
+              // The visible part of an episode shows even when part of it was withheld.
+              const text = ev.text ? (ev.redacted ? `${ev.text} (part of this was withheld by the provider)` : ev.text) : 'Thought privately (the provider withheld the text).'
               const isLong = text.length > 280
               return (
                 <Box key={key} flexDirection="column">

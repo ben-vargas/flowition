@@ -304,12 +304,25 @@ const RUN_ID = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/
 
 /** The runId a launch printed: detached text, --json, or the foreground `run <id>` line. */
 export function extractRunId(text: string): string | null {
-  const patterns = [/started detached run (\S+)/, /"runId"\s*:\s*"([^"]+)"/, /^run (\S+)$/m]
+  // Detached launch, --json, the foreground run/resume's last line (`run <id>: <status>`),
+  // and its event lines (`▶ run <id> — resumed`).
+  const patterns = [/started detached run (\S+)/, /"runId"\s*:\s*"([^"]+)"/, /^run (\S+?):? \w*$/m, /^run (\S+)$/m, /▶ run (\S+) —/]
   for (const p of patterns) {
     const id = p.exec(text)?.[1]
     if (id && RUN_ID.test(id)) return id
   }
   return null
+}
+
+/**
+ * The run a resume command names (`flowition resume <id>`, `run <file> --resume <id>`),
+ * read off the command itself: known when Bash backgrounds the command (no output yet),
+ * and for a resumed run whose creation time is long past.
+ */
+export function resumeTarget(command: string): string | null {
+  const m = /(?:^|[\s;&|(/])(?:flo|flowition)(?:\.js)?\s+resume\s+([^\s;&|)]+)/.exec(command) ?? /--resume(?:=|\s+)([^\s;&|)]+)/.exec(command)
+  const id = m?.[1]?.replace(/^['"]|['"]$/g, '')
+  return id && RUN_ID.test(id) ? id : null
 }
 
 /** `http://host/#/?t=…` → `http://host/#/run/<id>?t=…`, the viewer's run route. */
@@ -595,7 +608,9 @@ export function parseTranscript(text: string, seq: number): ThreadEvent[] {
       seq: seq++,
       t: num(r.t) ?? 0,
       kind,
-      text: text === null ? null : clip(text, 6000),
+      // A reply or a thought keeps its newest part when long (what a live thread follows,
+      // and where a conclusion sits), joined fragments or one record alike.
+      text: text === null ? null : kind === 'text' || kind === 'reasoning' ? clipTail(text, 20_000) : clip(text, 6000),
       name: str(r.name),
       summary: kind === 'tool' ? summarizeInput(r.input) : null,
       input: kind === 'tool' && r.input !== undefined ? clip(pretty(r.input), 1500) : null,
@@ -628,6 +643,17 @@ export function appendEvents(events: ThreadEvent[], fresh: ThreadEvent[]): Threa
     out.push(ev)
   }
   return out
+}
+
+/**
+ * A thread's events within what $.state holds a value (4 MiB): the oldest dropped first.
+ * Says whether any were.
+ */
+export function boundThread(events: ThreadEvent[], budget = 2_500_000): { events: ThreadEvent[]; isCut: boolean } {
+  let used = events.reduce((n, ev) => n + JSON.stringify(ev).length, 0)
+  let from = 0
+  while (used > budget && from < events.length - 1) used -= JSON.stringify(events[from++]).length
+  return { events: from ? events.slice(from) : events, isCut: from > 0 }
 }
 
 const utf8 = new TextEncoder()
