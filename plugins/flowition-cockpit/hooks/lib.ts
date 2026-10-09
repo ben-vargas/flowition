@@ -80,11 +80,11 @@ export const RUNS_FILTER_JS = ON_STDIN(
  * `status --json` made to fit one read (3 MB): the completed result's value left out
  * (`resultOmitted`), then its long texts (errors, questions, labels, previews) clipped
  * harder until it fits; past that the question texts are emptied and the worker lists
- * capped (`listsCut`, so the pane treats the detail as partial). Every question entry
- * (qid, its event) stays, so none is announced twice or lost.
+ * capped (`listsCut`, so the pane treats the detail as partial), and last the question
+ * entries cut to their identity (qid, event) and capped, the open ones kept first.
  */
 export const STATUS_SLIM_JS = ON_STDIN(
-  `const d=JSON.parse(s);const clip=(x,n)=>typeof x==='string'&&x.length>n?x.slice(0,n)+'…':x;const arr=(x)=>Array.isArray(x)?x:[];const qs=[...arr(d.questions),...arr(d.live&&d.live.questions)];const ws=[...arr(d.agents),...arr(d.steps)];const r=d.result&&typeof d.result==='object'?d.result:null;if(r&&'result' in r){r.result=null;d.resultOmitted=true}const fits=()=>JSON.stringify(d).length<3e6;for(const n of [20000,4000,1000,200]){if(r)r.error=clip(r.error,n);for(const q of qs)q.question=clip(q.question,n);for(const w of ws){w.error=clip(w.error,n);for(const k of ['label','name','promptPreview','resultPreview'])w[k]=clip(w[k],200)}if(fits())break}if(!fits()){d.listsCut=true;for(const q of qs)q.question='';if(!fits()){d.agents=arr(d.agents).slice(0,500);d.steps=arr(d.steps).slice(0,500)}}process.stdout.write(JSON.stringify(d))`,
+  `const d=JSON.parse(s);const clip=(x,n)=>typeof x==='string'&&x.length>n?x.slice(0,n)+'…':x;const arr=(x)=>Array.isArray(x)?x:[];const qs=[...arr(d.questions),...arr(d.live&&d.live.questions)];const ws=[...arr(d.agents),...arr(d.steps)];const r=d.result&&typeof d.result==='object'?d.result:null;if(r&&'result' in r){r.result=null;d.resultOmitted=true}const fits=()=>JSON.stringify(d).length<3e6;for(const n of [20000,4000,1000,200]){if(r)r.error=clip(r.error,n);for(const q of qs)q.question=clip(q.question,n);for(const w of ws){w.error=clip(w.error,n);for(const k of ['label','name','promptPreview','resultPreview'])w[k]=clip(w[k],200)}if(fits())break}if(!fits()){d.listsCut=true;for(const q of qs)q.question='';if(!fits()){d.agents=arr(d.agents).slice(0,500);d.steps=arr(d.steps).slice(0,500)}}if(!fits()){const open=new Set(arr(d.live&&d.live.questions).map((q)=>q&&q.qid));d.questions=arr(d.questions).map((q)=>({qid:q&&q.qid,t:q&&q.t,question:''})).sort((a,b)=>Number(open.has(b.qid))-Number(open.has(a.qid)));if(d.live)d.live.questions=arr(d.live.questions).map((q)=>({qid:q&&q.qid}));for(const n of [20000,5000,1000]){d.questions=d.questions.slice(0,n);if(d.live)d.live.questions=d.live.questions.slice(0,n);if(fits())break}}process.stdout.write(JSON.stringify(d))`,
 )
 
 /** The filtered listing's lines: the rows it kept, and how many runs there are in all. */
@@ -1199,6 +1199,17 @@ export function reconcileWorkers(workers: Worker[], lanes: Lane[]): Worker[] {
  * but the open ones emptied (partial: the events fill in the workers). Every question
  * entry stays, so none is announced twice.
  */
+/**
+ * The least a watched run's detail can be and still carry what its notices compare: its
+ * state, and each question's identity (qid, event, open). Partial: nothing else is known.
+ */
+export const skeletonDetail = (d: Detail): Detail => ({
+  ...placeholder(d.runId, d.fetchedAt),
+  state: d.state,
+  questions: d.questions.map((q) => ({ ...q, question: '' })),
+  isPartial: true,
+})
+
 export function trimDetail(d: Detail, room: number): Detail {
   const size = (x: Detail) => JSON.stringify(x).length
   let out: Detail = {
@@ -1212,6 +1223,21 @@ export function trimDetail(d: Detail, room: number): Detail {
   out = { ...out, isPartial: true, workers: out.workers.slice(0, 200), questions: out.questions.map((q) => (q.isOpen ? q : { ...q, question: '' })) }
   if (size(out) <= room) return out
   return { ...out, workers: [], questions: out.questions.map((q) => ({ ...q, question: q.isOpen ? clip(q.question, 100) : '' })) }
+}
+
+/**
+ * A timeline made to fit $.state (which refuses a value over 4 MiB): its narrative's
+ * texts clipped, then, for a huge nested run, its lanes' fan-out paths dropped
+ * (`isPathsCut`: the Structure tab says so). Lanes, spend and phases stay whole.
+ */
+export function boundTimeline(tl: Timeline, budget = 3 << 20): Timeline {
+  const size = (x: Timeline) => JSON.stringify(x).length
+  if (size(tl) <= budget) return tl
+  let out: Timeline = { ...tl, entries: tl.entries.map((e) => ({ ...e, text: clip(e.text, 300) })) }
+  if (size(out) <= budget) return out
+  out = { ...out, isPathsCut: true, lanes: out.lanes.map((l) => ({ ...l, path: [] })) }
+  if (size(out) <= budget) return out
+  return { ...out, entries: out.entries.slice(-50), isEntriesCut: true, lanes: out.lanes.map((l) => ({ ...l, label: clip(l.label, 60) })) }
 }
 
 /**
@@ -1229,6 +1255,12 @@ export function boundDetails(details: Record<string, Detail>, first: string[], b
     if (used + n > budget && first.includes(id)) {
       d = trimDetail(d, budget - used - id.length - 8)
       n = JSON.stringify(d).length + id.length + 8
+      // Past that, a watched run keeps its notices' baseline (state, question ids), so it
+      // is never polled as unknown: no question announced twice, no end missed.
+      if (used + n > budget) {
+        d = skeletonDetail(d)
+        n = JSON.stringify(d).length + id.length + 8
+      }
     }
     if (used + n > budget) continue
     used += n

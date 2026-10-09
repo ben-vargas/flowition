@@ -16,6 +16,7 @@ const lanesOf = (nodes: StructureNode[]): Lane[] =>
 export function structureView(c: Ctx, tl: Timeline | null, workers: Worker[], openAgent: (index: number) => unknown, now: number, isLive: boolean): RenderElement {
   const { Box, Text } = c
   if (!tl) return <Text dimColor>Loading the structure…</Text>
+  if (tl.isPathsCut) return <Text dimColor wrap="wrap">This run is too large for the pane to keep its fan-out structure; the viewer shows it.</Text>
   const tree = buildStructure(tl.lanes)
   if (!tree.length) return <Text dimColor>No agents have started yet.</Text>
   const costs = new Map(workers.map((w) => [w.id, w.cost]))

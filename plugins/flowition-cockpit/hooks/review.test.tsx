@@ -2,7 +2,7 @@
 // on the code before its fix.
 import { expect, mock, test } from 'claude-code/testing'
 import type { On } from 'claude-code'
-import { filterRuns, lifetimeWorkers, parseStatus, parseTimeline, RUNS_FILTER_JS, STATUS_SLIM_JS, statusLine, transitions } from './lib'
+import { boundDetails, boundTimeline, emptyTimeline, filterRuns, foldTimeline, lifetimeWorkers, parseStatus, parseTimeline, RUNS_FILTER_JS, STATUS_SLIM_JS, statusLine, transitions } from './lib'
 
 type World = { states: Record<string, string>; listFails: boolean; transcriptFails: boolean; transcriptGrowth: number; calls: string[]; submitted: string[] }
 
@@ -1218,4 +1218,48 @@ test('P2: a crashed run\'s agent spans to its last progress, not its start', asy
   // The axis ends at the last progress (1h), and so does the lane's own duration.
   expect((await ui.findAll({ type: 'Text' })).filter((t) => t.text === '1h 00m').length).toBe(2)
   await ui.unmount()
+})
+
+test('P2: watched runs that together pass the cache budget keep their notice baseline: no question announced twice', () => {
+  const status = (runId: string) =>
+    parseStatus(
+      JSON.stringify({
+        runId,
+        state: 'running',
+        agents: [],
+        steps: [],
+        questions: Array.from({ length: 300 }, (_, i) => ({ qid: `q${i}`, question: `question ${i} `.padEnd(500, 'x'), t: 5 + i })),
+        phases: [],
+        result: null,
+        live: { ok: true, questions: Array.from({ length: 300 }, (_, i) => ({ qid: `q${i}` })) },
+      }),
+      1,
+    )
+  const ids = ['flo_r0', 'flo_r1', 'flo_r2']
+  const details = Object.fromEntries(ids.map((id) => [id, status(id)]))
+  // A budget the three only fit together trimmed, the last as its baseline.
+  const kept = boundDetails(details, ids, 250_000)
+  expect(ids.map((id) => kept[id]?.questions.length ?? 0)).toEqual([300, 300, 300])
+  // Polled again, a run kept only as its baseline announces nothing it announced before.
+  expect(ids.map((id) => transitions(kept[id], status(id)).length)).toEqual([0, 0, 0])
+  expect(transitions(kept.flo_r2, status('flo_r2')).length).toBe(0)
+})
+
+test('P2: a huge nested timeline is bounded for $.state, its lanes and spend kept, the Structure tab told', () => {
+  const chain = (k: number) => [
+    { kind: 'parallel', ordinal: 0, count: 4096 },
+    { kind: 'item', i: k },
+    ...Array.from({ length: 6 }, () => [{ kind: 'pipeline', ordinal: 0, count: 1, stages: 3 }, { kind: 'item', i: 0 }, { kind: 'stage', s: 1 }]).flat(),
+  ]
+  const text = Array.from({ length: 4096 }, (_, k) => [
+    { t: 2, type: 'agent', index: k, label: `agent ${k}`, state: 'running', path: chain(k) },
+    { t: 3, type: 'agent', index: k, state: 'done', usage: { output: 10, cost: 0.01 } },
+  ])
+    .flat()
+    .map((r) => `${JSON.stringify(r)}\n`)
+    .join('')
+  const whole = foldTimeline(emptyTimeline('r'), text)
+  expect(JSON.stringify(whole).length).toBeGreaterThan(4_194_304)
+  const kept = boundTimeline(whole)
+  expect([JSON.stringify(kept).length <= 3 << 20, kept.isPathsCut, kept.lanes.length, kept.lanes.reduce((n, l) => n + l.outputTokens, 0)]).toEqual([true, true, 4096, 40_960])
 })

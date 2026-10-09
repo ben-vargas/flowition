@@ -48,6 +48,7 @@ import {
   lifetimeWorkers,
   reconcileWorkers,
   boundDetails,
+  boundTimeline,
   clipDraw,
   newestWithin,
   firstWithin,
@@ -528,7 +529,7 @@ async function refreshTimeline($: EngineInterface): Promise<void> {
     throw err
   }
   timelineFailedFor = tl.consumed < size && tl.consumed === from.consumed ? runId : null
-  await update($, timelineAtom, () => tl)
+  await update($, timelineAtom, () => boundTimeline(tl))
 }
 
 /**
