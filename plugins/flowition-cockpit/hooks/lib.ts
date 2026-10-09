@@ -94,6 +94,28 @@ export function parseStatus(stdout: string, fetchedAt: number): Detail {
   }
 }
 
+const TOO_LARGE = (runId: string) =>
+  `_The result is too large for the pane to read (its status is over 4 MiB). Open the run in the viewer, or run \`flowition result ${runId}\`._`
+
+/**
+ * `flowition status --json` as polled: parsed whole, or, when the output was cut at
+ * $.process.run's 4 MiB cap (a huge result) or does not parse, the run's state read off
+ * the head of the output (`{"runId":…,"state":…` comes first), the rest kept from the
+ * last good poll, so the poll still sees the run end.
+ */
+export function readStatus(stdout: string, isTruncated: boolean, prev: Detail | undefined, runId: string, now: number): Detail {
+  if (!isTruncated) {
+    try {
+      return parseStatus(stdout, now)
+    } catch {
+      // read the head below
+    }
+  }
+  const state = /^\{"runId":"[^"]*","state":"([a-z-]+)"/.exec(stdout)?.[1] ?? prev?.state ?? 'unknown'
+  const base = prev ?? placeholder(runId, now)
+  return { ...base, runId, state, fetchedAt: now, resultMarkdown: isLive(state) ? null : TOO_LARGE(runId) }
+}
+
 /** A detail standing in for a run this session launched, before its first poll. */
 export const placeholder = (runId: string, fetchedAt: number): Detail => ({
   runId,
@@ -560,6 +582,8 @@ export function foldTimeline(prev: Timeline, text: string): Timeline {
         endedAt: null,
         lastSeenAt: t,
         path: Array.isArray(r.path) ? r.path.map(toSeg) : [],
+        cost: 0,
+        outputTokens: 0,
       }
       lanes.set(id, lane)
       lane.lastSeenAt = Math.max(lane.lastSeenAt, t)
@@ -572,6 +596,13 @@ export function foldTimeline(prev: Timeline, text: string): Timeline {
         if (lane.endedAt === null || lane.startedAt === null) Object.assign(lane, { queuedAt: null, startedAt: t, endedAt: t })
         lane.state = state
       } else if (ENDED.has(state)) Object.assign(lane, { state, endedAt: t })
+      // Every attempt ends in one done/failed/cancelled event carrying that attempt's own
+      // usage (status --json folds only the last), so the sum is the agent's lifetime spend.
+      if (state === 'done' || state === 'failed' || state === 'cancelled') {
+        const usage = obj(r.usage)
+        lane.cost += num(usage.cost) ?? 0
+        lane.outputTokens += num(usage.output) ?? 0
+      }
       if (kind === 'agent' && (state === 'running' || ENDED.has(state))) {
         const took = num(r.durationMs)
         const error = str(r.error)
@@ -776,7 +807,8 @@ export type ListFilter = 'all' | 'live' | 'attention' | 'completed'
 export function filterRuns(runs: Run[], filter: ListFilter, query: string, details: Record<string, Detail>): Run[] {
   const q = query.trim().toLowerCase()
   return runs.filter((r) => {
-    const asks = (details[r.runId]?.questions.length ?? 0) > 0
+    // A question only waits on a live run: an ended run's unanswered one is abandoned.
+    const asks = isLive(r.state) && (details[r.runId]?.questions.length ?? 0) > 0
     const keep =
       filter === 'all' ||
       (filter === 'live' && isLive(r.state)) ||

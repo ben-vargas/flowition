@@ -18,6 +18,7 @@ import {
   emptyTimeline,
   foldTimeline,
   parseTimeline,
+  readStatus,
   shouldWake,
   stateTally,
   parseTranscript,
@@ -267,7 +268,7 @@ describe('structure, folding and filtering', () => {
   const seg = (o: object) => ({ kind: '?', ordinal: null, count: null, stages: null, i: null, s: null, ...o })
   const lane = (id: string, at: number, path: object[]) => ({
     id, kind: 'agent' as const, index: Number(id.slice(2)), label: id, adapter: null, state: 'done', phaseIndex: null,
-    queuedAt: at, startedAt: at, endedAt: at + 1, lastSeenAt: at + 1, path: path.map(seg),
+    queuedAt: at, startedAt: at, endedAt: at + 1, lastSeenAt: at + 1, path: path.map(seg), cost: 0, outputTokens: 0,
   })
   const pipe = (i: number, s: number) => [{ kind: 'pipeline', ordinal: 0, count: 2, stages: 2 }, { kind: 'item', i }, { kind: 'stage', s }]
 
@@ -323,5 +324,39 @@ describe('reading a run incrementally', () => {
     expect(shouldWake(undefined, live, true)).toBe(false)
     expect(shouldWake(done, done, true)).toBe(false)
     expect(shouldWake(live, done, false)).toBe(false)
+  })
+})
+
+describe('the third review round', () => {
+  test('an agent\'s cost sums every attempt, not just the last', async () => {
+    const ev = [
+      { t: 1, type: 'agent', index: 0, label: 'x', state: 'queued' },
+      { t: 2, type: 'agent', index: 0, state: 'running' },
+      { t: 3, type: 'agent', index: 0, state: 'failed', usage: { output: 10, cost: 0.25 } },
+      { t: 4, type: 'agent', index: 0, state: 'queued' },
+      { t: 5, type: 'agent', index: 0, state: 'running' },
+      { t: 6, type: 'agent', index: 0, state: 'done', usage: { output: 30, cost: 0.5 } },
+      { t: 7, type: 'agent', index: 0, state: 'cached' },
+    ].map((r) => JSON.stringify(r)).join('\n') + '\n'
+    const lane = foldTimeline(emptyTimeline('r'), ev).lanes[0]!
+    expect([lane.cost, lane.outputTokens]).toEqual([0.75, 40])
+  })
+
+  test('a status cut at the 4 MiB cap still yields the run\'s state', async () => {
+    const prev = parseStatus(STATUS, 1)
+    const cut = '{"runId":"flo_abc","state":"completed","result":{"status":"completed","result":"' + 'x'.repeat(50)
+    const read = readStatus(cut, true, prev, 'flo_abc', 2)
+    expect(read.state).toBe('completed')
+    expect(read.workers.length).toBe(prev.workers.length)
+    expect(read.resultMarkdown).toContain('too large')
+    expect(readStatus('not json', false, undefined, 'flo_x', 2).state).toBe('unknown')
+    expect(readStatus(STATUS, false, undefined, 'flo_abc', 2).state).toBe('running')
+  })
+
+  test('only a live run\'s question needs attention', async () => {
+    const d = parseStatus(STATUS, 1)
+    const run = (state: string) => ({ runId: 'flo_abc', file: 'f', state, createdAt: 0 })
+    expect(filterRuns([run('running')], 'attention', '', { flo_abc: d }).length).toBe(1)
+    expect(filterRuns([run('completed')], 'attention', '', { flo_abc: d }).length).toBe(0)
   })
 })

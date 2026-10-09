@@ -36,7 +36,7 @@ import {
   laneSvg,
   laneText,
   parseRuns,
-  parseStatus,
+  readStatus,
   parseTranscript,
   phaseGroups,
   placeholder,
@@ -235,7 +235,7 @@ async function refresh($: EngineInterface, force = false): Promise<void> {
       const fresh = list.find((r) => r.createdAt >= since && !attached.includes(r.runId))
       if (fresh) {
         attachNextSince = null
-        attached = [...attached, fresh.runId].slice(-20)
+        attached = [...attached, fresh.runId]
         await update($, attachedAtom, () => attached)
         await update($, selectedAtom, () => fresh.runId)
       } else if (now - since > 120_000) {
@@ -257,8 +257,8 @@ async function refresh($: EngineInterface, force = false): Promise<void> {
     for (const id of ids) {
       const ran = await flo($, ['status', id, '--json'])
       if (ran.exitCode !== 0) continue
-      const next = parseStatus(ran.stdout, now)
       const prev = details[id]
+      const next = readStatus(ran.stdout, ran.isStdoutTruncated, prev, id, now)
       if (watched.has(id)) toasts.push(...transitions(prev, next))
       if (hasEnded(prev, next)) mustList = true
       if (shouldWake(prev, next, wake.includes(id))) woken.push(id)
@@ -324,7 +324,7 @@ const EVENTS_CHUNKS_PER_POLL = 8
  */
 async function refreshTimeline($: EngineInterface): Promise<void> {
   const runId = await read($, selectedAtom)
-  if (!runId || (await read($, runTabAtom)) === 'agents') return
+  if (!runId) return
   const file = `${await ensureHome($)}/runs/${runId}/events.jsonl`
   let size: number
   try {
@@ -411,7 +411,7 @@ function refreshAll($: EngineInterface): Promise<void> {
 
 async function attach($: EngineInterface, runId: string): Promise<void> {
   const now = await $.clock.now()
-  await update($, attachedAtom, (list) => (list.includes(runId) ? list : [...list, runId].slice(-20)))
+  await update($, attachedAtom, (list) => (list.includes(runId) ? list : [...list, runId]))
   await update($, detailsAtom, (all) => (all[runId] ? all : { ...all, [runId]: placeholder(runId, now) }))
   await update($, selectedAtom, () => runId)
   mustList = true
@@ -664,7 +664,9 @@ export const register: Register = (on) => {
     if (ran.deny !== undefined) return ran
     const runId = extractRunId(ran.text ?? '')
     if (runId) await attach($, runId)
-    else attachNextSince = startedAt - 5000
+    // No id in the output: only a launch Bash backgrounded (it reports no id until it
+    // ends) arms the fallback; a failed launch, or an MCP error, arms nothing.
+    else if (isBash && ran.isError !== true && /running in background/i.test(ran.text ?? '')) attachNextSince = startedAt - 5000
     void $.ui.open({ id: PANE, title: TITLE })
     return ran
   }).catch(($, e, next) => next(e))
@@ -946,7 +948,15 @@ export const register: Register = (on) => {
         const run = runs.find((r) => r.runId === selected)
         const state = d?.state ?? run?.state ?? 'unknown'
         const live = isLive(state)
-        const workers = d?.workers ?? []
+        // Each worker's spend over all its attempts, from the run's events, where read.
+        const lanes = new Map((timeline && timeline.runId === selected && Array.isArray(timeline.lanes) ? timeline.lanes : []).map((l) => [l.id, l]))
+        const workers = (d?.workers ?? []).map((w) => {
+          const lane = lanes.get(w.id)
+          return lane && typeof lane.cost === 'number' && (lane.cost > 0 || lane.outputTokens > 0)
+            ? { ...w, cost: lane.cost || w.cost, outputTokens: lane.outputTokens || w.outputTokens }
+            : w
+        })
+        const runCost = workers.reduce((sum, w) => sum + (w.cost ?? 0), 0)
         const agents = workers.filter((w) => w.kind === 'agent')
         const counts = progress(workers)
         const done = counts.find((c) => c.tone === 'success')?.count ?? 0
@@ -1199,7 +1209,7 @@ export const register: Register = (on) => {
                       ? `${fmtTokens(agents.reduce((s, a) => s + (a.outputTokens ?? 0), 0))} tokens`
                       : '—',
                 )}
-                {tile('cost', 'Cost', d.cost ? fmtCost(d.cost) : '—')}
+                {tile('cost', 'Cost', runCost ? fmtCost(runCost) : '—')}
                 {d.phases.length ? tile('phase', `Phase ${d.phases.length}`, d.phases[d.phases.length - 1] ?? '') : null}
               </Box>
             ) : (
@@ -1214,12 +1224,14 @@ export const register: Register = (on) => {
             {d?.questions.length ? (
               <Box key="questions" flexDirection="column" gap={1}>
                 {d.questions.map((q) => (
-                  <Box key={`q:${q.qid}`} borderStyle="round" borderColor="warning" paddingX={1} flexDirection="column">
-                    <Text color="warning" bold>
-                      The workflow is asking ({q.qid})
+                  <Box key={`q:${q.qid}`} borderStyle="round" {...(live ? { borderColor: 'warning' as const } : { borderDimColor: true })} paddingX={1} flexDirection="column">
+                    <Text {...(live ? { color: 'warning' as const } : { dimColor: true })} bold>
+                      {live ? `The workflow is asking (${q.qid})` : `Never answered (${q.qid}): the run ended first`}
                     </Text>
-                    <Text wrap="wrap">{q.question}</Text>
-                    {Input ? (
+                    <Text wrap="wrap" {...(live ? {} : { dimColor: true })}>
+                      {q.question}
+                    </Text>
+                    {!live ? null : Input ? (
                       <Input
                         key={`answer:${q.qid}:${sent}`}
                         placeholder="Type an answer…"
@@ -1353,7 +1365,8 @@ export const register: Register = (on) => {
       const subtitle = (r: Run, isDated: boolean) => {
         const questions = details[r.runId]?.questions.length ?? 0
         const when = isDated ? fmtTime(r.createdAt) : fmtAge(now, r.createdAt)
-        return [r.runId, when, questions ? `${questions} question${questions === 1 ? '' : 's'} waiting` : null].filter(Boolean).join(' · ')
+        const waiting = isLive(r.state) ? questions : 0
+      return [r.runId, when, waiting ? `${waiting} question${waiting === 1 ? '' : 's'} waiting` : null].filter(Boolean).join(' · ')
       }
       // `isDated`: a card in Recent's day-grouped grid, two to a row where they fit.
       const runCard = (r: Run, isDated = false) => (

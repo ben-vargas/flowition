@@ -112,6 +112,9 @@ export type FlowitionCockpitLane = {
   /** The last time any of its (non-progress) events was recorded. */
   lastSeenAt: number
   path: FlowitionCockpitPathSeg[]
+  /** Spend over every attempt: each attempt's final event carries that attempt's usage. */
+  cost: number
+  outputTokens: number
 }
 
 /** A run's timeline and phases, folded from `events.jsonl` (its progress lines skipped). */

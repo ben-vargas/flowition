@@ -14,7 +14,7 @@ const status = (runId: string, state: string) =>
     phases: ['Fan'],
     agents: [{ index: 0, label: 'a', adapter: 'claude', model: 'm', state: state === 'running' ? 'running' : 'done', phaseIndex: 0 }],
     steps: [],
-    questions: [],
+    questions: state === 'failed' ? [{ qid: 'q0', question: 'Ship it?' }] : [],
     live: null,
   })
 const PATH = (i: number, s: number) => [{ kind: 'pipeline', ordinal: 0, count: 2, stages: 2 }, { kind: 'item', i }, { kind: 'stage', s }]
@@ -103,8 +103,10 @@ test('log, structure, filters, search, new run, resume and delete', async ($, on
     expect(await has(runKey('flo_bad'))).toBe(false)
     await ui.input({ key: 'search', text: '', kind: 'change' })
 
-    // Log and Structure, on the failed run.
+    // Log and Structure, on the failed run. Its unanswered question is shown abandoned.
     await press(runKey('flo_bad'))
+    expect(await ui.find({ text: /Never answered \(q0\): the run ended first/ })).toBeDefined()
+    expect((await ui.findAll({ type: 'Input' })).some((f) => f.key?.startsWith('answer:'))).toBe(false)
     await press('tab:log')
     expect(await ui.find({ text: /one claim held up/ })).toBeDefined()
     expect(await ui.find({ text: /research:0: halfway there/ })).toBeDefined()
