@@ -1138,3 +1138,45 @@ test('P2: many long questions draw within a budget, the run\'s controls and the 
   expect(fields.slice(0, 3)).toEqual(['q30', 'q31', 'q32'])
   await ui.unmount()
 })
+
+test('P2: a deeply nested Structure draws within the budget, says what it leaves out, and keeps the controls', async ($, on) => {
+  const { w } = world4(on)
+  w.states.flo_a = 'failed'
+  // 300 agents, each under its own item of a parallel(300), five fan-outs deep.
+  const chain = (k: number) => [
+    { kind: 'parallel', ordinal: 0, count: 300 },
+    { kind: 'item', i: k },
+    ...Array.from({ length: 5 }, () => [{ kind: 'parallel', ordinal: 0, count: 1 }, { kind: 'item', i: 0 }]).flat(),
+  ]
+  w.events = lines([
+    { t: 1, type: 'run', state: 'started' },
+    ...Array.from({ length: 300 }, (_, k) => [
+      { t: 2, type: 'agent', index: k, label: `a${k}`, state: 'running', path: chain(k) },
+      { t: 3, type: 'agent', index: k, state: 'done' },
+    ]).flat(),
+    { t: 9, type: 'run', state: 'failed' },
+  ])
+  await $.command.run(flo('flo_a'))
+  const ui = await $.ui.mount(PANE('terminal'))
+  await ui.press({ key: 'tab:structure' })
+  expect([!!(await ui.find({ key: 'resume' })), !!(await ui.find({ key: 'delete' })), !!(await ui.find({ text: /more agents and steps not drawn here/ }))]).toEqual([true, true, true])
+  await ui.unmount()
+})
+
+test('P2: a live fan-out with unfinished work spans to now, not to its last finished lane', async ($, on) => {
+  const { w } = world4(on)
+  w.states.flo_b = 'running'
+  const path = (i: number) => [{ kind: 'parallel', ordinal: 0, count: 2 }, { kind: 'item', i }]
+  w.events = lines([
+    { t: 40_000, type: 'run', state: 'started' },
+    { t: 40_000, type: 'agent', index: 0, label: 'a', state: 'running', path: path(0) },
+    { t: 40_000, type: 'agent', index: 1, label: 'b', state: 'running', path: path(1) },
+    { t: 41_000, type: 'agent', index: 0, state: 'done' },
+  ])
+  await $.command.run(flo('flo_b'))
+  const ui = await $.ui.mount(PANE('terminal'))
+  await ui.press({ key: 'tab:structure' })
+  // The mocked clock reads 100s: a minute in, the fan-out has run 1m so far (not 1s).
+  expect(await ui.find({ text: '1/2 done · 1m 00s so far' })).toBeDefined()
+  await ui.unmount()
+})

@@ -1536,7 +1536,7 @@ export const register: Register = (on) => {
             ) : runTab === 'log' ? (
               logView(c, tl)
             ) : runTab === 'structure' ? (
-              structureView(c, tl, workers, (i) => openAgent($, i))
+              structureView(c, tl, workers, (i) => openAgent($, i), now, live)
             ) : workers.length ? (
               <Box key="workers" flexDirection="column">
                 <Text bold>{agents.length === workers.length ? 'Agents' : 'Agents and steps'}</Text>
