@@ -15,7 +15,10 @@ import {
   buildStructure,
   filterRuns,
   foldRepeats,
+  emptyTimeline,
+  foldTimeline,
   parseTimeline,
+  shouldWake,
   stateTally,
   parseTranscript,
   phaseGroups,
@@ -287,5 +290,38 @@ describe('structure, folding and filtering', () => {
     expect(filterRuns(runs, 'attention', '', {}).map((r) => r.runId)).toEqual(['r2'])
     expect(filterRuns(runs, 'live', '', {}).map((r) => r.runId)).toEqual(['r4'])
     expect(filterRuns(runs, 'all', 'B.MJS', {}).map((r) => r.runId)).toEqual(['r3'])
+  })
+})
+
+describe('reading a run incrementally', () => {
+  const LINES = [
+    { t: 1, type: 'run', state: 'started', workflowFile: '/w.mjs', phases: [{ title: 'A' }] },
+    { t: 2, type: 'agent', index: 0, label: 'x', state: 'queued', phaseIndex: 0, path: [] },
+    { t: 3, type: 'agent', index: 0, state: 'progress', tool: 'Bash' },
+    { t: 4, type: 'agent', index: 0, state: 'running', phaseIndex: 0 },
+    { t: 5, type: 'log', message: 'halfway' },
+    { t: 6, type: 'agent', index: 0, state: 'done', durationMs: 2, phaseIndex: 0 },
+    { t: 7, type: 'run', state: 'completed' },
+  ].map((r) => JSON.stringify(r) + '\n')
+
+  test('folding a run in pieces gives what folding it at once does', async () => {
+    const whole = foldTimeline(emptyTimeline('r'), LINES.join(''))
+    for (let cut = 1; cut < LINES.length; cut++) {
+      const pieces = foldTimeline(foldTimeline(emptyTimeline('r'), LINES.slice(0, cut).join('')), LINES.slice(cut).join(''))
+      expect(pieces).toEqual(whole)
+    }
+    expect(whole.lanes.map((l) => [l.state, l.queuedAt, l.startedAt, l.endedAt])).toEqual([['done', 2, 4, 6]])
+    expect(whole.entries.map((en) => en.text)).toEqual(['run started', 'x started', 'halfway', 'x done in 0s', 'run completed'])
+    expect(whole.endedAt).toBe(7)
+  })
+
+  test('an armed run wakes Claude when it ends, or when a first look finds it ended', async () => {
+    const live = parseStatus(STATUS, 1)
+    const done = { ...live, state: 'completed' }
+    expect(shouldWake(live, done, true)).toBe(true)
+    expect(shouldWake(undefined, done, true)).toBe(true)
+    expect(shouldWake(undefined, live, true)).toBe(false)
+    expect(shouldWake(done, done, true)).toBe(false)
+    expect(shouldWake(live, done, false)).toBe(false)
   })
 })

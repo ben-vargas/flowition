@@ -35,6 +35,9 @@ const EVENTS =
     .map((r) => JSON.stringify(r))
     .join('\n') + '\n'
 
+// A read of [offset, offset + length) of a fixture, as `tail -c +N | head -c L` gives it.
+const slice = (text: string, argv: readonly string[]) => text.slice(Number(argv[4]) - 1, Number(argv[4]) - 1 + Number(argv[6]))
+
 const PANE = (surface: 'terminal' | 'desktop') =>
   ({
     plugin: 'flowition-cockpit',
@@ -49,7 +52,9 @@ test('the pane lists runs, drills into one, and answers, steers and cancels thro
   const calls: string[] = []
   mock.clock(on)
   mock.env(on, { HOME: '/home/t', FLOWITION_HOME: '/home/t/.flowition', FLOWITION_BIN: '/bin/flowition', PATH: '/usr/bin' })
-  on('fs.stat', ($, e) => ({ value: { kind: 'file', size: e.path.endsWith('.jsonl') ? TRANSCRIPT.length : 0, mtimeMs: 1, isLink: false } }))
+  on('fs.stat', ($, e) => ({
+    value: { kind: 'file', size: e.path.endsWith('events.jsonl') ? EVENTS.length : e.path.endsWith('.jsonl') ? TRANSCRIPT.length : 0, mtimeMs: 1, isLink: false },
+  }))
   on('fs.list', () => ({ value: [] }))
   on('ui.open', () => ({ value: { isPlaced: true } }))
   on('ui.panes', () => ({ value: [] }))
@@ -59,7 +64,7 @@ test('the pane lists runs, drills into one, and answers, steers and cancels thro
   on('ui.log', () => ({ value: undefined }))
   on('process.run', ($, e) => {
     if (e.argv[0] === '/bin/sh') {
-      const stdout = e.argv[2]?.includes('grep') ? EVENTS : TRANSCRIPT
+      const stdout = slice(e.argv[5]?.endsWith('events.jsonl') ? EVENTS : TRANSCRIPT, e.argv)
       return { value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
     }
     const args = e.argv.slice(1).join(' ')

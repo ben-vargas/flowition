@@ -30,20 +30,23 @@ import {
   isActive,
   isFlowitionLaunch,
   isLive,
+  emptyTimeline,
+  foldTimeline,
   laneSpan,
   laneSvg,
   laneText,
   parseRuns,
   parseStatus,
-  parseTimeline,
   parseTranscript,
   phaseGroups,
   placeholder,
   progress,
   progressSvg,
+  byteLength,
   runDuration,
   sameDetail,
   sameJson,
+  shouldWake,
   sliceLines,
   stateColor,
   statusLine,
@@ -254,10 +257,8 @@ async function refresh($: EngineInterface, force = false): Promise<void> {
       const next = parseStatus(ran.stdout, now)
       const prev = details[id]
       if (watched.has(id)) toasts.push(...transitions(prev, next))
-      if (hasEnded(prev, next)) {
-        mustList = true
-        if (wake.includes(id)) woken.push(id)
-      }
+      if (hasEnded(prev, next)) mustList = true
+      if (shouldWake(prev, next, wake.includes(id))) woken.push(id)
       // An unchanged poll keeps the old object, so nothing is redrawn for it.
       details[id] = prev && sameDetail(prev, next) ? prev : next
     }
@@ -308,15 +309,20 @@ async function refresh($: EngineInterface, force = false): Promise<void> {
   }
 }
 
+// events.jsonl is read in chunks well under $.process.run's 4 MiB stdout cap, so no
+// read is ever cut short; a large run is caught up over a few polls.
+const EVENTS_CHUNK = 2 << 20
+const EVENTS_CHUNKS_PER_POLL = 8
+
 /**
- * Folds the selected run's events into its timeline while the Timeline or Phases tab is
- * showing: the run, agent, step and phase lines only (grep leaves the frequent progress
- * lines out), and only again once the file has grown.
+ * Folds the selected run's events into its timeline while a tab other than Agents shows:
+ * from where the last read stopped, a bounded chunk at a time, so a growing run costs
+ * only its growth and a large one is never read (or cached) truncated.
  */
 async function refreshTimeline($: EngineInterface): Promise<void> {
   const runId = await read($, selectedAtom)
   if (!runId || (await read($, runTabAtom)) === 'agents') return
-  const file = `${home}/runs/${runId}/events.jsonl`
+  const file = `${await ensureHome($)}/runs/${runId}/events.jsonl`
   let size: number
   try {
     size = (await $.fs.stat(file)).size
@@ -324,13 +330,28 @@ async function refreshTimeline($: EngineInterface): Promise<void> {
     return
   }
   const prev = await read($, timelineAtom)
-  if (prev && prev.runId === runId && prev.size === size && Array.isArray(prev.entries)) return
-  const ran = await $.process.run(
-    ['/bin/sh', '-c', 'grep -E \'"type":"(run|agent|step|phase|log|mail|question|answer)"\' "$1" | grep -v \'"state":"progress"\'', 'sh', file],
-    { timeoutMs: 10_000 },
-  )
-  if (ran.exitCode > 1) return
-  await update($, timelineAtom, () => parseTimeline(ran.stdout, runId, size))
+  // A cache of another run, of an older shape, or of a file that since shrank starts over.
+  const isUsable = prev !== null && prev.runId === runId && Array.isArray(prev.entries) && typeof prev.consumed === 'number' && prev.consumed <= size
+  let tl = isUsable ? prev : emptyTimeline(runId)
+  if (isUsable && tl.consumed === size) return
+  for (let k = 0; k < EVENTS_CHUNKS_PER_POLL && tl.consumed < size; k++) {
+    const len = Math.min(EVENTS_CHUNK, size - tl.consumed)
+    const ran = await $.process.run(['/bin/sh', '-c', 'tail -c +"$1" "$2" | head -c "$3"', 'sh', String(tl.consumed + 1), file, String(len)], {
+      timeoutMs: 10_000,
+    })
+    if (ran.exitCode !== 0 || ran.isStdoutTruncated) break
+    const last = ran.stdout.lastIndexOf('\n')
+    if (last < 0) {
+      // No line ends in the chunk: one still being written (wait for it), or a single
+      // line longer than a chunk (skip it; its tail parses as nothing).
+      if (len < EVENTS_CHUNK) break
+      tl = { ...tl, consumed: tl.consumed + len }
+      continue
+    }
+    const body = ran.stdout.slice(0, last + 1)
+    tl = { ...foldTimeline(tl, body), consumed: tl.consumed + byteLength(body) }
+  }
+  await update($, timelineAtom, () => ({ ...tl, total: size }))
 }
 
 /**
@@ -1213,6 +1234,9 @@ export const register: Register = (on) => {
               </Box>
             ) : null}
 
+            {runTab !== 'agents' && tl && tl.consumed < tl.total ? (
+              <Text dimColor>Reading this run's events… {Math.floor((tl.consumed / tl.total) * 100)}%</Text>
+            ) : null}
             {runTab === 'timeline' ? (
               timelineView()
             ) : runTab === 'phases' ? (

@@ -116,6 +116,14 @@ export const sameDetail = (a: Detail, b: Detail): boolean => sameJson({ ...a, fe
 export const hasEnded = (prev: Detail | undefined, next: Detail): boolean =>
   prev !== undefined && isLive(prev.state) && !isLive(next.state)
 
+/**
+ * Whether a run armed with "Tell Claude when done" should wake Claude now: it ended
+ * between two polls, or the pane's first look at it (after a reload cleared what it
+ * knew) already finds it ended, which an armed run can only be once it has finished.
+ */
+export const shouldWake = (prev: Detail | undefined, next: Detail, isArmed: boolean): boolean =>
+  isArmed && (hasEnded(prev, next) || (prev === undefined && !isLive(next.state)))
+
 /** Toasts owed between two polls of one run: it ended, or it asked something new. */
 export function transitions(prev: Detail | undefined, next: Detail): string[] {
   const out: string[] = []
@@ -471,19 +479,38 @@ const toSeg = (raw: unknown): PathSeg => {
 }
 const RUN_ENDED = new Set(['completed', 'failed', 'cancelled', 'interrupted'])
 
+export const emptyTimeline = (runId: string): Timeline => ({
+  runId,
+  consumed: 0,
+  total: 0,
+  startedAt: null,
+  endedAt: null,
+  declaredPhases: [],
+  phases: [],
+  lanes: [],
+  workflowFile: null,
+  entries: [],
+  isEntriesCut: false,
+})
+
+/** `events.jsonl` text (whole lines) folded into a fresh timeline. */
+export const parseTimeline = (text: string, runId: string, consumed: number): Timeline => ({ ...foldTimeline(emptyTimeline(runId), text), consumed })
+
 /**
- * The run's run/agent/step/phase events (progress lines already filtered out) folded
- * into lanes. A lane's times are only ever its own events' times; a resumed lane starts
- * over at its new `queued`.
+ * More of a run's `events.jsonl` (whole lines) folded into what `prev` already holds, so
+ * the file can be read in pieces: from its start, a bounded chunk at a time, and later
+ * only what it grew by. Progress lines are skipped. A lane's times are only ever its own
+ * events' times; a resumed lane starts over at its new `queued`. `consumed` is the
+ * caller's to advance.
  */
-export function parseTimeline(text: string, runId: string, size: number): Timeline {
-  const out: Timeline = { runId, size, startedAt: null, endedAt: null, declaredPhases: [], phases: [], lanes: [], workflowFile: null, entries: [], isEntriesCut: false }
-  const lanes = new Map<string, Lane>()
+export function foldTimeline(prev: Timeline, text: string): Timeline {
+  const out: Timeline = { ...prev, declaredPhases: [...prev.declaredPhases], phases: [...prev.phases], entries: [...prev.entries], lanes: [] }
+  const lanes = new Map<string, Lane>(prev.lanes.map((l) => [l.id, { ...l }]))
   const entry = (t: number, kind: LogEntry['kind'], text: string, agent: number | null = null, tone: LogEntry['tone'] = null) =>
     out.entries.push({ t, kind, text: clip(text, 2000), agent, tone })
   const agentName = (i: number | null) => (i === null ? 'an agent' : (lanes.get(`a:${i}`)?.label ?? `agent ${i}`))
   for (const line of text.split('\n')) {
-    if (!line.trim()) continue
+    if (!line.trim() || line.includes('"state":"progress"')) continue
     let r: unknown
     try {
       r = JSON.parse(line)

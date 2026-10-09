@@ -117,8 +117,10 @@ export type FlowitionCockpitLane = {
 /** A run's timeline and phases, folded from `events.jsonl` (its progress lines skipped). */
 export type FlowitionCockpitTimeline = {
   runId: string
-  /** The events file's size when read: read again only when it grows. */
-  size: number
+  /** Bytes of `events.jsonl` folded in so far, through its last complete line. */
+  consumed: number
+  /** The file's size at the last read: while `consumed` is behind it, more is to come. */
+  total: number
   startedAt: number | null
   endedAt: number | null
   /** `meta.phases`, as the run declared them. */

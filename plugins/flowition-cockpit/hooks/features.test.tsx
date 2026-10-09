@@ -29,7 +29,9 @@ const EVENTS = [
   { t: 7, type: 'log', message: 'one claim held up' },
 ]
   .map((r) => JSON.stringify(r))
-  .join('\n')
+  .join('\n') + '\n'
+
+const slice = (text: string, argv: readonly string[]) => text.slice(Number(argv[4]) - 1, Number(argv[4]) - 1 + Number(argv[6]))
 
 const PANE = (surface: 'terminal' | 'desktop') =>
   ({
@@ -48,7 +50,7 @@ test('log, structure, filters, search, new run, resume and delete', async ($, on
   const calls: string[] = []
   mock.clock(on)
   mock.env(on, { HOME: '/home/t', FLOWITION_HOME: '/home/t/.flowition', FLOWITION_BIN: '/bin/flowition', PATH: '/usr/bin' })
-  on('fs.stat', () => ({ value: { kind: 'file', size: 10, mtimeMs: 1, isLink: false } }))
+  on('fs.stat', ($, e) => ({ value: { kind: 'file', size: e.path.endsWith('events.jsonl') ? EVENTS.length : 0, mtimeMs: 1, isLink: false } }))
   on('fs.list', ($, e) => ({
     value: e.path === '/home/t/.flowition/workflows' ? [entry('demo', 'dir')] : e.path.endsWith('/workflows/demo') ? [entry('broken.workflow.mjs', 'file')] : [],
   }))
@@ -60,7 +62,7 @@ test('log, structure, filters, search, new run, resume and delete', async ($, on
   on('ui.log', () => ({ value: undefined }))
   on('process.run', ($, e) => {
     const [bin, ...rest] = e.argv
-    if (bin === '/bin/sh') return ok(e.argv[2]?.includes('grep') ? EVENTS : '')
+    if (bin === '/bin/sh') return ok(e.argv[5]?.endsWith('events.jsonl') ? slice(EVENTS, e.argv) : '')
     if (bin === 'head') return ok(EVENTS.split('\n')[0] ?? '')
     if (bin === 'pwd') return ok('/home/t/proj\n')
     const args = rest.join(' ')
