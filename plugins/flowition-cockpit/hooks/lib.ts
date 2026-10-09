@@ -317,17 +317,28 @@ const RUN_LINE_STATES = /^(started|resumed|completed|failed|interrupted|cancelle
  */
 export function extractRunIds(text: string, max = Infinity): string[] {
   const out: string[] = []
+  // A foreground run prints its result after its run line (the CLI writes
+  // `\nrun <id>: <status>\n` then the result): from there a JSON line carrying only a
+  // status is that result's text, and so is a run line not set off by a blank line, as
+  // the CLI sets off its own; a detached launch's envelope or event lines still count.
+  let isInResult = false
+  let isAfterBlank = true
   for (const line of text.split('\n')) {
     if (out.length >= max) break
     const s = line.trim()
+    const wasAfterBlank = isAfterBlank
+    isAfterBlank = s === ''
     const ran = /^run (\S+?): (\w+)$/.exec(s)
     const event = /^▶ run (\S+) — (\w+)/.exec(s)
+    const envelope = launchEnvelope(s)
+    const ranId = ran && RUN_LINE_STATES.test(ran[2] ?? '') && (!isInResult || wasAfterBlank) ? ran[1] : undefined
     const id =
       /^started detached run (\S+)/.exec(s)?.[1] ??
       (event && RUN_LINE_STATES.test(event[2] ?? '') ? event[1] : undefined) ??
-      (ran && RUN_LINE_STATES.test(ran[2] ?? '') ? ran[1] : undefined) ??
+      ranId ??
       /^run (\S+)$/.exec(s)?.[1] ??
-      launchEnvelope(s)
+      (envelope && (envelope.isDetached || !isInResult) ? envelope.runId : undefined)
+    if (ranId) isInResult = true
     if (id && RUN_ID.test(id) && !out.includes(id)) out.push(id)
   }
   if (out.length) return out
@@ -340,13 +351,14 @@ export function extractRunIds(text: string, max = Infinity): string[] {
  * CLI writes runId first, then detached or status, so a line cut short (a large result
  * Bash keeps only the head of) still names it; a runId nested in a result never does.
  */
-function launchEnvelope(line: string): string | null {
+function launchEnvelope(line: string): { runId: string; isDetached: boolean } | null {
   if (!line.startsWith('{')) return null
   try {
     const o = obj(JSON.parse(line))
-    return typeof o.runId === 'string' && (o.detached === true || typeof o.status === 'string') ? o.runId : null
+    return typeof o.runId === 'string' && (o.detached === true || typeof o.status === 'string') ? { runId: o.runId, isDetached: o.detached === true } : null
   } catch {
-    return /^\{"runId":"([^"\\]+)","(?:detached|status)":/.exec(line)?.[1] ?? null
+    const m = /^\{"runId":"([^"\\]+)","(detached|status)":/.exec(line)
+    return m ? { runId: m[1] as string, isDetached: m[2] === 'detached' } : null
   }
 }
 
@@ -1073,6 +1085,7 @@ export function foldTimeline(prev: Timeline, text: string): Timeline {
       else if (state === 'started' || state === 'resumed') {
         out.endedAt = null
         out.attemptAt = t
+        out.attemptPhases = []
       }
       if (state) entry(t, 'run', `run ${state}${str(r.error) ? `: ${str(r.error)}` : ''}`, null, RUN_ENDED.has(state) ? stateColor(state) : 'suggestion')
     } else if (r.type === 'phase') {
@@ -1080,6 +1093,7 @@ export function foldTimeline(prev: Timeline, text: string): Timeline {
       const title = str(r.title) ?? `phase ${index + 1}`
       if (!out.phases.some((p) => p.index === index)) out.phases.push({ index, title, t })
       out.currentPhase = { index, title }
+      if (!(out.attemptPhases ?? []).includes(index)) out.attemptPhases = [...(out.attemptPhases ?? []), index]
       entry(t, 'phase', `phase ${index + 1}: ${title}`)
     } else if (r.type === 'log') {
       entry(t, 'log', str(r.message) ?? '', null, str(r.level) === 'warn' ? 'warning' : str(r.level) === 'error' ? 'error' : null)
@@ -1247,9 +1261,16 @@ export function phaseGroups(tl: Timeline | null, workers: Worker[], observed: st
   // The phase the run is in: the last it entered. Reached but holding no work, it is
   // current while the run goes on (waiting on an answer, say), done once a later phase
   // is reached or the run completes, interrupted if the run stopped there.
-  const lastReached = Math.max(-1, ...[...titles.entries()].filter(([, p]) => p.isReached).map(([i]) => i))
-  const emptyState = (index: number | null): PhaseGroup['state'] =>
-    index === null || index < lastReached || runState === undefined || runState === 'completed' ? 'done' : isLive(runState) ? 'running' : 'interrupted'
+  // Progression is the current attempt's: a resume replays from its first phase, so a
+  // later phase reached only by an earlier attempt is not passed yet.
+  const current = tl?.currentPhase?.index ?? (observed.length ? observed.length - 1 : -1)
+  const inAttempt = tl?.attemptPhases
+  const emptyState = (index: number | null): PhaseGroup['state'] => {
+    if (index === null || runState === undefined || runState === 'completed') return 'done'
+    if (index === current) return isLive(runState) ? 'running' : 'interrupted'
+    if (index < current || inAttempt?.includes(index)) return 'done'
+    return inAttempt ? 'pending' : 'done'
+  }
   const group = (index: number | null, title: string, isDeclared: boolean, isReached: boolean, ws: Worker[]): PhaseGroup => {
     const spans = ws.map((w) => lanes.get(w.id)).filter((l): l is Lane => l !== undefined)
     const starts = spans.map((l) => l.startedAt ?? l.queuedAt).filter((x): x is number => x !== null)

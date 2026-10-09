@@ -160,6 +160,8 @@ export type FlowitionCockpitTimeline = {
   isPathsCut?: boolean
   /** When the run's latest attempt began (its last started or resumed event). */
   attemptAt?: number | null
+  /** The phases the latest attempt has entered, by index, in order. */
+  attemptPhases?: number[]
   /** The phase the run last entered (a resume replays its phases from the first). */
   currentPhase: { index: number; title: string } | null
 }

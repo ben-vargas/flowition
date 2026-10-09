@@ -395,8 +395,11 @@ async function refresh($: EngineInterface, force = false): Promise<void> {
     for (let i = 0; i < pendingResumes.length; ) {
       const p = pendingResumes[i] as (typeof pendingResumes)[number]
       const listed = list.find((r) => r.runId === p.runId)
+      // Ordinary progress of an attempt already running is no evidence: a new attempt is
+      // (the run turning live having not been, or a run-resumed event written since).
       const size = await eventsSize($, p.runId)
-      if ((listed && isLive(listed.state) && !p.wasLive) || (size !== null && p.size !== null && size > p.size) || (p.size === null && size !== null)) {
+      const grown = size !== null && size > (p.size ?? 0) ? await resumedSince($, p.runId, p.size ?? 0, size) : false
+      if ((listed && isLive(listed.state) && !p.wasLive) || grown) {
         pendingResumes.splice(i, 1)
         if (!attached.includes(p.runId)) attached = [...attached, p.runId]
         await attach($, p.runId)
@@ -692,6 +695,17 @@ async function refreshThread($: EngineInterface, now: number): Promise<void> {
 }
 
 // ---- actions ---------------------------------------------------------------------
+
+/** Whether a run's events.jsonl gained a run started/resumed event past byte `from` (up to 1 MiB of it). */
+async function resumedSince($: EngineInterface, runId: string, from: number, size: number): Promise<boolean> {
+  try {
+    const file = `${await ensureHome($)}/runs/${runId}/events.jsonl`
+    const ran = await $.process.run(['/bin/sh', '-c', 'tail -c +"$1" "$2" | head -c "$3"', 'sh', String(from + 1), file, String(Math.min(size - from, 1 << 20))], { timeoutMs: 10_000 })
+    return ran.stdout.split('\n').some((line) => line.includes('"type":"run"') && /"state":"(resumed|started)"/.test(line))
+  } catch {
+    return false
+  }
+}
 
 /** The size of a run's events.jsonl, or null when it cannot be read. */
 async function eventsSize($: EngineInterface, runId: string): Promise<number | null> {
