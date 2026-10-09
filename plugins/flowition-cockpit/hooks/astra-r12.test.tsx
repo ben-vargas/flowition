@@ -2,7 +2,7 @@
 // Round 11 scratch reproductions. All process, filesystem and Bash responses are mocked.
 import { expect, mock, test } from 'claude-code/testing'
 import type { On } from 'claude-code'
-import { extractRunIds, launchesIn, parseTranscript, appendEvents, emptyTimeline, foldTimeline, parseStatus, lifetimeWorkers, laneText, laneSvg, isFlowitionLaunch } from './lib'
+import { extractRunIds, launchIdsIn, launchesIn, parseTranscript, appendEvents, emptyTimeline, foldTimeline, parseStatus, lifetimeWorkers, laneText, laneSvg, isFlowitionLaunch } from './lib'
 
 const ok=(stdout:string)=>({value:{exitCode:0,stdout,stderr:'',isStdoutTruncated:false,isStderrTruncated:false}})
 const flo=(args:string)=>({command:'flo',args,origin:{kind:'composer' as const},presentation:{isFullscreen:true,columns:160}})
@@ -101,5 +101,8 @@ for(const withStatus of [false,true])test(`A14 JSON report with external CI id w
 
 test('A14/A15: a foreground loop names each run the CLI sets off, not run lines inside a result', () => {
   // Two foreground runs in a loop: the CLI writes "\nrun <id>: <status>\n" then the result.
-  expect(extractRunIds('\nrun flo_a: completed\nreport a\nrun flo_ref: completed\n\nrun flo_b: failed\nreport b\n')).toEqual(['flo_a', 'flo_b'])
+  // Past the first run line, a later run's lines and the result's text read alike: every id
+  // there is doubtful, a launch only on evidence (sol2-r1.test.tsx attaches a real loop's).
+  expect(extractRunIds('\nrun flo_a: completed\nreport a\nrun flo_ref: completed\n\nrun flo_b: failed\nreport b\n')).toEqual(['flo_a'])
+  expect(launchIdsIn('\nrun flo_a: completed\nreport a\nrun flo_ref: completed\n\nrun flo_b: failed\nreport b\n').doubtful).toEqual(['flo_ref', 'flo_b'])
 })

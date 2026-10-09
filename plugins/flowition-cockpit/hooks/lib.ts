@@ -321,37 +321,36 @@ export function extractRunIds(text: string, max = Infinity): string[] {
 
 /**
  * The runs a launch's output names: `ids`, by the CLI's own lines (see extractRunIds),
- * and `doubtful`, a status-bearing JSON line inside a foreground run's result region:
- * the next --json launch's outcome or the result's own text, which the bytes alone
- * cannot tell apart. A doubtful id is a launch only on evidence it is a new run.
+ * and `doubtful`, any such line inside a foreground run's result region: the next
+ * launch's output in a compound command or a loop, or the result's own text quoting the
+ * CLI, which the bytes alone cannot tell apart. A doubtful id is a launch only on
+ * evidence it is a new run of one of the command's launches.
  */
 export function launchIdsIn(text: string, max = Infinity): { ids: string[]; doubtful: string[] } {
   const out: string[] = []
   const doubtful: string[] = []
   // A foreground run prints its result after its run line (the CLI writes
-  // `\nrun <id>: <status>\n` then the result): from there a JSON line carrying only a
-  // status is that result's text, and so is a run line not set off by a blank line, as
-  // the CLI sets off its own; a detached launch's envelope or event lines still count.
+  // `\nrun <id>: <status>\n` then the result): from there to the end, every line is
+  // that result's text or a later command's output.
   let isInResult = false
-  let isAfterBlank = true
   for (const line of text.split('\n')) {
     if (out.length >= max) break
     const s = line.trim()
-    const wasAfterBlank = isAfterBlank
-    isAfterBlank = s === ''
     const ran = /^run (\S+?): (\w+)$/.exec(s)
     const event = /^▶ run (\S+) — (\w+)/.exec(s)
-    const envelope = launchEnvelope(s)
-    const ranId = ran && RUN_LINE_STATES.test(ran[2] ?? '') && (!isInResult || wasAfterBlank) ? ran[1] : undefined
+    const ranId = ran && RUN_LINE_STATES.test(ran[2] ?? '') ? ran[1] : undefined
     const id =
       /^started detached run (\S+)/.exec(s)?.[1] ??
       (event && RUN_LINE_STATES.test(event[2] ?? '') ? event[1] : undefined) ??
       ranId ??
       /^run (\S+)$/.exec(s)?.[1] ??
-      (envelope && (envelope.isDetached || !isInResult) ? envelope.runId : undefined)
-    if (envelope && !id && RUN_ID.test(envelope.runId) && !doubtful.includes(envelope.runId)) doubtful.push(envelope.runId)
+      launchEnvelope(s)?.runId
+    if (id && RUN_ID.test(id)) {
+      if (!isInResult) {
+        if (!out.includes(id)) out.push(id)
+      } else if (!doubtful.includes(id)) doubtful.push(id)
+    }
     if (ranId) isInResult = true
-    if (id && RUN_ID.test(id) && !out.includes(id)) out.push(id)
   }
   if (out.length) return { ids: out, doubtful: doubtful.filter((id) => !out.includes(id)) }
   const whole = envelopeRunId(text.trim())
@@ -478,10 +477,19 @@ const isFlowitionWord = (w: string) => /(^|\/)(flo|flowition)(\.js)?$/.test(w)
 
 type Word = { word: string; isDynamic: boolean }
 
+/**
+ * One launch in a command: a new run of `file` (null when the shell expands it) or a
+ * resume of `target`; backgrounded by the shell or not; and repeated when it sits in a
+ * loop, which runs it any number of times.
+ */
+export type Invocation = { file: string | null; target: string | null; isBackground: boolean; isRepeated: boolean }
+
 // Reserved words that open or close a compound command (a group whose commands share
 // what follows its close: `if …; fi &` backgrounds them all), and those within one.
 const OPENERS = new Set(['{', 'if', 'while', 'until', 'for', 'case', 'select'])
 const CLOSERS = new Set(['}', 'fi', 'done', 'esac'])
+// Those whose body runs any number of times.
+const LOOPS = new Set(['while', 'until', 'for', 'select'])
 const INNER = new Set(['then', 'do', 'else', 'elif', '!', 'in'])
 const isRedirect = (w: string) => /^(\d*|&)?(>>?|<)/.test(w) || /^\d*>&/.test(w)
 
@@ -494,16 +502,16 @@ const isRedirect = (w: string) => /^(\d*|&)?(>>?|<)/.test(w) || /^\d*>&/.test(w)
  * whether the shell backgrounds it: `&` backgrounds its whole and-or list, groups and
  * pipelines included.
  */
-export function launchesIn(command: string): { files: (string | null)[]; count: number; invocations: { file: string | null; target: string | null; isBackground: boolean }[] } {
+export function launchesIn(command: string): { files: (string | null)[]; count: number; invocations: Invocation[] } {
   // Simple commands, and the list items they belong to (per group depth).
-  const cmds: { words: Word[]; isBackground: boolean }[] = []
-  type Frame = { item: number[]; all: number[] }
-  const frames: Frame[] = [{ item: [], all: [] }]
+  const cmds: { words: Word[]; isBackground: boolean; isRepeated: boolean }[] = []
+  type Frame = { item: number[]; all: number[]; isLoop: boolean }
+  const frames: Frame[] = [{ item: [], all: [], isLoop: false }]
   const top = () => frames[frames.length - 1] as Frame
   let cur: Word[] = []
   const endCommand = () => {
     if (cur.length) {
-      cmds.push({ words: cur, isBackground: false })
+      cmds.push({ words: cur, isBackground: false, isRepeated: frames.some((f) => f.isLoop) })
       top().item.push(cmds.length - 1)
       top().all.push(cmds.length - 1)
     }
@@ -513,9 +521,9 @@ export function launchesIn(command: string): { files: (string | null)[]; count: 
     if (isBackground) for (const i of top().item) (cmds[i] as (typeof cmds)[number]).isBackground = true
     top().item = []
   }
-  const open = () => {
+  const open = (isLoop: boolean) => {
     endCommand()
-    frames.push({ item: [], all: [] })
+    frames.push({ item: [], all: [], isLoop })
   }
   const close = () => {
     endCommand()
@@ -528,7 +536,7 @@ export function launchesIn(command: string): { files: (string | null)[]; count: 
   }
   for (const t of shellTokens(command)) {
     if ('op' in t) {
-      if (t.op === '(') open()
+      if (t.op === '(') open(false)
       else if (t.op === ')') close()
       else if (t.op === '&') {
         endCommand()
@@ -537,7 +545,7 @@ export function launchesIn(command: string): { files: (string | null)[]; count: 
         endCommand()
         endItem(false)
       } else endCommand() // && || |: the same list item goes on
-    } else if (!cur.length && OPENERS.has(t.word)) open()
+    } else if (!cur.length && OPENERS.has(t.word)) open(LOOPS.has(t.word))
     else if (!cur.length && CLOSERS.has(t.word)) close()
     else if (!cur.length && INNER.has(t.word)) continue
     else cur.push(t)
@@ -546,8 +554,8 @@ export function launchesIn(command: string): { files: (string | null)[]; count: 
   endItem(false)
   while (frames.length > 1) close()
 
-  const invocations: { file: string | null; target: string | null; isBackground: boolean }[] = []
-  for (const { words, isBackground } of cmds) {
+  const invocations: Invocation[] = []
+  for (const { words, isBackground, isRepeated } of cmds) {
     // The command word: past variable assignments and wrappers (env, nohup, npx, …); a
     // flowition word anywhere else (echo flowition run …) is an argument, not a launch.
     let at = 0
@@ -587,7 +595,7 @@ export function launchesIn(command: string): { files: (string | null)[]; count: 
     const id = sub === 'resume' ? positional : resume
     const target = id && !id.isDynamic && RUN_ID.test(id.word) ? id.word : null
     const file = sub === 'run' && !resume && positional && !positional.isDynamic ? (positional.word.split('/').pop() ?? null) : null
-    invocations.push({ file, target, isBackground })
+    invocations.push({ file, target, isBackground, isRepeated })
   }
   return { files: invocations.map((v) => v.file), count: invocations.length, invocations }
 }

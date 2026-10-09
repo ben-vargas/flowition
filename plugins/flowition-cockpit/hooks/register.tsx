@@ -68,6 +68,7 @@ import {
   baselineOf,
   launchIdsIn,
   launchesIn,
+  type Invocation,
   boundThread,
   phaseGroups,
   placeholder,
@@ -158,7 +159,7 @@ const pendingResumes: { runId: string; since: number; wasLive: boolean; size: nu
 // result): attached only once listed as created since the command began, a new run.
 // It must also be one of the command's own launches: a new-run launch of its workflow
 // (`candidates`, by file) that the runs the output named (`certain`) do not account for.
-const pendingNamed: { runId: string; since: number; known: Set<string>; group: number; candidates: (string | null)[]; certain: string[] }[] = []
+const pendingNamed: { runId: string; since: number; known: Set<string>; group: number; candidates: { file: string | null; isRepeated: boolean }[]; certain: string[] }[] = []
 let launchGroup = 0
 // Each attach (a launch, a resume, a re-attach) takes the next generation; a poll that
 // began before a run's generation neither writes nor announces anything for that run,
@@ -410,13 +411,14 @@ async function refresh($: EngineInterface, force = false): Promise<void> {
       // Listed before the command, or created before it: a run the result refers to.
       if (p.known.has(p.runId) || listed.createdAt < p.since) continue
       // The command's launches its named runs did not account for: one must be this run's.
+      // A launch in a loop runs any number of times, so the runs it made never use it up.
       const remaining = [...p.candidates]
       for (const f of certainFiles) {
-        const at = remaining.indexOf(f as string)
-        const loose = at >= 0 ? at : remaining.indexOf(null)
-        if (loose >= 0) remaining.splice(loose, 1)
+        const own = remaining.findIndex((c) => c.file === f)
+        const at = own >= 0 ? own : remaining.findIndex((c) => c.file === null)
+        if (at >= 0 && !remaining[at]?.isRepeated) remaining.splice(at, 1)
       }
-      if (!remaining.includes(listed.file) && !remaining.includes(null)) continue
+      if (!remaining.some((c) => c.file === listed.file || c.file === null)) continue
       // Its launch is accounted for now: a discovery record kept for it goes too.
       const record = pendingLaunches.findIndex((r) => r.group === p.group && r.file === listed.file)
       const loose = record >= 0 ? record : pendingLaunches.findIndex((r) => r.group === p.group && r.file === null)
@@ -1080,7 +1082,7 @@ export const register: Register = (on) => {
     // resume the command names, where that run stood: what a resume would change.
     const before = await read($, runsAtom)
     const known = new Set(before.map((r) => r.runId))
-    const launches = isBash ? launchesIn(e.command).invocations : [{ file: null, target: null, isBackground: false }]
+    const launches: Invocation[] = isBash ? launchesIn(e.command).invocations : [{ file: null, target: null, isBackground: false, isRepeated: false }]
     const resumeIds = [...new Set(launches.map((l) => l.target).filter((id): id is string => id !== null))]
     // Read fresh, just before the command: a cached listing may be behind (another
     // session resumed it meanwhile). A state that cannot be read counts as live, so it is
@@ -1111,7 +1113,7 @@ export const register: Register = (on) => {
     const group = ++launchGroup
     const fresh = launches.filter((l) => l.target === null)
     const certain = named.filter((id) => !resumeIds.includes(id))
-    for (const runId of doubtful) if (!resumeIds.includes(runId)) pendingNamed.push({ runId, since: startedAt - 1000, known, group, candidates: fresh.map((l) => l.file), certain })
+    for (const runId of doubtful) if (!resumeIds.includes(runId)) pendingNamed.push({ runId, since: startedAt - 1000, known, group, candidates: fresh.map((l) => ({ file: l.file, isRepeated: l.isRepeated })), certain })
     // A resume the output did not name waits for evidence it ran.
     const targets = isBash ? resumeIds : []
     for (const r of resumeFrom) if (isBash && !named.includes(r.runId)) pendingResumes.push({ ...r, since: startedAt - 1000 })
