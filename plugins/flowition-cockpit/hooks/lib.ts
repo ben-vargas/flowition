@@ -336,14 +336,18 @@ export function extractRunIds(text: string, max = Infinity): string[] {
   return whole && RUN_ID.test(whole) ? [whole] : []
 }
 
-/** A --json launch line: a JSON object naming its run beside `detached` or a status. */
+/**
+ * A --json launch line: a JSON object naming its run beside `detached` or a status. The
+ * CLI writes runId first, then detached or status, so a line cut short (a large result
+ * Bash keeps only the head of) still names it; a runId nested in a result never does.
+ */
 function launchEnvelope(line: string): string | null {
   if (!line.startsWith('{')) return null
   try {
     const o = obj(JSON.parse(line))
     return typeof o.runId === 'string' && (o.detached === true || typeof o.status === 'string') ? o.runId : null
   } catch {
-    return null
+    return /^\{"runId":"([^"\\]+)","(?:detached|status)":/.exec(line)?.[1] ?? null
   }
 }
 
@@ -360,7 +364,9 @@ export function launchesIn(command: string): { files: (string | null)[]; count: 
     const rest = command.slice(m.index ?? 0).split(/[;&|]/)[0] ?? ''
     const resumed = m[1] === 'resume' ? arg : /--resume(?:=|\s+)([^\s;&|)]+)/.exec(rest)?.[1]?.replace(/^['"]|['"]$/g, '')
     const target = resumed && RUN_ID.test(resumed) ? resumed : null
-    invocations.push({ file: m[1] === 'run' && target === null ? (arg.split('/').pop() ?? null) : null, target })
+    // A file named through the shell ($WF, a glob) is not known until it runs: any new run.
+    const file = m[1] === 'run' && target === null && !/[$`*?]/.test(arg) ? (arg.split('/').pop() ?? null) : null
+    invocations.push({ file, target })
   }
   return { files: invocations.map((i) => i.file), count: invocations.length, invocations }
 }

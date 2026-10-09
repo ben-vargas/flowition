@@ -378,7 +378,8 @@ async function refresh($: EngineInterface, force = false): Promise<void> {
     for (let i = 0; i < pendingLaunches.length; ) {
       const { since, known, file } = pendingLaunches[i] as (typeof pendingLaunches)[number]
       const candidates = [...list].reverse().filter((r) => r.createdAt >= since && !known.has(r.runId) && !attached.includes(r.runId))
-      const fresh = candidates.find((r) => file !== null && r.file === file) ?? candidates[0]
+      // Its own workflow file when the command named one: never another workflow's run.
+      const fresh = file !== null ? candidates.find((r) => r.file === file) : candidates[0]
       if (fresh) {
         pendingLaunches.splice(i, 1)
         attached = [...attached, fresh.runId]
@@ -659,6 +660,15 @@ function refreshAll($: EngineInterface): Promise<void> {
 async function attach($: EngineInterface, runId: string): Promise<void> {
   const now = await $.clock.now()
   attachedSeqOf.set(runId, ++attachSeq)
+  // Switching to another run leaves the last one's agent thread and pending prompts, as
+  // select() does.
+  if ((await read($, selectedAtom)) !== runId) {
+    await update($, agentViewAtom, () => null)
+    await update($, threadAtom, () => null)
+    await update($, expandedAtom, () => [])
+    await update($, steeringAtom, () => null)
+    await update($, confirmAtom, () => null)
+  }
   await update($, attachedAtom, (list) => (list.includes(runId) ? list : [...list, runId]))
   // Its notices start from here: whatever a poll saw of it while it was not watched (its
   // question, its end) was never announced, so the baseline is a fresh placeholder.
@@ -938,16 +948,21 @@ export const register: Register = (on) => {
     const ran = await next(e)
     if (ran.deny !== undefined) return ran
     const isOk = ran.isError !== true
+    // Bash's own record: its whole stdout (the model may read only a preview of a large
+    // one) and whether the command went to the background (explicitly, on timeout, Ctrl+B).
+    const record = isBash && ran.result !== null && typeof ran.result === 'object' ? (ran.result as { stdout?: unknown; backgroundTaskId?: unknown }) : {}
+    const output = [typeof record.stdout === 'string' ? record.stdout : '', ran.text ?? ''].join('\n')
+    const isBackgrounded = typeof record.backgroundTaskId === 'string' || /running in background|moved to the background|manually backgrounded/i.test(ran.text ?? '')
     // Every run the output names (a command may launch several), and every run a resume
     // names on the command line (attached even when Bash backgrounds it, no output yet).
     const launches = isBash ? launchesIn(e.command).invocations : [{ file: null, target: null }]
-    const named = extractRunIds(ran.text ?? '', Math.max(1, launches.length))
+    const named = extractRunIds(output, Math.max(1, launches.length))
     const targets = isBash && isOk ? launches.map((l) => l.target).filter((id): id is string => id !== null) : []
     for (const runId of [...new Set([...named, ...targets])]) await attach($, runId)
     // New runs whose ids the output does not carry (launches Bash backgrounded report none
     // until they end) arm the fallback, one record each; a failed launch, or an MCP error,
     // arms none.
-    if (isBash && isOk && /running in background/i.test(ran.text ?? '')) {
+    if (isBash && isOk && isBackgrounded) {
       const fresh = launches.filter((l) => l.target === null).slice(named.filter((id) => !targets.includes(id)).length)
       for (const l of fresh) pendingLaunches.push({ since: startedAt - 1000, known, file: l.file })
     }
