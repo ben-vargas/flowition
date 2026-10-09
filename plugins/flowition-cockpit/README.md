@@ -36,6 +36,10 @@ nvm, Volta, Bun or Homebrew global install, or named by `FLOWITION_BIN`. It read
     input and output), with a box to message it.
 - **Auto-attach**: a run Claude launches (`flowition run|resume` in Bash, or the
   flowition MCP tools) opens in the pane, and toasts when it asks a question or ends.
+  It goes by evidence: the run ids the CLI prints, and for a launch Bash or the shell
+  backgrounds, a new run of the launched workflow (or a resume's new attempt). A run
+  it cannot attribute (an unusual compound command) still shows under Live, where
+  **Tell Claude when done** can be armed by hand.
 
 Every control that changes a run (answer, steer, cancel, resume, delete, start) runs
 only from a press in the pane; cancel, resume and delete ask twice. Each leaves a dim
