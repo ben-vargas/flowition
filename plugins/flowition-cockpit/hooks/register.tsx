@@ -149,6 +149,10 @@ const pendingLaunches: { since: number; known: Set<string>; file: string | null;
 // `foreground`: the command's new-run launches it did not background, by file (''
 // for a file the shell expands), which named runs account for before any record.
 const namedByGroup = new Map<number, { names: Set<string>; foreground: Map<string, number> }>()
+// Resumes a command named on its command line: attached only on evidence the resume
+// ran (the run turns live having not been, or its events grow), never on syntax alone
+// (a branch that did not run, a resume that was refused).
+const pendingResumes: { runId: string; since: number; wasLive: boolean; size: number | null }[] = []
 let launchGroup = 0
 // Each attach (a launch, a resume, a re-attach) takes the next generation; a poll that
 // began before a run's generation neither writes nor announces anything for that run,
@@ -387,6 +391,18 @@ async function refresh($: EngineInterface, force = false): Promise<void> {
     // Each backgrounded launch, oldest first, takes the oldest run created since it began
     // that was not listed before it and is not attached, preferring its own workflow file:
     // never a run another session started just before.
+    // A resume runs when its run turns live having not been, or its events grow.
+    for (let i = 0; i < pendingResumes.length; ) {
+      const p = pendingResumes[i] as (typeof pendingResumes)[number]
+      const listed = list.find((r) => r.runId === p.runId)
+      const size = await eventsSize($, p.runId)
+      if ((listed && isLive(listed.state) && !p.wasLive) || (size !== null && p.size !== null && size > p.size) || (p.size === null && size !== null)) {
+        pendingResumes.splice(i, 1)
+        if (!attached.includes(p.runId)) attached = [...attached, p.runId]
+        await attach($, p.runId)
+      } else if (now - p.since > 120_000) pendingResumes.splice(i, 1)
+      else i++
+    }
     // First, a command's named runs, once listed, take back their own records.
     // (A run listed before its journal exists reads file '?': it waits until it names its
     // workflow.) A named run first accounts for a foreground launch of its own workflow,
@@ -396,16 +412,21 @@ async function refresh($: EngineInterface, force = false): Promise<void> {
         const run = list.find((r) => r.runId === id)
         if (!run || run.file === '?') continue
         names.delete(id)
-        const fg = foreground.has(run.file) ? run.file : foreground.has('') ? '' : null
-        if (fg !== null) {
+        // Exact matches before wildcards: a foreground launch of its file, then a record of
+        // its file, then an unknown-file foreground launch, then an unknown-file record.
+        const take = (fg: string) => {
           const n = (foreground.get(fg) ?? 1) - 1
           if (n > 0) foreground.set(fg, n)
           else foreground.delete(fg)
-          continue
         }
-        const at = pendingLaunches.findIndex((p) => p.group === group && p.file === run.file)
-        const loose = at >= 0 ? at : pendingLaunches.findIndex((p) => p.group === group && p.file === null)
-        if (loose >= 0) pendingLaunches.splice(loose, 1)
+        const exactRecord = pendingLaunches.findIndex((p) => p.group === group && p.file === run.file)
+        if (foreground.has(run.file)) take(run.file)
+        else if (exactRecord >= 0) pendingLaunches.splice(exactRecord, 1)
+        else if (foreground.has('')) take('')
+        else {
+          const loose = pendingLaunches.findIndex((p) => p.group === group && p.file === null)
+          if (loose >= 0) pendingLaunches.splice(loose, 1)
+        }
       }
       if (!names.size || !pendingLaunches.some((p) => p.group === group)) namedByGroup.delete(group)
     }
@@ -998,8 +1019,13 @@ export const register: Register = (on) => {
     const isLaunch = isBash ? isFlowitionLaunch(e.command) : /flowition_(run|resume)$/.test(String(e.tool))
     if (!isLaunch) return next(e)
     // The runs listed before the command starts: a poll may list the launched run while
-    // the command is still running, and it must stay eligible for its launch.
-    const known = new Set((await read($, runsAtom)).map((r) => r.runId))
+    // the command is still running, and it must stay eligible for its launch. And, for each
+    // resume the command names, where that run stood: what a resume would change.
+    const before = await read($, runsAtom)
+    const known = new Set(before.map((r) => r.runId))
+    const launches = isBash ? launchesIn(e.command).invocations : [{ file: null, target: null, isBackground: false }]
+    const resumeIds = [...new Set(launches.map((l) => l.target).filter((id): id is string => id !== null))]
+    const resumeFrom = await Promise.all(resumeIds.map(async (runId) => ({ runId, wasLive: isLive(before.find((r) => r.runId === runId)?.state ?? ''), size: await eventsSize($, runId) })))
     const startedAt = await $.clock.now()
     const ran = await next(e)
     if (ran.deny !== undefined) return ran
@@ -1009,12 +1035,13 @@ export const register: Register = (on) => {
     const record = isBash && ran.result !== null && typeof ran.result === 'object' ? (ran.result as { stdout?: unknown; backgroundTaskId?: unknown }) : {}
     const output = [typeof record.stdout === 'string' ? record.stdout : '', ran.text ?? ''].join('\n')
     const isBackgrounded = typeof record.backgroundTaskId === 'string' || /running in background|moved to the background|manually backgrounded/i.test(ran.text ?? '')
-    // Every run the output names (a command may launch several), and every run a resume
-    // names on the command line (attached even when Bash backgrounds it, no output yet).
-    const launches = isBash ? launchesIn(e.command).invocations : [{ file: null, target: null, isBackground: false }]
-    const named = extractRunIds(output, Math.max(1, launches.length))
-    const targets = isBash && isOk ? launches.map((l) => l.target).filter((id): id is string => id !== null) : []
-    for (const runId of [...new Set([...named, ...targets])]) await attach($, runId)
+    // Every run the output names, however many (a loop launches more runs than the
+    // command text shows); the output's own lines are the evidence they ran.
+    const named = extractRunIds(output)
+    for (const runId of named) await attach($, runId)
+    // A resume the output did not name waits for evidence it ran.
+    const targets = isBash && isOk ? resumeIds : []
+    for (const r of resumeFrom) if (isBash && isOk && !named.includes(r.runId)) pendingResumes.push({ ...r, since: startedAt - 1000 })
     // New runs whose ids the output does not carry (launches Bash backgrounded report none
     // until they end) arm the fallback, one record each; a failed launch, or an MCP error,
     // arms none.
@@ -1447,7 +1474,7 @@ export const register: Register = (on) => {
 
         const phasesView = () => {
           // Each phase's span and spend come from every lane read; only the rows drawn are cut.
-          const groups = phaseGroups(read_ ? { ...read_, lanes: shownLanes } : read_, workers, d?.phases ?? [])
+          const groups = phaseGroups(read_ ? { ...read_, lanes: shownLanes } : read_, workers, d?.phases ?? [], state)
           if (!groups.length) return <Text dimColor>{tl ? 'No agents or phases yet.' : 'Loading the phases…'}</Text>
           // Each phase (its header, then its rows) within what is left of the tab's budget,
           // in order, so the run's controls below always draw; what is left out is counted.

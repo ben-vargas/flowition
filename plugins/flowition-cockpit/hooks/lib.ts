@@ -1238,12 +1238,18 @@ export type PhaseGroup = {
  * Declared phases in order, then any observed beyond them, each with its workers
  * (joined on `phaseIndex`), then a group for the workers outside every phase.
  */
-export function phaseGroups(tl: Timeline | null, workers: Worker[], observed: string[]): PhaseGroup[] {
+export function phaseGroups(tl: Timeline | null, workers: Worker[], observed: string[], runState?: string): PhaseGroup[] {
   const titles = new Map<number, { title: string; isDeclared: boolean; isReached: boolean }>()
   ;(tl?.declaredPhases ?? []).forEach((title, i) => titles.set(i, { title, isDeclared: true, isReached: false }))
   const seen = tl?.phases.length ? tl.phases : observed.map((title, index) => ({ index, title, t: 0 }))
   for (const p of seen) titles.set(p.index, { title: p.title, isDeclared: titles.get(p.index)?.isDeclared ?? false, isReached: true })
   const lanes = new Map((tl?.lanes ?? []).map((l) => [l.id, l]))
+  // The phase the run is in: the last it entered. Reached but holding no work, it is
+  // current while the run goes on (waiting on an answer, say), done once a later phase
+  // is reached or the run completes, interrupted if the run stopped there.
+  const lastReached = Math.max(-1, ...[...titles.entries()].filter(([, p]) => p.isReached).map(([i]) => i))
+  const emptyState = (index: number | null): PhaseGroup['state'] =>
+    index === null || index < lastReached || runState === undefined || runState === 'completed' ? 'done' : isLive(runState) ? 'running' : 'interrupted'
   const group = (index: number | null, title: string, isDeclared: boolean, isReached: boolean, ws: Worker[]): PhaseGroup => {
     const spans = ws.map((w) => lanes.get(w.id)).filter((l): l is Lane => l !== undefined)
     const starts = spans.map((l) => l.startedAt ?? l.queuedAt).filter((x): x is number => x !== null)
@@ -1255,9 +1261,11 @@ export function phaseGroups(tl: Timeline | null, workers: Worker[], observed: st
         ? 'interrupted'
         : ws.some((w) => isActive(w.state))
           ? 'running'
-          : ws.length || isReached
+          : ws.length
             ? 'done'
-            : 'pending'
+            : isReached
+              ? emptyState(index)
+              : 'pending'
     return {
       index,
       title,
