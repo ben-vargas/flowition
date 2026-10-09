@@ -2,7 +2,7 @@
 // on the code before its fix.
 import { expect, mock, test } from 'claude-code/testing'
 import type { On } from 'claude-code'
-import { lifetimeWorkers, parseStatus, parseTimeline, RUNS_FILTER_JS, STATUS_SLIM_JS } from './lib'
+import { filterRuns, lifetimeWorkers, parseStatus, parseTimeline, RUNS_FILTER_JS, STATUS_SLIM_JS, statusLine, transitions } from './lib'
 
 type World = { states: Record<string, string>; listFails: boolean; transcriptFails: boolean; transcriptGrowth: number; calls: string[]; submitted: string[] }
 
@@ -1067,4 +1067,33 @@ test('P2: thousands of phases count against the Phases tab budget, so the run\'s
   await ui.press({ key: 'tab:phases' })
   expect([!!(await ui.find({ key: 'resume' })), !!(await ui.find({ key: 'delete' })), !!(await ui.find({ text: /more phases not drawn here/ }))]).toEqual([true, true, true])
   await ui.unmount()
+})
+
+test('P2: an ended run\'s unanswered question is no new request after a reload (no toast)', async ($, on) => {
+  const { w } = world4(on)
+  w.states.flo_a = 'stale'
+  w.questions = [{ qid: 'q0', question: 'Ship it?', t: 5 }]
+  // A reload clears the cached details and keeps the attached ids: the first poll has no prev.
+  on('tool.call', { tool: 'Bash' }, () => ({ result: 'mock launch', text: 'started detached run flo_a' }))
+  await $.tool.call({ tool: 'Bash', command: 'flowition run a.workflow.mjs --detach' })
+  const ui = await $.ui.mount(PANE('terminal'))
+  await ui.press({ key: 'refresh' })
+  await ui.press({ key: 'refresh' })
+  expect(w.toasts.filter((t) => t.includes('Ship it?'))).toEqual([])
+  await ui.unmount()
+})
+
+test('P2: only questions the engine waits on count as needing attention or waiting', () => {
+  const status = (state: string, live: object | null) =>
+    parseStatus(JSON.stringify({ runId: 'flo_a', state, agents: [], steps: [], questions: [{ qid: 'q0', question: 'Ship it?', t: 5 }], phases: [], result: null, live }), 1)
+  const run = { runId: 'flo_a', state: 'starting', file: 'a.workflow.mjs', createdAt: 1 }
+  // Resumed, not asked again yet: starting with no live status, or running with none pending.
+  for (const d of [status('starting', null), status('running', { ok: true, questions: [] })]) {
+    const r = { ...run, state: d.state }
+    expect([filterRuns([r], 'attention', '', { flo_a: d }).length, /question/.test(statusLine([r], { flo_a: d }) ?? ''), transitions(undefined, d)]).toEqual([0, false, []])
+  }
+  // Asked: pending in the live status.
+  const asked = status('running', { ok: true, questions: [{ qid: 'q0', question: 'Ship it?' }] })
+  const r = { ...run, state: 'running' }
+  expect([filterRuns([r], 'attention', '', { flo_a: asked }).length, /1 question waiting/.test(statusLine([r], { flo_a: asked }) ?? ''), transitions(undefined, asked)]).toEqual([1, true, ['flo_a asks: Ship it?']])
 })

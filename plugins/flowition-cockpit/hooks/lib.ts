@@ -264,12 +264,13 @@ export const shouldWake = (_prev: Detail | undefined, next: Detail, isArmed: boo
 /** Toasts owed between two polls of one run: it ended, or it asked something new. */
 export function transitions(prev: Detail | undefined, next: Detail): string[] {
   const out: string[] = []
-  // A question is its qid and its event: a resume that asks one again (same qid) writes
-  // a new question event, while the earlier attempt's record stays the same until then.
+  // Only a question the engine is waiting on now is announced, once: by its qid and its
+  // event (a resume that asks one again writes a new question event). An ended run's,
+  // or an earlier attempt's not asked again yet, is no request, a reload or not.
   const key = (q: Detail['questions'][number]) => `${q.qid}@${q.t ?? ''}`
-  const asked = new Set(prev?.questions.map(key) ?? [])
+  const asked = new Set(prev?.questions.filter((q) => q.isOpen).map(key) ?? [])
   for (const q of next.questions) {
-    if (!asked.has(key(q))) out.push(`${next.runId} asks: ${q.question}`)
+    if (q.isOpen && !asked.has(key(q))) out.push(`${next.runId} asks: ${q.question}`)
   }
   if (hasEnded(prev, next)) out.push(`${next.runId} ${next.state}${next.error ? `: ${next.error}` : ''}`)
   return out
@@ -333,7 +334,7 @@ export function runDuration(run: Run | undefined, d: Detail | undefined, now: nu
 export function statusLine(runs: Run[], details: Record<string, Detail>): string | undefined {
   const live = runs.filter((r) => isLive(r.state))
   if (live.length === 0) return undefined
-  const questions = live.reduce((n, r) => n + (details[r.runId]?.questions.length ?? 0), 0)
+  const questions = live.reduce((n, r) => n + (details[r.runId]?.questions.filter((q) => q.isOpen).length ?? 0), 0)
   const parts = [`flo · ${live.length} running`]
   if (questions) parts.push(`${questions} question${questions === 1 ? '' : 's'} waiting`)
   return parts.join(' · ')
@@ -971,7 +972,7 @@ export function filterRuns(runs: Run[], filter: ListFilter, query: string, detai
   const q = query.trim().toLowerCase()
   return runs.filter((r) => {
     // A question only waits on a live run: an ended run's unanswered one is abandoned.
-    const asks = isLive(r.state) && (details[r.runId]?.questions.length ?? 0) > 0
+    const asks = isLive(r.state) && (details[r.runId]?.questions.some((q) => q.isOpen) ?? false)
     const keep =
       filter === 'all' ||
       (filter === 'live' && isLive(r.state)) ||
