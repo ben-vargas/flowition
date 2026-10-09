@@ -316,7 +316,18 @@ const RUN_LINE_STATES = /^(started|resumed|completed|failed|interrupted|cancelle
  * field or not. With none, the whole text as one JSON object (an MCP tool's {runId}).
  */
 export function extractRunIds(text: string, max = Infinity): string[] {
+  return launchIdsIn(text, max).ids
+}
+
+/**
+ * The runs a launch's output names: `ids`, by the CLI's own lines (see extractRunIds),
+ * and `doubtful`, a status-bearing JSON line inside a foreground run's result region:
+ * the next --json launch's outcome or the result's own text, which the bytes alone
+ * cannot tell apart. A doubtful id is a launch only on evidence it is a new run.
+ */
+export function launchIdsIn(text: string, max = Infinity): { ids: string[]; doubtful: string[] } {
   const out: string[] = []
+  const doubtful: string[] = []
   // A foreground run prints its result after its run line (the CLI writes
   // `\nrun <id>: <status>\n` then the result): from there a JSON line carrying only a
   // status is that result's text, and so is a run line not set off by a blank line, as
@@ -337,13 +348,14 @@ export function extractRunIds(text: string, max = Infinity): string[] {
       (event && RUN_LINE_STATES.test(event[2] ?? '') ? event[1] : undefined) ??
       ranId ??
       /^run (\S+)$/.exec(s)?.[1] ??
-      (envelope && (envelope.isDetached || envelope.isOutcome || !isInResult) ? envelope.runId : undefined)
+      (envelope && (envelope.isDetached || !isInResult) ? envelope.runId : undefined)
+    if (envelope && !id && RUN_ID.test(envelope.runId) && !doubtful.includes(envelope.runId)) doubtful.push(envelope.runId)
     if (ranId) isInResult = true
     if (id && RUN_ID.test(id) && !out.includes(id)) out.push(id)
   }
-  if (out.length) return out
+  if (out.length) return { ids: out, doubtful: doubtful.filter((id) => !out.includes(id)) }
   const whole = envelopeRunId(text.trim())
-  return whole && RUN_ID.test(whole) ? [whole] : []
+  return { ids: whole && RUN_ID.test(whole) ? [whole] : [], doubtful: [] }
 }
 
 /**
@@ -351,18 +363,14 @@ export function extractRunIds(text: string, max = Infinity): string[] {
  * CLI writes runId first, then detached or status, so a line cut short (a large result
  * Bash keeps only the head of) still names it; a runId nested in a result never does.
  */
-function launchEnvelope(line: string): { runId: string; isDetached: boolean; isOutcome: boolean } | null {
+function launchEnvelope(line: string): { runId: string; isDetached: boolean } | null {
   if (!line.startsWith('{')) return null
   try {
     const o = obj(JSON.parse(line))
-    if (typeof o.runId !== 'string' || (o.detached !== true && typeof o.status !== 'string')) return null
-    // A foreground --json run's whole outcome, exactly as the CLI writes it: runId,
-    // status, then its result or error (a following launch's, after another's result).
-    const keys = Object.keys(o).join(',')
-    return { runId: o.runId, isDetached: o.detached === true, isOutcome: keys === 'runId,status,result' || keys === 'runId,status,error' }
+    return typeof o.runId === 'string' && (o.detached === true || typeof o.status === 'string') ? { runId: o.runId, isDetached: o.detached === true } : null
   } catch {
     const m = /^\{"runId":"([^"\\]+)","(detached|status)":/.exec(line)
-    return m ? { runId: m[1] as string, isDetached: m[2] === 'detached', isOutcome: false } : null
+    return m ? { runId: m[1] as string, isDetached: m[2] === 'detached' } : null
   }
 }
 

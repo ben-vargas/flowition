@@ -66,7 +66,7 @@ import {
   parseTranscript,
   appendEvents,
   baselineOf,
-  extractRunIds,
+  launchIdsIn,
   launchesIn,
   boundThread,
   phaseGroups,
@@ -154,6 +154,9 @@ const namedByGroup = new Map<number, { names: Set<string>; foreground: Map<strin
 // ran (the run turns live having not been, or its events grow), never on syntax alone
 // (a branch that did not run, a resume that was refused).
 const pendingResumes: { runId: string; since: number; wasLive: boolean; size: number | null }[] = []
+// Runs a launch's output may have named (a status JSON line inside a foreground run's
+// result): attached only once listed as created since the command began, a new run.
+const pendingNamed: { runId: string; since: number }[] = []
 let launchGroup = 0
 // Each attach (a launch, a resume, a re-attach) takes the next generation; a poll that
 // began before a run's generation neither writes nor announces anything for that run,
@@ -392,6 +395,17 @@ async function refresh($: EngineInterface, force = false): Promise<void> {
     // Each backgrounded launch, oldest first, takes the oldest run created since it began
     // that was not listed before it and is not attached, preferring its own workflow file:
     // never a run another session started just before.
+    // A doubtful id is a launch only if its run was created since its command began.
+    for (let i = 0; i < pendingNamed.length; ) {
+      const p = pendingNamed[i] as (typeof pendingNamed)[number]
+      const listed = list.find((r) => r.runId === p.runId)
+      if (listed && listed.file !== '?' && listed.createdAt >= p.since) {
+        pendingNamed.splice(i, 1)
+        if (!attached.includes(p.runId)) attached = [...attached, p.runId]
+        await attach($, p.runId)
+      } else if ((listed && listed.file !== '?') || now - p.since > 120_000) pendingNamed.splice(i, 1)
+      else i++
+    }
     // A resume runs when its run turns live having not been, or its events grow.
     for (let i = 0; i < pendingResumes.length; ) {
       const p = pendingResumes[i] as (typeof pendingResumes)[number]
@@ -1073,8 +1087,9 @@ export const register: Register = (on) => {
     const isBackgrounded = typeof record.backgroundTaskId === 'string' || /running in background|moved to the background|manually backgrounded/i.test(ran.text ?? '')
     // Every run the output names, however many (a loop launches more runs than the
     // command text shows); the output's own lines are the evidence they ran.
-    const named = extractRunIds(output)
+    const { ids: named, doubtful } = launchIdsIn(output)
     for (const runId of named) await attach($, runId)
+    if (isOk) for (const runId of doubtful) pendingNamed.push({ runId, since: startedAt - 1000 })
     // A resume the output did not name waits for evidence it ran.
     const targets = isBash && isOk ? resumeIds : []
     for (const r of resumeFrom) if (isBash && isOk && !named.includes(r.runId)) pendingResumes.push({ ...r, since: startedAt - 1000 })
@@ -1722,7 +1737,7 @@ export const register: Register = (on) => {
                 ) : null}
                 {tl?.currentPhase
                   ? tile('phase', `Phase ${tl.currentPhase.index + 1}`, tl.currentPhase.title)
-                  : d.phases.length
+                  : !tl && d.phases.length
                     ? tile('phase', 'Phase', d.phases[d.phases.length - 1] ?? '')
                     : null}
               </Box>

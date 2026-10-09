@@ -2,7 +2,7 @@
 // Round 11 scratch reproductions. All process, filesystem and Bash responses are mocked.
 import { expect, mock, test } from 'claude-code/testing'
 import type { On } from 'claude-code'
-import { extractRunIds, launchesIn, parseTranscript, appendEvents, emptyTimeline, foldTimeline, parseStatus, lifetimeWorkers, laneText, laneSvg, isFlowitionLaunch } from './lib'
+import { extractRunIds, launchesIn, parseTranscript, appendEvents, emptyTimeline, foldTimeline, parseStatus, lifetimeWorkers, laneText, laneSvg, isFlowitionLaunch, launchIdsIn } from './lib'
 
 const ok=(stdout:string)=>({value:{exitCode:0,stdout,stderr:'',isStdoutTruncated:false,isStderrTruncated:false}})
 const flo=(args:string)=>({command:'flo',args,origin:{kind:'composer' as const},presentation:{isFullscreen:true,columns:160}})
@@ -46,7 +46,8 @@ for(const mixed of [false,true])test(`A15 mixed foreground output formats mixed=
  w.output=first+JSON.stringify({runId:'flo_second',status:'completed',result:'Report second'})+'\n'
  w.toolResult={stdout:w.output,stderr:'',interrupted:false}
  await $.tool.call({tool:'Bash',command:`flowition run first.mjs ${mixed?'--quiet':'--json'} && flowition run second.mjs --json`})
- w.states={flo_first:'completed',flo_second:'completed'};w.mtime++
+ // Both runs were created by this command (the CLI lists them created during it).
+ w.states={flo_first:'completed',flo_second:'completed'};w.created={flo_first:100_000,flo_second:100_000};w.files={flo_first:'first.mjs',flo_second:'second.mjs'};w.mtime++
  await clock.advance(30_000);await ui.press({key:'refresh'})
  expect(w.toasts.filter(t=>t==='flo_first completed')).toHaveLength(1)
  expect(w.toasts.filter(t=>t==='flo_second completed')).toHaveLength(1)
@@ -95,4 +96,6 @@ for(const resumed of [false,true])test(`A21 resume before reaching any current p
 })
 
 // These bytes were produced by src/cli.js main() with ONLY runWorkflow stubbed.
-test('A15 real CLI formatter output keeps both foreground identities',()=>{expect(extractRunIds("\nrun flo_first: completed\nReport first.mjs\n{\"runId\":\"flo_second\",\"status\":\"completed\",\"result\":\"Report second.mjs\"}\n")).toEqual(['flo_first','flo_second'])})
+// (Round 14: an outcome line inside a result region is doubtful, the next launch's or the
+// result's own text; it is attached on evidence it is a new run, see the hook tests.)
+test('A15 real CLI formatter output keeps both foreground identities',()=>{expect(launchIdsIn("\nrun flo_first: completed\nReport first.mjs\n{\"runId\":\"flo_second\",\"status\":\"completed\",\"result\":\"Report second.mjs\"}\n")).toEqual({ids:['flo_first'],doubtful:['flo_second']})})
