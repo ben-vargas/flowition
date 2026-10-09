@@ -1262,7 +1262,8 @@ export const register: Register = (on) => {
         }
 
         const phasesView = () => {
-          const groups = phaseGroups(tl, workers, d?.phases ?? [])
+          // Each phase's span and spend come from every lane read; only the rows drawn are cut.
+          const groups = phaseGroups(read_ ? { ...read_, lanes: shownLanes } : read_, workers, d?.phases ?? [])
           if (!groups.length) return <Text dimColor>{tl ? 'No agents or phases yet.' : 'Loading the phases…'}</Text>
           // Each phase (its header, then its rows) within what is left of the tab's budget,
           // in order, so the run's controls below always draw; what is left out is counted.

@@ -1300,3 +1300,24 @@ test('P2: thousands of long phase titles still leave the timeline within the $.s
   expect(JSON.stringify(whole).length).toBeGreaterThan(4_194_304)
   expect(JSON.stringify(boundTimeline(whole)).length).toBeLessThanOrEqual(3 << 20)
 })
+
+test('P2: a phase with more agents than the tab draws still spans every one of them', async ($, on) => {
+  const { w } = world4(on)
+  w.states.flo_a = 'completed'
+  w.agents = Array.from({ length: 400 }, (_, i) => ({ index: i, label: `a${i}`, state: 'done', phase: 'Fan out', phaseIndex: 0, t: i === 399 ? 601_000 : 2_000 }))
+  w.events = lines([
+    { t: 1_000, type: 'run', state: 'started' },
+    { t: 1_000, type: 'phase', title: 'Fan out', phaseIndex: 0 },
+    ...Array.from({ length: 400 }, (_, i) => [
+      { t: 1_000, type: 'agent', index: i, label: `a${i}`, state: 'running', phaseIndex: 0 },
+      { t: i === 399 ? 601_000 : 2_000, type: 'agent', index: i, state: 'done', phaseIndex: 0 },
+    ]).flat(),
+    { t: 601_500, type: 'run', state: 'completed' },
+  ])
+  await $.command.run(flo('flo_a'))
+  const ui = await $.ui.mount(PANE('terminal'))
+  await ui.press({ key: 'tab:phases' })
+  // The last agent (ending 10 minutes in) is past the tab's drawing budget, not its span.
+  expect(await ui.find({ text: /^400 agents · 10m 00s/ })).toBeDefined()
+  await ui.unmount()
+})
