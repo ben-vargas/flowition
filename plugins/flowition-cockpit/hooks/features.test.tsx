@@ -146,7 +146,8 @@ test('log, structure, filters, search, new run, resume and delete', async ($, on
     expect(await ui.find({ text: /full permissions in \/home\/t\/proj/ })).toBeDefined()
     calls.length = 0
     await press('launch-start')
-    expect(calls).toContain(`run ${WF} --detach --json`)
+    // A new run is pinned to the folder the form names (--cwd, from pwd).
+    expect(calls.find((c) => c.startsWith(`run ${WF} `))?.replace(/ --cwd \S+/, '')).toBe(`run ${WF} --detach --json`)
     expect(await ui.find({ text: /flo_new/ })).toBeDefined()
     await press('back')
     await ui.unmount()

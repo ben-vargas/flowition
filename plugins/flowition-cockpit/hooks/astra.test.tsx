@@ -108,7 +108,8 @@ for (const surface of ['terminal', 'desktop'] as const) {
     const submit=ui.input({key:`launch-args:${file}`,text:'{"target":"B"}',kind:'submit'})
     await clock.settle()
     hold=false;gate.resolve();await Promise.all([edit,submit])
-    expect(w.calls.filter(c=>c.startsWith('run '))).toEqual([`run ${file} --args {"target":"B"} --detach --json`])
+    // (Since round 17 the launch also pins its folder with --cwd: not what this checks.)
+    expect(w.calls.filter(c=>c.startsWith('run ')).map(c=>c.replace(/ --cwd \S+/,''))).toEqual([`run ${file} --args {"target":"B"} --detach --json`])
     await ui.unmount()
   })
 }

@@ -186,8 +186,6 @@ const REVALIDATE_MS = 60_000
 
 // Bumped by each message sent: part of the fields' keys, so a sent field draws empty.
 let sent = 0
-// The session's working directory: where a run started from the pane runs.
-let sessionCwd = ''
 
 const whoOf = (w: Worker): string => [w.adapter, w.model, w.effort].filter(Boolean).join(' · ') || 'agent'
 const dirname = (p: string): string => p.slice(0, Math.max(1, p.lastIndexOf('/')))
@@ -946,14 +944,15 @@ async function askClaude($: EngineInterface, runId: string, file: string | null,
 
 /** Opens the new-run form with the workflow files under ~/.flowition/workflows, newest first. */
 async function openLauncher($: EngineInterface): Promise<void> {
-  if (!sessionCwd) {
-    try {
-      sessionCwd = (await $.process.run(['pwd'])).stdout.trim()
-    } catch {
-      sessionCwd = ''
-    }
+  // The session's folder now (it may have moved since the form last opened), pinned to
+  // this form: the form names it, and Start passes it as --cwd, so the run runs there.
+  let cwd: string | null = null
+  try {
+    cwd = (await $.process.run(['pwd'])).stdout.trim() || null
+  } catch {
+    cwd = null
   }
-  await update($, launchAtom, () => ({ file: null, args: '', error: null, query: '', limit: 20 }))
+  await update($, launchAtom, () => ({ file: null, args: '', error: null, query: '', limit: 20, cwd }))
   const found: WorkflowFile[] = []
   const root = `${await ensureHome($)}/workflows`
   try {
@@ -1004,7 +1003,7 @@ async function launchOnce($: EngineInterface): Promise<void> {
     }
   }
   await update($, launchAtom, (l) => (l ? { ...l, isStarting: true, error: null } : l))
-  const ran = await flo($, ['run', launch.file, ...(args ? ['--args', args] : []), '--detach', '--json'], 30_000).catch((err: unknown) => ({
+  const ran = await flo($, ['run', launch.file, ...(args ? ['--args', args] : []), ...(launch.cwd ? ['--cwd', launch.cwd] : []), '--detach', '--json'], 30_000).catch((err: unknown) => ({
     exitCode: 1,
     stdout: '',
     stderr: err instanceof Error ? err.message : String(err),
@@ -1047,7 +1046,6 @@ export const register: Register = (on) => {
     await update($, confirmAtom, () => null)
     await update($, recentLimitAtom, () => 8)
     await update($, launchAtom, () => null)
-    sessionCwd = ''
     await $.command.register({
       name: 'flo',
       description: 'Show flowition runs in a pane (optionally: /flo <runId>)',
@@ -1921,7 +1919,7 @@ export const register: Register = (on) => {
         read($, openGroupsAtom),
       ])
       if (launch) {
-        return launchView(c, launch, workflows, sessionCwd || 'this session’s folder', {
+        return launchView(c, launch, workflows, launch.cwd || 'this session’s folder', {
           // Another workflow starts from empty args: none carried over, unseen, from the last.
         pick: (file) => update($, launchAtom, (l) => (l ? { ...l, file, args: l.file === file ? l.args : '', error: null } : l)),
         filter: (query) => update($, launchAtom, (l) => (l ? { ...l, query, limit: 20 } : l)),

@@ -7,7 +7,7 @@ import type { FlowitionCockpitWorkflowFile as WorkflowFile } from '../types'
 import type { Ctx } from './ctx'
 import { fmtAge } from './lib'
 
-export type LaunchState = { file: string | null; args: string; error: string | null; query: string; limit: number; isStarting?: boolean }
+export type LaunchState = { file: string | null; args: string; error: string | null; query: string; limit: number; isStarting?: boolean; cwd?: string | null }
 
 export function launchView(
   c: Ctx,

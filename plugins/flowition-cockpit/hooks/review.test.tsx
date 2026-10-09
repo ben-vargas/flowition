@@ -273,7 +273,7 @@ test('R2-F9: another workflow starts without the last one\'s args', async ($, on
   await ui.press({ key: `wf-pick:${root}b.workflow.mjs` })
   w.calls.length = 0
   await ui.press({ key: 'launch-start' })
-  expect(w.calls).toContain(`run ${root}b.workflow.mjs --detach --json`)
+  expect(w.calls.find((c) => c.startsWith('run '))?.replace(/ --cwd \S+/, '')).toBe(`run ${root}b.workflow.mjs --detach --json`)
   await ui.unmount()
 })
 
