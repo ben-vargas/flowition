@@ -148,7 +148,14 @@ export const meta = {
 }
 export default async function ({ agent, spawn, parallel, pipeline, phase, ask, sendTo }) {
   phase('Fan out')
-  const listener = spawn('SLEEP 450\\nWAIT_MAIL', { adapter: 'mock', label: 'listener' })
+  // The listener waits for mail from its first instruction. A direct adapter's send is
+  // 'live' only if a turn is already blocked in WAIT_MAIL. That registration happens in
+  // the same synchronous segment that makes the job findable, so by the time three
+  // timer-driven agents have finished, sendTo() must land live. A SLEEP before WAIT_MAIL
+  // (it was 450 ms against 3 × 140 ms) only decided the verdict by how the mock's 25 ms
+  // polls rounded: on a slow runner each SLEEP 140 took 5 late polls (~435 ms in all)
+  // while SLEEP 450 still needed 16, so the mail queued.
+  const listener = spawn('WAIT_MAIL', { adapter: 'mock', label: 'listener' })
   const parallelResults = await parallel([1, 2, 3].map((n) => () =>
     agent(\`SLEEP 140\\nTOOL read-\${n}\\nECHO parallel-\${n}\`, {
       adapter: 'mock', label: \`parallel-\${n}\`,
