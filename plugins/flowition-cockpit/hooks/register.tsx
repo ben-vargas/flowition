@@ -31,12 +31,17 @@ import {
   isActive,
   isFlowitionLaunch,
   isLive,
+  isTerminal,
   catchUpTimeline,
   emptyTimeline,
   laneSpan,
   laneSvg,
   laneText,
   parseRuns,
+  parseFilteredRuns,
+  listNoteOf,
+  RUNS_FILTER_JS,
+  RUNS_KEPT,
   lifetimeWorkers,
   pairToolResults,
   shownState,
@@ -86,6 +91,7 @@ const listQueryAtom = atom({ plugin: 'flowition-cockpit', key: 'listQuery' } as 
 const openGroupsAtom = atom({ plugin: 'flowition-cockpit', key: 'openGroups' } as const, [])
 const launchAtom = atom({ plugin: 'flowition-cockpit', key: 'launch' } as const, null)
 const workflowsAtom = atom({ plugin: 'flowition-cockpit', key: 'workflows' } as const, [])
+const listNoteAtom = atom({ plugin: 'flowition-cockpit', key: 'listNote' } as const, null)
 
 /** States a run may be resumed from: `flowition run <file> --resume` re-enters them. */
 const RESUMABLE = new Set(['failed', 'interrupted', 'stale'])
@@ -187,6 +193,26 @@ async function flo($: EngineInterface, args: string[], timeoutMs = 15_000): Prom
   throw failure
 }
 
+/**
+ * Every run, for a history too long for one `runs --json` read (over $.process.run's
+ * 4 MiB stdout): the listing is piped through node, which the CLI itself runs on, and
+ * comes back as every unfinished run plus the newest RUNS_KEPT, with the full count.
+ * Null when that cannot run: the caller falls back to the newest rows it did read.
+ */
+async function listLongHistory($: EngineInterface): Promise<{ runs: Run[]; total: number | null } | null> {
+  if (!bin) return null
+  const env: Record<string, string> = { FLOWITION_COCKPIT_FILTER: RUNS_FILTER_JS }
+  if (bin.includes('/')) env.PATH = `${dirname(bin)}:${(await $.env.get('PATH')) ?? '/usr/bin:/bin'}`
+  try {
+    const ran = await $.process.run(['/bin/sh', '-c', '"$0" runs --json | node -e "$FLOWITION_COCKPIT_FILTER" "$1"', bin, String(RUNS_KEPT)], { env, timeoutMs: 60_000 })
+    if (ran.exitCode !== 0) return null
+    const out = parseFilteredRuns(ran.stdout)
+    return out.total === null ? null : out
+  } catch {
+    return null
+  }
+}
+
 /** A control command (`send`, `answer`, `cancel`): its JSON reply, or why it failed. */
 async function control($: EngineInterface, args: string[]): Promise<{ ok: boolean; reply: Record<string, unknown>; error: string | null }> {
   try {
@@ -236,11 +262,21 @@ async function refresh($: EngineInterface, force = false): Promise<void> {
     // A listing that fails keeps the last list and is reported; it never stops the
     // watched runs' polls below (their toasts and wakes).
     let listError: string | null = null
+    let listNote: string | null = await read($, listNoteAtom)
     if (mustList || mtime !== runsDirMtime || now - lastListAt >= listEvery) {
       try {
         const ran = await flo($, ['runs', '--json'])
         if (ran.exitCode !== 0) throw new Error(firstLine(ran.stderr) || `flowition runs exited ${ran.exitCode}`)
-        list = parseRuns(ran.stdout)
+        if (ran.isStdoutTruncated) {
+          // Cut short, the listing holds only the newest rows: an older run still live
+          // would be missed, so the whole history is filtered down instead.
+          const long = await listLongHistory($)
+          list = long ? long.runs : parseRuns(ran.stdout)
+          listNote = listNoteOf(list.length, long ? long.total : null)
+        } else {
+          list = parseRuns(ran.stdout)
+          listNote = null
+        }
         lastListAt = now
         runsDirMtime = mtime
         mustList = false
@@ -269,12 +305,14 @@ async function refresh($: EngineInterface, force = false): Promise<void> {
     const selected = await read($, selectedAtom)
     const details: Record<string, Detail> = { ...(await read($, detailsAtom)) }
     const ids = new Set(list.filter((r) => isLive(r.state)).map((r) => r.runId))
-    for (const id of watched) if (!details[id] || isLive(details[id].state)) ids.add(id)
+    // A watched run is polled until it ends: a detached launch reads `unknown` until it
+    // writes its journal, and is not done.
+    for (const id of watched) if (!details[id] || !isTerminal(details[id].state)) ids.add(id)
     // An armed run is polled until a poll reconciles it (finds it ended) and disarms it.
     for (const id of wake) ids.add(id)
     // So is any run whose cached detail the list now contradicts (resumed elsewhere).
     for (const id of staleDetailIds(list, details)) ids.add(id)
-    if (selected && (force || !details[selected] || isLive(details[selected].state))) ids.add(selected)
+    if (selected && (force || !details[selected] || !isTerminal(details[selected].state))) ids.add(selected)
     for (const id of Object.keys(details)) {
       if (ids.has(id) || isLive(details[id]!.state)) continue
       if (now - (polledAt.get(id) ?? 0) >= REVALIDATE_MS || (await eventsSize($, id)) !== eventsSizeAt.get(id)) ids.add(id)
@@ -321,6 +359,7 @@ async function refresh($: EngineInterface, force = false): Promise<void> {
     if (!sameJson(list, await read($, runsAtom))) await update($, runsAtom, () => list)
     if (!sameJson(details, await read($, detailsAtom))) await update($, detailsAtom, () => details)
     if ((await read($, errorAtom)) !== listError) await update($, errorAtom, () => listError)
+    if ((await read($, listNoteAtom)) !== listNote) await update($, listNoteAtom, () => listNote)
     for (const text of toasts) $.ui.toast(text, { timeoutMs: 8000 })
     const status = statusLine(list, details)
     if (status !== lastStatus) {
@@ -807,7 +846,7 @@ export const register: Register = (on) => {
       }
 
       // One round of reads, not eleven in a row: each is a trip across to the host.
-      const [runs, details, selected, attached, error, wake, steering, confirm, recentLimit, agentView, now] = await Promise.all([
+      const [runs, details, selected, attached, error, wake, steering, confirm, recentLimit, agentView, now, listNote] = await Promise.all([
         read($, runsAtom),
         read($, detailsAtom),
         read($, selectedAtom),
@@ -819,6 +858,7 @@ export const register: Register = (on) => {
         read($, recentLimitAtom),
         read($, agentViewAtom),
         $.clock.now(),
+        read($, listNoteAtom),
       ])
 
       const badge = (state: string) => {
@@ -841,11 +881,15 @@ export const register: Register = (on) => {
 
       // ---- one agent's thread: its transcript, live, with a composer under it ----
       if (selected && agentView !== null) {
-        const [thread, expanded, follow] = await Promise.all([read($, threadAtom), read($, expandedAtom), read($, followAtom)])
+        const [thread, expanded, follow, timeline] = await Promise.all([read($, threadAtom), read($, expandedAtom), read($, followAtom), read($, timelineAtom)])
         const d: Detail | undefined = details[selected]
-        const w = d?.workers.find((x) => x.kind === 'agent' && x.index === agentView)
         const th = thread && thread.runId === selected && thread.index === agentView ? thread : null
         const live = isLive(d?.state ?? 'unknown')
+        // As the run's Agents tab shows it: spend over every attempt, and work an ended
+        // run abandoned as interrupted.
+        const raw = d?.workers.filter((x) => x.kind === 'agent' && x.index === agentView) ?? []
+        const lanes = timeline && timeline.runId === selected && Array.isArray(timeline.lanes) ? timeline.lanes : []
+        const w = lifetimeWorkers(raw, lanes, live).map((x) => ({ ...x, state: shownState(x.state, live) }))[0]
         const canControl = live && w !== undefined && isActive(w.state)
         const label = w?.label ?? `agent ${agentView}`
         const wid = `${selected}:${agentView}`
@@ -1523,7 +1567,7 @@ export const register: Register = (on) => {
             <Text bold>Runs</Text>
             <Box gap={1} alignItems="center" flexWrap="wrap">
               <Text dimColor>
-                {runs.filter((r) => isLive(r.state)).length} live · {runs.length} total
+                {runs.filter((r) => isLive(r.state)).length} live · {runs.length} {listNote ? 'shown' : 'total'}
               </Text>
               {btn('new', 'New run…', () => openLauncher($), 'primary')}
               {btn('refresh', 'Refresh', () => refreshAll($))}
@@ -1545,6 +1589,11 @@ export const register: Register = (on) => {
             ) : null}
           </Box>
           {errorBanner}
+          {listNote ? (
+            <Text key="list-note" dimColor wrap="wrap">
+              {listNote}
+            </Text>
+          ) : null}
           {shown.length === 0 && runs.length > 0 ? <Text dimColor>No runs match{listQuery ? ` “${listQuery}”` : ''}.</Text> : null}
           {runs.length === 0 && !error ? <Text dimColor>No runs under {home || '~/.flowition'} yet.</Text> : null}
           {section('Launched here', mine)}

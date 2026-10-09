@@ -273,7 +273,7 @@ describe('structure, folding and filtering', () => {
   const seg = (o: object) => ({ kind: '?', ordinal: null, count: null, stages: null, i: null, s: null, ...o })
   const lane = (id: string, at: number, path: object[]) => ({
     id, kind: 'agent' as const, index: Number(id.slice(2)), label: id, adapter: null, state: 'done', phaseIndex: null,
-    queuedAt: at, startedAt: at, endedAt: at + 1, lastSeenAt: at + 1, path: path.map(seg), cost: 0, outputTokens: 0,
+    queuedAt: at, startedAt: at, endedAt: at + 1, lastSeenAt: at + 1, path: path.map(seg), cost: 0, outputTokens: 0, lastPaidAt: null,
   })
   const pipe = (i: number, s: number) => [{ kind: 'pipeline', ordinal: 0, count: 2, stages: 2 }, { kind: 'item', i }, { kind: 'stage', s }]
 
@@ -329,6 +329,10 @@ describe('reading a run incrementally', () => {
     expect(shouldWake(undefined, live, true)).toBe(false)
     expect(shouldWake(done, done, true)).toBe(true) // armed just as it ended: still owed a wake
     expect(shouldWake(live, done, false)).toBe(false)
+    // Not ended: a detached launch before its journal, or a status that could not be read.
+    expect(shouldWake(undefined, { ...live, state: 'unknown' }, true)).toBe(false)
+    expect(shouldWake(live, readStatus('not json', false, undefined, 'flo_x', 2), true)).toBe(false)
+    for (const state of ['failed', 'interrupted', 'stale', 'corrupt', 'corrupt-result']) expect(shouldWake(live, { ...live, state }, true)).toBe(true)
   })
 })
 
@@ -453,7 +457,7 @@ describe('review loop round 1 (gpt-6.1-sol)', () => {
   test('F5: fan-outs nested in different pipeline stages stay separate containers', async () => {
     const lane = (id: string, at: number, path: object[]) => ({
       id, kind: 'agent' as const, index: Number(id.slice(2)), label: id, adapter: null, state: 'done', phaseIndex: null,
-      queuedAt: at, startedAt: at, endedAt: at + 1, lastSeenAt: at + 1, cost: 0, outputTokens: 0,
+      queuedAt: at, startedAt: at, endedAt: at + 1, lastSeenAt: at + 1, cost: 0, outputTokens: 0, lastPaidAt: null,
       path: path.map((o) => ({ kind: '?', ordinal: null, count: null, stages: null, i: null, s: null, ...o })),
     })
     const inStage = (s: number) => [

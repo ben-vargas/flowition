@@ -2,6 +2,7 @@
 // on the code before its fix.
 import { expect, mock, test } from 'claude-code/testing'
 import type { On } from 'claude-code'
+import { lifetimeWorkers, parseStatus, parseTimeline, RUNS_FILTER_JS } from './lib'
 
 type World = { states: Record<string, string>; listFails: boolean; transcriptFails: boolean; transcriptGrowth: number; calls: string[]; submitted: string[] }
 
@@ -518,5 +519,170 @@ test('R3-F11: an unreadable, older timeline never undercounts what status report
   expect((await ui.find({ key: 't:tokens' }))?.text).toContain('300 tokens')
   expect((await ui.find({ key: 't:cost' }))?.text).toContain('$3.00')
   expect(await ui.find({ text: /events could not be read just now/ })).toBeDefined()
+  await ui.unmount()
+})
+
+// ---- round 4 -----------------------------------------------------------------------
+
+type World4 = {
+  states: Record<string, string>
+  agents: object[]
+  events: string
+  transcript: string
+  eventsDenied: boolean
+  calls: string[]
+  submits: number
+  // A history too long for one read: `runs --json` comes back cut at 4 MiB, and the
+  // node filter (when it can run) gets the whole listing.
+  bigList: object[] | null
+  filterFails: boolean
+  filterEnv: string | undefined
+}
+
+function world4(on: On) {
+  const clock = mock.clock(on, { now: 100_000 })
+  const w: World4 = { states: { flo_a: 'failed', flo_b: 'running' }, agents: [], events: '', transcript: '', eventsDenied: false, calls: [], submits: 0, bigList: null, filterFails: false, filterEnv: undefined }
+  mock.env(on, { HOME: '/home/t', FLOWITION_HOME: '/home/t/.flowition', FLOWITION_BIN: '/bin/flowition', PATH: '/usr/bin' })
+  on('session.start', ($, e) => ({ cwd: e.cwd }))
+  on('command.register', ($, e) => ({ value: { command: e.name } }))
+  on('fs.stat', ($, e) => ({ value: { kind: 'file', size: e.path.endsWith('events.jsonl') ? w.events.length : e.path.includes('/agents/') ? w.transcript.length : 0, mtimeMs: 1, isLink: false } }))
+  on('fs.list', () => ({ value: [] }))
+  on('ui.open', () => ({ value: { isPlaced: true } }))
+  on('ui.panes', () => ({ value: [] }))
+  on('ui.status', () => ({ value: undefined }))
+  on('ui.toast', () => ({ value: undefined }))
+  on('ui.log', () => ({ value: undefined }))
+  on('ui.scroll', () => ({}))
+  on('prompt.submit', ($, e) => {
+    w.submits++
+    return { text: e.text }
+  })
+  on('process.run', ($, e) => {
+    const args = e.argv.slice(1).join(' ')
+    w.calls.push(args)
+    if (e.argv[0] === '/bin/sh' && e.argv[2]?.includes('runs --json | node')) {
+      w.filterEnv = e.init?.env?.FLOWITION_COCKPIT_FILTER
+      if (w.filterFails || !w.bigList) return { value: { exitCode: 127, stdout: '', stderr: 'node: not found', isStdoutTruncated: false, isStderrTruncated: false } }
+      // What the filter computes: every unfinished run plus the newest N, after the count.
+      const n = Number(e.argv[4])
+      const kept = w.bigList.filter((r, i) => i < n || !['completed', 'failed', 'cancelled', 'interrupted', 'stale', 'corrupt', 'corrupt-result'].includes((r as { state: string }).state))
+      return ok(`${w.bigList.length}\n${JSON.stringify(kept)}\n`)
+    }
+    if (e.argv[0] === '/bin/sh') {
+      if (w.eventsDenied && e.argv[5]?.endsWith('events.jsonl')) return { deny: 'event read denied' }
+      const from = Number(e.argv[4]) - 1
+      return ok((e.argv[5]?.includes('/agents/') ? w.transcript : w.events).slice(from, from + Number(e.argv[6])))
+    }
+    if (args === 'runs --json' && w.bigList)
+      return { value: { exitCode: 0, stdout: JSON.stringify(w.bigList).slice(0, 4_194_304), stderr: '', isStdoutTruncated: true, isStderrTruncated: false } }
+    if (args === 'runs --json') return ok(JSON.stringify(Object.entries(w.states).map(([runId, state]) => ({ runId, state, file: `${runId}.workflow.mjs`, createdAt: 1000 }))))
+    if (args.startsWith('status ')) return ok(JSON.stringify({ runId: e.argv[2], state: w.states[e.argv[2] as string], agents: w.agents, steps: [], questions: [], phases: [], result: null, live: null }))
+    return ok('{"ok":true}')
+  })
+  return { w, clock }
+}
+
+test('R4-F11: a cached replay is not another paid attempt, even with the events unreadable', async ($, on) => {
+  const { w } = world4(on)
+  w.agents = [{ index: 0, label: 'a', state: 'done', t: 4, outputTokens: 100, usage: { output: 100, cost: 1 }, lastOutputAt: 3 }]
+  w.events = lines([{ t: 1, type: 'run', state: 'started' }, { t: 2, type: 'agent', index: 0, state: 'running' }, { t: 4, type: 'agent', index: 0, state: 'done', outputTokens: 100, usage: { output: 100, cost: 1 } }, { t: 5, type: 'run', state: 'failed' }])
+  await $.command.run(flo('flo_a'))
+  const ui = await $.ui.mount(PANE('terminal'))
+  // Resumed and replayed from the journal: status keeps the replayed result's usage.
+  w.states.flo_a = 'completed'
+  w.agents = [{ index: 0, label: 'a', state: 'cached', t: 7, outputTokens: 100, usage: { output: 100, cost: 1 }, lastOutputAt: 3 }]
+  w.events += lines([{ t: 6, type: 'run', state: 'resumed' }, { t: 7, type: 'agent', index: 0, state: 'cached' }, { t: 8, type: 'run', state: 'completed' }])
+  w.eventsDenied = true
+  await ui.press({ key: 'refresh' })
+  expect([(await ui.find({ key: 't:tokens' }))?.text, (await ui.find({ key: 't:cost' }))?.text]).toEqual(['Output100 tokens', 'Cost$1.00'])
+  await ui.unmount()
+})
+
+test('R4-F11: output from a resumed attempt the events have not shown yet is counted', async ($, on) => {
+  const { w } = world4(on)
+  w.agents = [{ index: 0, label: 'a', state: 'failed', t: 4, usage: { output: 100, cost: 1 }, lastOutputAt: 3 }]
+  w.events = lines([{ t: 1, type: 'run', state: 'started' }, { t: 2, type: 'agent', index: 0, state: 'running' }, { t: 4, type: 'agent', index: 0, state: 'failed', usage: { output: 100, cost: 1 } }, { t: 5, type: 'run', state: 'failed' }])
+  await $.command.run(flo('flo_a'))
+  const ui = await $.ui.mount(PANE('terminal'))
+  w.states.flo_a = 'running'
+  w.agents = [{ index: 0, label: 'a', state: 'running', t: 9, outputTokens: 200, usage: { output: 100, cost: 1 }, lastOutputAt: 9 }]
+  w.events += lines([{ t: 6, type: 'run', state: 'resumed' }, { t: 7, type: 'agent', index: 0, state: 'running' }, { t: 9, type: 'agent', index: 0, state: 'progress', outputTokens: 200, lastOutputAt: 9 }])
+  w.eventsDenied = true
+  await ui.press({ key: 'refresh' })
+  expect((await ui.find({ key: 't:tokens' }))?.text).toContain('300 tokens')
+  await ui.unmount()
+})
+
+test('R4-F11: spend is matched to terminal events, not to timestamps alone', async () => {
+  // A terminal sharing its running event's millisecond is still unread.
+  const open = parseTimeline(lines([{ t: 10, type: 'agent', index: 0, state: 'running' }]), 'r', 0).lanes
+  const done = parseStatus(JSON.stringify({ runId: 'r', state: 'completed', agents: [{ index: 0, state: 'done', t: 10, usage: { output: 100, cost: 1 } }] }), 11).workers
+  expect(lifetimeWorkers(done, open, false)[0]?.outputTokens).toBe(100)
+  // The events read ahead of status (a resume began after it): its done is counted once.
+  const ahead = parseTimeline(
+    lines([{ t: 2, type: 'agent', index: 0, state: 'running' }, { t: 4, type: 'agent', index: 0, state: 'done', usage: { output: 100, cost: 1 } }, { t: 6, type: 'agent', index: 0, state: 'running' }]),
+    'r',
+    0,
+  ).lanes
+  const behind = parseStatus(JSON.stringify({ runId: 'r', state: 'running', agents: [{ index: 0, state: 'done', t: 4, usage: { output: 100, cost: 1 } }] }), 7).workers
+  expect([lifetimeWorkers(behind, ahead, true)[0]?.outputTokens, lifetimeWorkers(behind, ahead, true)[0]?.cost]).toEqual([100, 1])
+})
+
+test('R4-F12: an agent thread of an ended run shows its abandoned work as interrupted', async ($, on) => {
+  const { w } = world4(on)
+  w.states.flo_a = 'stale'
+  w.agents = [{ index: 0, label: 'abandoned', state: 'running' }]
+  w.transcript = lines([{ t: 1, kind: 'meta', prompt: 'p' }])
+  await $.command.run(flo('flo_a'))
+  const ui = await $.ui.mount(PANE('desktop'))
+  await ui.post({ press: true }, { in: 'agentcard:0' })
+  expect((await ui.findAll({ type: 'Svg' }))[0]?.props.alt).toBe('interrupted')
+  await ui.unmount()
+})
+
+test('R4-F14: a detached launch still `unknown` stays armed and wakes once it completes', async ($, on) => {
+  const { w } = world4(on)
+  w.states.flo_b = 'unknown'
+  on('tool.call', { tool: 'Bash' }, () => ({ result: 'mock detached launch', text: 'started detached run flo_b' }))
+  await $.tool.call({ tool: 'Bash', command: 'flowition run pending.workflow.mjs --detach --json' })
+  const ui = await $.ui.mount(PANE('terminal'))
+  await ui.press({ key: 'wake' })
+  await ui.press({ key: 'refresh' })
+  await ui.press({ key: 'refresh' })
+  const before = w.submits
+  w.calls.length = 0
+  w.states.flo_b = 'completed'
+  await ui.press({ key: 'refresh' })
+  expect([before, w.submits, w.calls.includes('status flo_b --json')]).toEqual([0, 1, true])
+  await ui.unmount()
+})
+
+const longHistory = () => [
+  ...Array.from({ length: 11_000 }, (_, i) => ({ runId: `flo_${i}_${'r'.repeat(95)}`, state: 'completed', file: `${'w'.repeat(240)}.mjs`, createdAt: 20_000 - i })),
+  { runId: 'flo_b', state: 'running', file: 'old.workflow.mjs', createdAt: 1 },
+]
+
+test('R4-F4: a history too long for one read still finds an older live run, and says what it leaves out', async ($, on) => {
+  const { w } = world4(on)
+  w.bigList = longHistory()
+  expect(JSON.stringify(w.bigList).length).toBeGreaterThan(4_194_304)
+  await $.command.run(flo(''))
+  const ui = await $.ui.mount(PANE('terminal'))
+  await ui.press({ key: 'refresh' })
+  expect([w.calls.includes('status flo_b --json'), !!(await ui.find({ key: 'open:flo_b' })), w.filterEnv === RUNS_FILTER_JS]).toEqual([true, true, true])
+  expect(await ui.find({ text: 'Showing every unfinished run and the newest 2,000 of 11,001 runs.' })).toBeDefined()
+  await ui.unmount()
+})
+
+test('R4-F4: when the filter cannot run, the newest rows show and the list says history is cut', async ($, on) => {
+  const { w } = world4(on)
+  w.bigList = longHistory()
+  w.filterFails = true
+  await $.command.run(flo(''))
+  const ui = await $.ui.mount(PANE('terminal'))
+  await ui.press({ key: 'refresh' })
+  // The newest rows that were read still list (folded: one workflow, repeated).
+  expect(await ui.find({ text: /0 live · \d+ shown/ })).toBeDefined()
+  expect(await ui.find({ text: /too long to list in full/ })).toBeDefined()
   await ui.unmount()
 })

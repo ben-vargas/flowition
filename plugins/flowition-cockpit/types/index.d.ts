@@ -117,6 +117,8 @@ export type FlowitionCockpitLane = {
   /** Spend over every attempt: each attempt's final event carries that attempt's usage. */
   cost: number
   outputTokens: number
+  /** When the last paid attempt read here ended (its done/failed/cancelled event), or null. */
+  lastPaidAt: number | null
 }
 
 /** A run's timeline and phases, folded from `events.jsonl` (its progress lines skipped). */
@@ -175,6 +177,8 @@ declare module 'claude-code' {
       /** The new-run form, while it shows: the chosen workflow and its args. */
       launch: { file: string | null; args: string; error: string | null; query: string; limit: number } | null
       workflows: FlowitionCockpitWorkflowFile[]
+      /** Set when the run list leaves older history out: what it shows of how many. */
+      listNote: string | null
     }
   }
 }

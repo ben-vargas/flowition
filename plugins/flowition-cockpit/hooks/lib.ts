@@ -16,6 +16,14 @@ const LIVE = new Set(['running', 'starting', 'resuming'])
 
 export const isLive = (state: string): boolean => LIVE.has(state)
 
+/**
+ * Run states that are final for an attempt. Anything else (live, `unknown` while a
+ * detached launch has not written its journal yet) may still be heading somewhere.
+ */
+const TERMINAL = new Set(['completed', 'failed', 'cancelled', 'interrupted', 'stale', 'corrupt', 'corrupt-result'])
+
+export const isTerminal = (state: string): boolean => TERMINAL.has(state)
+
 /** An agent that can still be steered or cancelled. */
 export const isActive = (state: string): boolean => isLive(state) || state === 'queued'
 
@@ -46,6 +54,31 @@ export function parseRuns(stdout: string): Run[] {
     out.push({ runId, state: str(r.state) ?? 'unknown', file: str(r.file) ?? '?', createdAt: num(r.createdAt) ?? 0 })
   }
   return out
+}
+
+/** How many of the newest runs a history too long for one read keeps (with every unfinished one). */
+export const RUNS_KEPT = 2000
+
+/**
+ * Filters `flowition runs --json` on stdin down to every unfinished run plus the newest
+ * RUNS_KEPT (argv[1]): line 1 is the full count, line 2 the rows. Run by node, which the
+ * CLI itself needs, when a listing is too long for $.process.run's 4 MiB stdout.
+ */
+export const RUNS_FILTER_JS = `let s='';process.stdin.setEncoding('utf8');process.stdin.on('data',(d)=>{s+=d});process.stdin.on('end',()=>{const rows=JSON.parse(s);const done=new Set(${JSON.stringify([...TERMINAL])});const n=Number(process.argv[1]);process.stdout.write(rows.length+'\\n'+JSON.stringify(rows.filter((r,i)=>i<n||!done.has(r&&r.state)))+'\\n')})`
+
+/** The filter's output: the rows it kept and how many there were in all. */
+export function parseFilteredRuns(stdout: string): { runs: Run[]; total: number | null } {
+  const nl = stdout.indexOf('\n')
+  const total = Number(stdout.slice(0, nl))
+  return { runs: parseRuns(stdout.slice(nl + 1)), total: nl > 0 && Number.isInteger(total) ? total : null }
+}
+
+const grouped = (n: number): string => String(n).replace(/\B(?=(\d{3})+(?!\d))/g, ',')
+
+/** What the run list says it leaves out, or null when it shows every run. */
+export function listNoteOf(shown: number, total: number | null): string | null {
+  if (total === null) return 'The run history is too long to list in full: older runs are not shown.'
+  return total > shown ? `Showing every unfinished run and the newest ${grouped(RUNS_KEPT)} of ${grouped(total)} runs.` : null
 }
 
 function toWorker(raw: unknown, kind: 'agent' | 'step'): Worker {
@@ -147,14 +180,16 @@ export const sameJson = (a: unknown, b: unknown): boolean => JSON.stringify(a) =
 export const sameDetail = (a: Detail, b: Detail): boolean => sameJson({ ...a, fetchedAt: 0 }, { ...b, fetchedAt: 0 })
 
 export const hasEnded = (prev: Detail | undefined, next: Detail): boolean =>
-  prev !== undefined && isLive(prev.state) && !isLive(next.state)
+  prev !== undefined && !isTerminal(prev.state) && isTerminal(next.state)
 
 /**
  * Whether a run armed with "Tell Claude when done" should wake Claude now: whenever a
- * poll finds it no longer live, however it got there (it ended between polls, a reload
- * cleared what the pane knew, or it was armed just as it ended). Firing disarms it.
+ * poll finds it ended, however it got there (it ended between polls, a reload cleared
+ * what the pane knew, or it was armed just as it ended). Firing disarms it. A run whose
+ * state is not final (`unknown` before a detached launch writes its journal, or a status
+ * that could not be read) stays armed.
  */
-export const shouldWake = (_prev: Detail | undefined, next: Detail, isArmed: boolean): boolean => isArmed && !isLive(next.state)
+export const shouldWake = (_prev: Detail | undefined, next: Detail, isArmed: boolean): boolean => isArmed && isTerminal(next.state)
 
 /** Toasts owed between two polls of one run: it ended, or it asked something new. */
 export function transitions(prev: Detail | undefined, next: Detail): string[] {
@@ -596,6 +631,7 @@ export function foldTimeline(prev: Timeline, text: string): Timeline {
         path: Array.isArray(r.path) ? r.path.map(toSeg) : [],
         cost: 0,
         outputTokens: 0,
+        lastPaidAt: null,
       }
       lanes.set(id, lane)
       lane.lastSeenAt = Math.max(lane.lastSeenAt, t)
@@ -614,6 +650,7 @@ export function foldTimeline(prev: Timeline, text: string): Timeline {
         const usage = obj(r.usage)
         lane.cost += num(usage.cost) ?? 0
         lane.outputTokens += num(usage.output) ?? 0
+        lane.lastPaidAt = t
       }
       if (kind === 'agent' && (state === 'running' || ENDED.has(state))) {
         const took = num(r.durationMs)
@@ -922,24 +959,35 @@ export async function catchUpTimeline(tl: Timeline, size: number, file: string, 
 export const staleDetailIds = (list: Run[], details: Record<string, Detail>): string[] =>
   list.filter((r) => details[r.runId] !== undefined && details[r.runId]!.state !== r.state).map((r) => r.runId)
 
+/** The states that end a paid attempt: each one's event carries that attempt's usage. */
+const PAID = new Set(['done', 'failed', 'cancelled'])
+
 /**
- * Workers with their spend over every attempt. The timeline's lanes hold every finished
- * attempt it has read; to that is added
- * - the live attempt's tokens, only while the run is live and the lane's attempt is
- *   unfinished and has produced output since it started (status --json keeps the last
- *   attempt's count until new progress arrives, and keeps a cached worker running when a
- *   final status was too large to read), and
- * - a finished attempt status reports that the timeline has not read yet (its reads lag
- *   or fail): status's worker event is newer than anything the lane has seen.
+ * Workers with their spend over every attempt. The timeline's lanes hold every paid
+ * attempt it has read; to that is added what status reports and the timeline has not
+ * read yet (its reads lag or fail):
+ * - a live attempt's tokens, while the run is live and status has output from it: after
+ *   the open attempt the lane read started, or after anything the lane read at all
+ *   (a resumed attempt it has not seen start). status --json keeps an earlier attempt's
+ *   count until new progress arrives, which is why its output time decides.
+ * - a paid attempt's final usage when its terminal event is not the last one the lane
+ *   read (`lastPaidAt`, the identity of a terminal event: timestamps are milliseconds,
+ *   so a terminal can share its running event's). A `cached` replay is no attempt:
+ *   status keeps the replayed result's usage on it, which was counted when it was paid.
  */
 export function lifetimeWorkers(workers: Worker[], lanes: Lane[], isRunLive: boolean): Worker[] {
   const byId = new Map(lanes.map((l) => [l.id, l]))
   return workers.map((w) => {
     const lane = byId.get(w.id)
     if (!lane || typeof lane.cost !== 'number') return w
+    const lastPaidAt = lane.lastPaidAt ?? null
     const isLaneOpen = isActive(lane.state) && lane.endedAt === null && lane.startedAt !== null
-    const isCurrent = isRunLive && isLaneOpen && isActive(w.state) && w.lastOutputAt !== null && w.lastOutputAt >= (lane.startedAt ?? Infinity)
-    const isUnread = !isActive(w.state) && w.lastAt !== null && w.lastAt > lane.lastSeenAt
+    const isCurrent =
+      isRunLive &&
+      isActive(w.state) &&
+      w.lastOutputAt !== null &&
+      (isLaneOpen ? w.lastOutputAt >= (lane.startedAt ?? Infinity) : w.lastOutputAt > lane.lastSeenAt)
+    const isUnread = PAID.has(w.state) && w.lastAt !== null && (lastPaidAt === null || w.lastAt > lastPaidAt)
     const tokens = lane.outputTokens + (isCurrent || isUnread ? (w.outputTokens ?? 0) : 0)
     const cost = lane.cost + (isUnread ? (w.cost ?? 0) : 0)
     return { ...w, cost: cost || null, outputTokens: tokens || null }
