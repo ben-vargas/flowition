@@ -546,6 +546,8 @@ type World4 = {
   slimFails: boolean
   slimEnv: string | undefined
   questions: object[]
+  // The engine's live status (its pending questions), or null when none answers.
+  liveQuestions: object[] | null
   toasts: string[]
 }
 
@@ -569,10 +571,11 @@ function world4(on: On) {
     slimFails: false,
     slimEnv: undefined,
     questions: [],
+    liveQuestions: null,
     toasts: [],
   }
   const TEMP = '/tmp/flowition-cockpit-runs.TEST'
-  const statusOf = (runId: string) => ({ runId, state: w.states[runId], agents: w.agents, steps: [], questions: w.questions, phases: [], result: w.hugeResult ? { status: 'completed', result: 'x'.repeat(4_200_000) } : null, live: null })
+  const statusOf = (runId: string) => ({ runId, state: w.states[runId], agents: w.agents, steps: [], questions: w.questions, phases: [], result: w.hugeResult ? { status: 'completed', result: 'x'.repeat(4_200_000) } : null, live: w.liveQuestions ? { ok: true, questions: w.liveQuestions } : null })
   mock.env(on, { HOME: '/home/t', FLOWITION_HOME: '/home/t/.flowition', FLOWITION_BIN: '/bin/flowition', PATH: '/usr/bin' })
   on('session.start', ($, e) => ({ cwd: e.cwd }))
   on('command.register', ($, e) => ({ value: { command: e.name } }))
@@ -1005,23 +1008,32 @@ test('P2: the Phases tab draws its agents within the budget, so the run\'s contr
   await ui.unmount()
 })
 
-test('P2: a question an ended run left unanswered toasts again when a resume asks it', async ($, on) => {
+test('P2: a resumed run toasts a question, and offers to answer it, only once it asks it again', async ($, on) => {
   const { w } = world4(on)
   w.states.flo_a = 'stale'
-  // Status lists the unanswered question, as src/cli.js reports it, before and after the resume.
-  w.questions = [{ qid: 'q0', question: 'Ship it?' }]
+  w.questions = [{ qid: 'q0', question: 'Ship it?', t: 5 }]
   on('tool.call', { tool: 'Bash' }, () => ({ result: 'mock resume', text: 'started detached run flo_a' }))
   await $.tool.call({ tool: 'Bash', command: 'flowition run a.workflow.mjs --resume flo_a --detach' })
   const ui = await $.ui.mount(PANE('terminal'))
   await ui.press({ key: 'refresh' })
-  await ui.press({ key: 'refresh' })
   const asked = () => w.toasts.filter((t) => t.includes('Ship it?')).length
+  const answerField = async () => (await ui.findAll({ type: 'Input' })).some((n) => n.key?.startsWith('answer:q0:'))
   const before = asked()
+  // Resuming: status says starting, and still lists the earlier attempt's record of q0.
+  w.states.flo_a = 'starting'
+  await ui.press({ key: 'refresh' })
+  const whileStarting = [asked() - before, await answerField(), !!(await ui.find({ text: /once the run asks it again/ }))]
+  // Running, but the engine has not reached ask() yet: still not open.
   w.states.flo_a = 'running'
+  w.liveQuestions = []
   await ui.press({ key: 'refresh' })
-  const afterResume = asked()
+  const beforeAsk = [asked() - before, await answerField()]
+  // The engine asks it: a new question event, pending in the live status.
+  w.questions = [{ qid: 'q0', question: 'Ship it?', t: 20 }]
+  w.liveQuestions = [{ qid: 'q0', question: 'Ship it?' }]
   await ui.press({ key: 'refresh' })
-  expect([afterResume - before, asked() - afterResume]).toEqual([1, 0])
+  await ui.press({ key: 'refresh' })
+  expect([whileStarting, beforeAsk, [asked() - before, await answerField()]]).toEqual([[0, false, true], [0, false], [1, true]])
   await ui.unmount()
 })
 
@@ -1039,5 +1051,20 @@ test('P2: a completed run offers Replay, as the viewer does, and replays through
   expect(await ui.find({ text: /finished agents replay from the journal/ })).toBeDefined()
   await ui.press({ key: 'resume-yes' })
   expect(w.calls).toContain('run /home/t/wf/a.workflow.mjs --resume flo_a --detach --json')
+  await ui.unmount()
+})
+
+test('P2: thousands of phases count against the Phases tab budget, so the run\'s controls still draw', async ($, on) => {
+  const { w } = world4(on)
+  w.states.flo_a = 'failed'
+  w.events = lines([
+    { t: 1, type: 'run', state: 'started' },
+    ...Array.from({ length: 3000 }, (_, i) => ({ t: 2 + i, type: 'phase', title: `phase ${i} `.padEnd(60, 'p'), phaseIndex: i })),
+    { t: 4000, type: 'run', state: 'failed' },
+  ])
+  await $.command.run(flo('flo_a'))
+  const ui = await $.ui.mount(PANE('terminal'))
+  await ui.press({ key: 'tab:phases' })
+  expect([!!(await ui.find({ key: 'resume' })), !!(await ui.find({ key: 'delete' })), !!(await ui.find({ text: /more phases not drawn here/ }))]).toEqual([true, true, true])
   await ui.unmount()
 })

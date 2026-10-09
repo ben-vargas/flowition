@@ -68,7 +68,7 @@ describe('parsing', () => {
     expect(d.workers[0]?.outputTokens).toBe(15964)
     expect(d.cost).toBe(1.6)
     expect(d.spentOutputTokens).toBe(20164)
-    expect(d.questions).toEqual([{ qid: 'q1', question: 'Ship it?' }])
+    expect(d.questions).toEqual([{ qid: 'q1', question: 'Ship it?', t: null, isOpen: true }])
   })
 
   test('a completed run carries its result preview', async () => {

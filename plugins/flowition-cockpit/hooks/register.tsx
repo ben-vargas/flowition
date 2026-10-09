@@ -1257,9 +1257,17 @@ export const register: Register = (on) => {
         const phasesView = () => {
           const groups = phaseGroups(tl, workers, d?.phases ?? [])
           if (!groups.length) return <Text dimColor>{tl ? 'No agents or phases yet.' : 'Loading the phases…'}</Text>
-          // Each phase's rows within what is left of the tab's budget, in order, so the
-          // run's controls below always draw; a phase says how many it leaves out.
+          // Each phase (its header, then its rows) within what is left of the tab's budget,
+          // in order, so the run's controls below always draw; what is left out is counted.
+          // The headers come first, so every phase drawn is named; rows fill what is left.
           let room = TAB_BUDGET
+          let drawnGroups = 0
+          for (const g of groups) {
+            const n = Math.min(g.title.length, 200) + 120
+            if (n > room) break
+            room -= n
+            drawnGroups++
+          }
           const rowsOf = (list: Worker[]) => {
             const shown: Worker[] = []
             for (const w of list) {
@@ -1272,7 +1280,7 @@ export const register: Register = (on) => {
           }
           return (
             <Box key="phases" flexDirection="column" gap={1}>
-              {groups.map((g) => {
+              {groups.slice(0, drawnGroups).map((g) => {
                 const took = g.startedAt !== null ? fmtDuration((g.endedAt ?? (live ? now : g.startedAt)) - g.startedAt) : null
                 const facts = [
                   g.workers.length ? `${g.workers.length} ${g.workers.length === 1 ? 'agent' : 'agents'}` : null,
@@ -1293,7 +1301,7 @@ export const register: Register = (on) => {
                       <Box gap={1} alignItems="center" flexShrink={1}>
                         <Text bold {...(g.isReached ? {} : { dimColor: true })} wrap="truncate-end">
                           {g.index !== null ? `${g.index + 1}. ` : ''}
-                          {g.title}
+                          {clipDraw(g.title, 200)}
                         </Text>
                         <Box flexShrink={0}>{badge(badgeState)}</Box>
                       </Box>
@@ -1315,6 +1323,9 @@ export const register: Register = (on) => {
                   </Box>
                 )
               })}
+              {drawnGroups < groups.length ? (
+                <Text dimColor>{groups.length - drawnGroups} more phases not drawn here (a pane draws so much text); the viewer lists every one.</Text>
+              ) : null}
             </Box>
           )
         }
@@ -1472,14 +1483,18 @@ export const register: Register = (on) => {
             {d?.questions.length ? (
               <Box key="questions" flexDirection="column" gap={1}>
                 {d.questions.map((q) => (
-                  <Box key={`q:${q.qid}`} borderStyle="round" {...(live ? { borderColor: 'warning' as const } : { borderDimColor: true })} paddingX={1} flexDirection="column">
-                    <Text {...(live ? { color: 'warning' as const } : { dimColor: true })} bold>
-                      {live ? `The workflow is asking (${q.qid})` : `Never answered (${q.qid}): the run ended first`}
+                  <Box key={`q:${q.qid}`} borderStyle="round" {...(q.isOpen ? { borderColor: 'warning' as const } : { borderDimColor: true })} paddingX={1} flexDirection="column">
+                    <Text {...(q.isOpen ? { color: 'warning' as const } : { dimColor: true })} bold>
+                      {q.isOpen
+                        ? `The workflow is asking (${q.qid})`
+                        : live
+                          ? `Asked before the run stopped (${q.qid}): it can be answered once the run asks it again`
+                          : `Never answered (${q.qid}): the run ended first`}
                     </Text>
-                    <Text wrap="wrap" {...(live ? {} : { dimColor: true })}>
+                    <Text wrap="wrap" {...(q.isOpen ? {} : { dimColor: true })}>
                       {q.question}
                     </Text>
-                    {!live ? null : Input ? (
+                    {!q.isOpen ? null : Input ? (
                       <Input
                         key={`answer:${q.qid}:${sent}`}
                         placeholder="Type an answer…"
@@ -1630,9 +1645,8 @@ export const register: Register = (on) => {
 
       // Under a day heading a run says its time of day; elsewhere how long ago it began.
       const subtitle = (r: Run, isDated: boolean) => {
-        const questions = details[r.runId]?.questions.length ?? 0
         const when = isDated ? fmtTime(r.createdAt) : fmtAge(now, r.createdAt)
-        const waiting = isLive(r.state) ? questions : 0
+        const waiting = isLive(r.state) ? (details[r.runId]?.questions.filter((q) => q.isOpen).length ?? 0) : 0
       return [r.runId, when, waiting ? `${waiting} question${waiting === 1 ? '' : 's'} waiting` : null].filter(Boolean).join(' · ')
       }
       // `isDated`: a card in Recent's day-grouped grid, two to a row where they fit.

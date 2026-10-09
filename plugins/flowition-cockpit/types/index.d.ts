@@ -28,7 +28,12 @@ export type FlowitionCockpitWorker = {
   phaseIndex: number | null
 }
 
-export type FlowitionCockpitQuestion = { qid: string; question: string }
+/**
+ * An unanswered question: `t` is when its question event was written (a resume that
+ * re-asks it writes a new one), and `isOpen` whether the engine is waiting on it now
+ * (the live status's pending questions), which is when it can be answered.
+ */
+export type FlowitionCockpitQuestion = { qid: string; question: string; t: number | null; isOpen: boolean }
 
 /** A run's detail, trimmed from `flowition status --json`. */
 export type FlowitionCockpitDetail = {

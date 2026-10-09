@@ -172,11 +172,17 @@ export function parseStatus(stdout: string, fetchedAt: number): Detail {
   const agents = Array.isArray(d.agents) ? d.agents.map((a) => toWorker(a, 'agent')) : []
   agents.sort((x, y) => (x.index ?? 0) - (y.index ?? 0))
   const steps = Array.isArray(d.steps) ? d.steps.map((s) => toWorker(s, 'step')) : []
+  // The folded questions still unanswered; the engine's live status names the ones it is
+  // waiting on now (a resumed run lists its earlier attempt's until it asks them again).
+  const live = obj(d.live)
+  const pending = Array.isArray(live.questions) ? new Set(live.questions.map((q) => str(obj(q).qid))) : null
+  const isRunning = isLive(str(d.state) ?? '')
   const questions = Array.isArray(d.questions)
     ? d.questions.flatMap((q) => {
         const o = obj(q)
         const qid = str(o.qid)
-        return qid ? [{ qid, question: clipped(str(o.question), 4_000) ?? '' }] : []
+        const isOpen = isRunning && (pending ? pending.has(qid) : d.live !== null && d.live !== undefined)
+        return qid ? [{ qid, question: clipped(str(o.question), 4_000) ?? '', t: num(o.t), isOpen }] : []
       })
     : []
   const result = obj(d.result)
@@ -258,12 +264,12 @@ export const shouldWake = (_prev: Detail | undefined, next: Detail, isArmed: boo
 /** Toasts owed between two polls of one run: it ended, or it asked something new. */
 export function transitions(prev: Detail | undefined, next: Detail): string[] {
   const out: string[] = []
-  // A question an ended run left unanswered is asked again, under the same qid, when the
-  // run is resumed: a run coming back from an end has asked nothing yet.
-  const isBack = prev !== undefined && isTerminal(prev.state) && !isTerminal(next.state)
-  const asked = new Set(isBack ? [] : (prev?.questions.map((q) => q.qid) ?? []))
+  // A question is its qid and its event: a resume that asks one again (same qid) writes
+  // a new question event, while the earlier attempt's record stays the same until then.
+  const key = (q: Detail['questions'][number]) => `${q.qid}@${q.t ?? ''}`
+  const asked = new Set(prev?.questions.map(key) ?? [])
   for (const q of next.questions) {
-    if (!asked.has(q.qid)) out.push(`${next.runId} asks: ${q.question}`)
+    if (!asked.has(key(q))) out.push(`${next.runId} asks: ${q.question}`)
   }
   if (hasEnded(prev, next)) out.push(`${next.runId} ${next.state}${next.error ? `: ${next.error}` : ''}`)
   return out
