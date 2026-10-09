@@ -1,3 +1,4 @@
+import type { RunCommand } from './lib'
 import { describe, expect, test } from 'claude-code/testing'
 
 import {
@@ -15,7 +16,9 @@ import {
   buildStructure,
   filterRuns,
   foldRepeats,
+  catchUpTimeline,
   emptyTimeline,
+  stateColor,
   foldTimeline,
   parseTimeline,
   readStatus,
@@ -358,5 +361,57 @@ describe('the third review round', () => {
     const run = (state: string) => ({ runId: 'flo_abc', file: 'f', state, createdAt: 0 })
     expect(filterRuns([run('running')], 'attention', '', { flo_abc: d }).length).toBe(1)
     expect(filterRuns([run('completed')], 'attention', '', { flo_abc: d }).length).toBe(0)
+  })
+})
+
+describe('reading events.jsonl by raw byte offsets', () => {
+  const enc = new TextEncoder()
+  const dec = new TextDecoder()
+  // tail -c +N | head -c L, and the awk line measure, over raw bytes; stdout decoded as
+  // $.process.run decodes it (a split multibyte character becomes U+FFFD).
+  const fakeRun = (bytes: Uint8Array): RunCommand => async (argv) => {
+    const start = Number(argv[4]) - 1
+    if (argv[2]!.includes('awk')) {
+      const nl = bytes.indexOf(10, start)
+      return { exitCode: 0, stdout: `${nl < 0 ? bytes.length - start + 1 : nl - start + 1}\n`, isStdoutTruncated: false }
+    }
+    return { exitCode: 0, stdout: dec.decode(bytes.subarray(start, start + Number(argv[6]))), isStdoutTruncated: false }
+  }
+  const line = (o: object) => JSON.stringify(o) + '\n'
+  const TEXT =
+    line({ t: 1, type: 'run', state: 'started' }) +
+    line({ t: 2, type: 'log', message: 'café crème brûlée'.repeat(3) }) +
+    line({ t: 3, type: 'log', message: 'é'.repeat(150) }) + // 300+ bytes: longer than a chunk
+    line({ t: 4, type: 'agent', index: 0, label: 'naïve', state: 'queued' }) +
+    line({ t: 5, type: 'agent', index: 0, state: 'done', usage: { cost: 0.1, output: 5 } }) +
+    line({ t: 6, type: 'log', message: 'ünïcödé at the end' })
+  const bytes = enc.encode(TEXT)
+  const strip = (t: object) => JSON.stringify({ ...t, consumed: 0, total: 0 })
+
+  test('odd-sized chunks that split multibyte characters fold to exactly the one-shot result', async () => {
+    for (const chunk of [37, 64, 101]) {
+      const tl = await catchUpTimeline(emptyTimeline('r'), bytes.length, 'f', fakeRun(bytes), chunk, 1000, 4096)
+      expect(tl.consumed).toBe(bytes.length)
+      expect(strip(tl)).toBe(strip(foldTimeline(emptyTimeline('r'), TEXT)))
+    }
+  })
+
+  test('a line too long to read is stepped over exactly, with a note, and what follows still folds', async () => {
+    const tl = await catchUpTimeline(emptyTimeline('r'), bytes.length, 'f', fakeRun(bytes), 64, 1000, 200)
+    expect(tl.consumed).toBe(bytes.length)
+    expect(tl.entries.some((en) => en.text.includes('too large for the pane'))).toBe(true)
+    expect(tl.entries.some((en) => en.text === 'ünïcödé at the end')).toBe(true)
+    expect(tl.lanes[0]?.cost).toBe(0.1)
+  })
+
+  test('a last line still being written is left for the next poll', async () => {
+    const partial = enc.encode(TEXT + '{"t":7,"type":"log","mess')
+    const tl = await catchUpTimeline(emptyTimeline('r'), partial.length, 'f', fakeRun(partial), 64, 1000, 4096)
+    expect(tl.consumed).toBe(bytes.length)
+  })
+
+  test('a malformed result.json (corrupt-result) is an error that needs attention', async () => {
+    expect(stateColor('corrupt-result')).toBe('error')
+    expect(filterRuns([{ runId: 'r', file: 'f', state: 'corrupt-result', createdAt: 0 }], 'attention', '', {}).length).toBe(1)
   })
 })

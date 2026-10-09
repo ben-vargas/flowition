@@ -30,8 +30,8 @@ import {
   isActive,
   isFlowitionLaunch,
   isLive,
+  catchUpTimeline,
   emptyTimeline,
-  foldTimeline,
   laneSpan,
   laneSvg,
   laneText,
@@ -42,7 +42,6 @@ import {
   placeholder,
   progress,
   progressSvg,
-  byteLength,
   runDuration,
   sameDetail,
   sameJson,
@@ -335,26 +334,10 @@ async function refreshTimeline($: EngineInterface): Promise<void> {
   const prev = await read($, timelineAtom)
   // A cache of another run, of an older shape, or of a file that since shrank starts over.
   const isUsable = prev !== null && prev.runId === runId && Array.isArray(prev.entries) && typeof prev.consumed === 'number' && prev.consumed <= size
-  let tl = isUsable ? prev : emptyTimeline(runId)
-  if (isUsable && tl.consumed === size) return
-  for (let k = 0; k < EVENTS_CHUNKS_PER_POLL && tl.consumed < size; k++) {
-    const len = Math.min(EVENTS_CHUNK, size - tl.consumed)
-    const ran = await $.process.run(['/bin/sh', '-c', 'tail -c +"$1" "$2" | head -c "$3"', 'sh', String(tl.consumed + 1), file, String(len)], {
-      timeoutMs: 10_000,
-    })
-    if (ran.exitCode !== 0 || ran.isStdoutTruncated) break
-    const last = ran.stdout.lastIndexOf('\n')
-    if (last < 0) {
-      // No line ends in the chunk: one still being written (wait for it), or a single
-      // line longer than a chunk (skip it; its tail parses as nothing).
-      if (len < EVENTS_CHUNK) break
-      tl = { ...tl, consumed: tl.consumed + len }
-      continue
-    }
-    const body = ran.stdout.slice(0, last + 1)
-    tl = { ...foldTimeline(tl, body), consumed: tl.consumed + byteLength(body) }
-  }
-  await update($, timelineAtom, () => ({ ...tl, total: size }))
+  const from = isUsable ? prev : emptyTimeline(runId)
+  if (isUsable && from.consumed === size) return
+  const tl = await catchUpTimeline(from, size, file, (argv) => $.process.run(argv, { timeoutMs: 10_000 }), EVENTS_CHUNK, EVENTS_CHUNKS_PER_POLL)
+  await update($, timelineAtom, () => tl)
 }
 
 /**

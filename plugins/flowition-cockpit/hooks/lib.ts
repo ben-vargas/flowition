@@ -226,7 +226,7 @@ export type Tone = 'success' | 'error' | 'warning' | 'suggestion' | 'inactive'
 /** Theme color for a run or worker state. */
 export function stateColor(state: string): Tone {
   if (state === 'completed' || state === 'done' || state === 'cached') return 'success'
-  if (state === 'failed' || state === 'corrupt' || state === 'cancelled') return 'error'
+  if (state === 'failed' || state === 'corrupt' || state === 'corrupt-result' || state === 'cancelled') return 'error'
   if (state === 'interrupted' || state === 'stale' || state === 'unknown') return 'warning'
   if (isLive(state)) return 'suggestion'
   return 'inactive'
@@ -803,6 +803,9 @@ export function buildStructure(lanes: Lane[]): StructureNode[] {
 
 export type ListFilter = 'all' | 'live' | 'attention' | 'completed'
 
+/** Run states a person should look at (`corrupt-result`: a malformed result.json). */
+const NEEDS_ATTENTION = new Set(['failed', 'interrupted', 'stale', 'corrupt', 'corrupt-result', 'cancelled'])
+
 /** Runs the filter and the search keep: by state, and by run id or workflow name. */
 export function filterRuns(runs: Run[], filter: ListFilter, query: string, details: Record<string, Detail>): Run[] {
   const q = query.trim().toLowerCase()
@@ -813,7 +816,7 @@ export function filterRuns(runs: Run[], filter: ListFilter, query: string, detai
       filter === 'all' ||
       (filter === 'live' && isLive(r.state)) ||
       (filter === 'completed' && r.state === 'completed') ||
-      (filter === 'attention' && (asks || ['failed', 'interrupted', 'stale', 'corrupt', 'cancelled'].includes(r.state)))
+      (filter === 'attention' && (asks || NEEDS_ATTENTION.has(r.state)))
     return keep && (!q || r.runId.toLowerCase().includes(q) || r.file.toLowerCase().includes(q))
   })
 }
@@ -844,3 +847,50 @@ export function stateTally(runs: Run[]): string {
 
 /** The newest workflow files under ~/.flowition/workflows/<project>/, for the new-run form. */
 export const WORKFLOW_FILE = /\.(workflow\.)?(mjs|js)$/
+
+// ---- reading events.jsonl in bounded chunks ---------------------------------------
+
+/** Runs a command by argv: `$.process.run` in the pane, a fake over bytes in tests. */
+export type RunCommand = (argv: string[]) => Promise<{ exitCode: number; stdout: string; isStdoutTruncated: boolean }>
+
+const READ = 'tail -c +"$1" "$2" | head -c "$3"'
+// The byte length of the line starting at $1, newline included (LC_ALL=C: bytes, not
+// characters); one more than what is left when the line has no newline yet.
+const LINE_BYTES = "tail -c +\"$1\" \"$2\" | LC_ALL=C awk 'NR==1{print length($0)+1; exit}'"
+
+/**
+ * Folds what `events.jsonl` holds past `tl.consumed` into `tl`, at most `maxChunks` reads
+ * of `chunk` bytes, so no read meets $.process.run's 4 MiB cap. Every read starts on a
+ * line boundary and folds through its last newline, so the decoded text it measures is
+ * whole UTF-8 and `consumed` stays an exact byte offset. A line longer than a chunk has
+ * its byte length measured raw (awk, under LC_ALL=C), then is read whole when it is at
+ * most `maxLine` bytes, or stepped over with a note in the log when it is longer.
+ */
+export async function catchUpTimeline(tl: Timeline, size: number, file: string, run: RunCommand, chunk = 2 << 20, maxChunks = 8, maxLine = 3.5 * (1 << 20)): Promise<Timeline> {
+  let out = tl
+  for (let k = 0; k < maxChunks && out.consumed < size; k++) {
+    const len = Math.min(chunk, size - out.consumed)
+    const ran = await run(['/bin/sh', '-c', READ, 'sh', String(out.consumed + 1), file, String(len)])
+    if (ran.exitCode !== 0 || ran.isStdoutTruncated) break
+    const last = ran.stdout.lastIndexOf('\n')
+    if (last >= 0) {
+      const body = ran.stdout.slice(0, last + 1)
+      out = { ...foldTimeline(out, body), consumed: out.consumed + byteLength(body) }
+      continue
+    }
+    if (len < chunk) break // the last line is still being written
+    const measured = await run(['/bin/sh', '-c', LINE_BYTES, 'sh', String(out.consumed + 1), file])
+    const n = Number(measured.stdout.trim())
+    if (measured.exitCode !== 0 || !Number.isSafeInteger(n) || n <= 0 || out.consumed + n > size) break
+    if (n <= maxLine) {
+      const whole = await run(['/bin/sh', '-c', READ, 'sh', String(out.consumed + 1), file, String(n)])
+      if (whole.exitCode !== 0 || whole.isStdoutTruncated || !whole.stdout.endsWith('\n')) break
+      out = { ...foldTimeline(out, whole.stdout), consumed: out.consumed + n }
+    } else {
+      const t = out.entries[out.entries.length - 1]?.t ?? out.startedAt ?? 0
+      const note: LogEntry = { t, kind: 'log', text: `(an event of ${fmtTokens(n)} bytes was too large for the pane to read)`, agent: null, tone: 'warning' }
+      out = { ...out, entries: [...out.entries, note].slice(-MAX_ENTRIES), consumed: out.consumed + n }
+    }
+  }
+  return { ...out, total: size }
+}
