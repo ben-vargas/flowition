@@ -791,6 +791,18 @@ test('usage: a doubly-sessionless attempt discards the restored baseline at cons
     [{ input: 0, output: 0 }, { input: 20, output: 10 }])
 })
 
+test('warning events land in the transcript as status lines and never become the current tool', () => {
+  const written = []
+  const job = new AgentJob({
+    adapter: { caps: {} }, spec: {}, prompt: 'p', index: 0, key: 'k', label: null,
+    runId: 'flo_stub', scratch: '', transcript: { write: (kind, rec) => written.push({ kind, ...rec }) },
+    journal: { append: () => {} }, priorSessionId: null, pendingMail: [], usageCum: null,
+  })
+  job.handleEvent({ k: 'warning', message: 'Under-development features enabled: x' })
+  assert.deepEqual(written, [{ kind: 'status', text: 'warning: Under-development features enabled: x' }])
+  assert.equal(job.lastTool, null)
+})
+
 test('mail: a failed turn requeues delivered mail in acceptance order, ahead of undelivered', async () => {
   const appended = []
   // direct adapter: consumes one live-delivered message, then fails the turn

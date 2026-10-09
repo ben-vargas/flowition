@@ -587,6 +587,8 @@ export class AgentJob {
         }
         break
       case 'error': this.transcript.write('status', { text: 'error: ' + e.message }); break
+      // non-fatal: recorded like an error but never reaches turnError or lastTool
+      case 'warning': this.transcript.write('status', { text: 'warning: ' + e.message }); break
     }
   }
 }
