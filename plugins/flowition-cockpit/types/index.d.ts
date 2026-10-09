@@ -198,7 +198,9 @@ declare module 'claude-code' {
       openGroups: string[]
       /** The new-run form, while it shows: the chosen workflow and its args. */
       /** `cwd`: where the run will run, read when the form opened and passed as --cwd. */
-      launch: { file: string | null; args: string; error: string | null; query: string; limit: number; isStarting?: boolean; cwd?: string | null } | null
+      // `failures`: launches this form tried that failed; the args field is drawn afresh
+      // after each, so a field the surface cleared on submit shows the args kept.
+      launch: { file: string | null; args: string; error: string | null; query: string; limit: number; isStarting?: boolean; cwd?: string | null; failures?: number } | null
       workflows: FlowitionCockpitWorkflowFile[]
       /** Set when the run list leaves older history out: what it shows of how many. */
       listNote: string | null

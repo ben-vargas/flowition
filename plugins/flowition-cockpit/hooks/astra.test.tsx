@@ -101,11 +101,11 @@ for (const surface of ['terminal', 'desktop'] as const) {
     const press=async(key:string)=>{if(surface==='terminal')return ui.press({key});await ui.pointer({in:key,type:'down',x:1,y:0,button:'left'});await ui.pointer({in:key,type:'up',x:1,y:0,button:'left'})}
     const file='/home/t/.flowition/workflows/demo.workflow.mjs'
     await press('new');await press(surface==='terminal'?`wf-pick:${file}`:`wf:${file}`)
-    await ui.input({key:`launch-args:${file}`,text:'{"target":"A"}',kind:'change'})
+    await ui.input({key:`launch-args:${file}:0`,text:'{"target":"A"}',kind:'change'})
     hold=true
-    const edit=ui.input({key:`launch-args:${file}`,text:'{"target":"B"}',kind:'change'})
+    const edit=ui.input({key:`launch-args:${file}:0`,text:'{"target":"B"}',kind:'change'})
     await entered.promise
-    const submit=ui.input({key:`launch-args:${file}`,text:'{"target":"B"}',kind:'submit'})
+    const submit=ui.input({key:`launch-args:${file}:0`,text:'{"target":"B"}',kind:'submit'})
     await clock.settle()
     hold=false;gate.resolve();await Promise.all([edit,submit])
     // (Since round 17 the launch also pins its folder with --cwd: not what this checks.)

@@ -998,7 +998,7 @@ async function launchOnce($: EngineInterface): Promise<void> {
     try {
       JSON.parse(args)
     } catch {
-      await update($, launchAtom, (l) => (l ? { ...l, error: 'Args must be JSON, e.g. {"topic": "..."}' } : l))
+      await update($, launchAtom, (l) => (l ? { ...l, error: 'Args must be JSON, e.g. {"topic": "..."}', failures: (l.failures ?? 0) + 1 } : l))
       return
     }
   }
@@ -1010,7 +1010,7 @@ async function launchOnce($: EngineInterface): Promise<void> {
   }))
   const runId = ran.exitCode === 0 ? extractRunId(ran.stdout) : null
   if (!runId) {
-    await update($, launchAtom, (l) => (l ? { ...l, error: firstLine(ran.stderr) || 'flowition did not start the run' } : l))
+    await update($, launchAtom, (l) => (l ? { ...l, error: firstLine(ran.stderr) || 'flowition did not start the run', failures: (l.failures ?? 0) + 1 } : l))
     return
   }
   $.ui.log(`flowition-cockpit: started ${runId} (${launch.file})`)

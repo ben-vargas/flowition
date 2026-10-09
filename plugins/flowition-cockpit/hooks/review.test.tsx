@@ -269,7 +269,7 @@ test('R2-F9: another workflow starts without the last one\'s args', async ($, on
   await ui.press({ key: 'new' })
   const root = '/home/t/.flowition/workflows/'
   await ui.press({ key: `wf-pick:${root}a.workflow.mjs` })
-  await ui.input({ key: `launch-args:${root}a.workflow.mjs`, text: '{"target":"A"}', kind: 'change' })
+  await ui.input({ key: `launch-args:${root}a.workflow.mjs:0`, text: '{"target":"A"}', kind: 'change' })
   await ui.press({ key: `wf-pick:${root}b.workflow.mjs` })
   w.calls.length = 0
   await ui.press({ key: 'launch-start' })

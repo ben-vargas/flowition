@@ -7,7 +7,7 @@ import type { FlowitionCockpitWorkflowFile as WorkflowFile } from '../types'
 import type { Ctx } from './ctx'
 import { fmtAge } from './lib'
 
-export type LaunchState = { file: string | null; args: string; error: string | null; query: string; limit: number; isStarting?: boolean; cwd?: string | null }
+export type LaunchState = { file: string | null; args: string; error: string | null; query: string; limit: number; isStarting?: boolean; cwd?: string | null; failures?: number }
 
 export function launchView(
   c: Ctx,
@@ -72,9 +72,11 @@ export function launchView(
         <Box key="launch-form" flexDirection="column" gap={1}>
           {Input ? (
             <Input
-              key={`launch-args:${chosen.path}`}
+              key={`launch-args:${chosen.path}:${launch.failures ?? 0}`}
               // Bound to the form's args, which Start and Enter launch with: what the
               // field shows is what runs, whatever draft a surface kept under this key.
+              // A failed launch draws the field afresh (a new key): a surface that cleared
+              // it on submit shows the args the form still holds for the retry.
               value={launch.args}
               label="Args (JSON, optional)"
               placeholder='{"topic": "..."}'

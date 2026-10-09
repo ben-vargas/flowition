@@ -72,10 +72,10 @@ for(const overlap of [false,true])test(`A23 Enter with argument change pending o
   return next(e)
  })
  await $.command.run(flo(''));const ui=await $.ui.mount(PANE('terminal'));await ui.press({key:'new'});await ui.press({key:'wf-pick:/home/t/.flowition/workflows/w.mjs'})
- const edit=ui.input({key:'launch-args:/home/t/.flowition/workflows/w.mjs',text:'{"target":"staging"}',kind:'change'})
+ const edit=ui.input({key:'launch-args:/home/t/.flowition/workflows/w.mjs:0',text:'{"target":"staging"}',kind:'change'})
  if(overlap)await entered.promise;else await edit
  w.launchEntered=deferred()
- const submit=ui.input({key:'launch-args:/home/t/.flowition/workflows/w.mjs',text:'{"target":"staging"}',kind:'submit'})
+ const submit=ui.input({key:'launch-args:/home/t/.flowition/workflows/w.mjs:0',text:'{"target":"staging"}',kind:'submit'})
  await clock.settle()
  gate.resolve();await edit;await submit
  const calls=w.calls.filter(a=>a[1]==='run')
