@@ -299,9 +299,8 @@ export function transitions(prev: Detail | undefined, next: Detail): string[] {
   return out
 }
 
-/** Did this shell command launch or resume a flowition run? */
-export const isFlowitionLaunch = (command: string): boolean =>
-  /(^|[\s;&|(/])(flo|flowition)(\.js)?\s+(run|resume)\b/.test(command)
+/** Did this shell command launch or resume a flowition run? Read as launchesIn reads it. */
+export const isFlowitionLaunch = (command: string): boolean => launchesIn(command).count > 0
 
 const RUN_ID = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/
 
@@ -386,8 +385,11 @@ export function shellTokens(command: string): ShellToken[] {
       isWord = true
       i = j
     } else if (c === '\\') {
-      word += command[i + 1] ?? ''
-      isWord = true
+      // A backslash before a newline continues the line: both vanish.
+      if (command[i + 1] !== '\n') {
+        word += command[i + 1] ?? ''
+        isWord = true
+      }
       i++
     } else if (/\s/.test(c) && c !== '\n') {
       flush()
@@ -412,7 +414,10 @@ export function shellTokens(command: string): ShellToken[] {
 // The CLI's options (src/cli.js): these take a value (`--opt v` or `--opt=v`); the rest
 // do not.
 const VALUE_FLAGS = new Set(['args', 'args-file', 'adapter', 'model', 'effort', 'cwd', 'concurrency', 'budget', 'resume', 'run-id', 'seed-from', 'agent', 'run', 'older-than', 'port', 'idle-timeout', 'tailscale-origin'])
-const WRAPPERS = new Set(['env', 'nohup', 'npx', 'time', 'exec', 'command', 'nice', 'caffeinate'])
+// Commands that run another (their options skipped, and these options' values): a
+// launch may be `npx -y flowition run …`, `node bin/flowition.js run …`, `nohup …`.
+const WRAPPERS = new Set(['env', 'nohup', 'npx', 'node', 'bun', 'time', 'exec', 'command', 'nice', 'caffeinate'])
+const WRAPPER_VALUE_OPTIONS = new Set(['-p', '--package', '-r', '--require', '--import', '-C', '--conditions'])
 const isFlowitionWord = (w: string) => /(^|\/)(flo|flowition)(\.js)?$/.test(w)
 
 /**
@@ -434,7 +439,14 @@ export function launchesIn(command: string): { files: (string | null)[]; count: 
     // The command word: past variable assignments and wrappers (env, nohup, npx, …); a
     // flowition word anywhere else (echo flowition run …) is an argument, not a launch.
     let at = 0
-    while (at < words.length && (/^[A-Za-z_][A-Za-z0-9_]*=/.test(words[at]?.word ?? '') || WRAPPERS.has(words[at]?.word ?? ''))) at++
+    while (at < words.length) {
+      const w = words[at]?.word ?? ''
+      if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(w)) at++
+      else if (WRAPPERS.has(w)) {
+        at++
+        while (at < words.length && (words[at]?.word ?? '').startsWith('-')) at += WRAPPER_VALUE_OPTIONS.has(words[at]?.word ?? '') ? 2 : 1
+      } else break
+    }
     if (!isFlowitionWord(words[at]?.word ?? '')) at = -1
     const sub = at >= 0 ? words[at + 1]?.word : undefined
     if (at < 0 || (sub !== 'run' && sub !== 'resume')) continue

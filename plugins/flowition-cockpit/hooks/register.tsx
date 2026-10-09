@@ -142,12 +142,20 @@ let lastClockDraw = 0
 // (a backgrounded Bash call): the next new run created after it is attached.
 // Launches Bash backgrounded (no id in their output yet), by when each began: each is
 // matched to its own new run as runs are listed, an unmatched one kept until it expires.
-const pendingLaunches: { since: number; known: Set<string>; file: string | null }[] = []
+const pendingLaunches: { since: number; known: Set<string>; file: string | null; group: number }[] = []
+// The runs a backgrounded command's output named (attached already) that no record has
+// been reconciled with yet, by command: once listed, each takes back the record of its
+// own workflow file, and until then that command's records match nothing.
+const namedByGroup = new Map<number, Set<string>>()
+let launchGroup = 0
 // Each attach (a launch, a resume, a re-attach) takes the next generation; a poll that
 // began before a run's generation neither writes nor announces anything for that run,
 // so its notices start from the baseline attach() installed.
 let attachSeq = 0
 const attachedSeqOf = new Map<string, number>()
+// Runs whose attach() is still writing its baseline: a poll that begins meanwhile treats
+// them as attached after it.
+const attaching = new Set<string>()
 
 // The handlers behind the desktop's faces (button.tsx, card.tsx), by the face's key:
 // each render sets its own, stamped with the render's number, and a face's click
@@ -318,6 +326,7 @@ async function refresh($: EngineInterface, force = false): Promise<void> {
   // The attach generation this whole refresh is of (its listing, polls and writes): a run
   // attached after this point keeps attach()'s baseline and gets no notice from it.
   const pollSeq = attachSeq
+  const attachingAtStart = new Set(attaching)
   try {
     await ensureHome($)
     const now = await $.clock.now()
@@ -376,8 +385,24 @@ async function refresh($: EngineInterface, force = false): Promise<void> {
     // Each backgrounded launch, oldest first, takes the oldest run created since it began
     // that was not listed before it and is not attached, preferring its own workflow file:
     // never a run another session started just before.
+    // First, a command's named runs, once listed, take back their own records.
+    for (const [group, named] of namedByGroup) {
+      for (const id of [...named]) {
+        const run = list.find((r) => r.runId === id)
+        if (!run) continue
+        named.delete(id)
+        const at = pendingLaunches.findIndex((p) => p.group === group && p.file === run.file)
+        const loose = at >= 0 ? at : pendingLaunches.findIndex((p) => p.group === group && p.file === null)
+        if (loose >= 0) pendingLaunches.splice(loose, 1)
+      }
+      if (!named.size || !pendingLaunches.some((p) => p.group === group)) namedByGroup.delete(group)
+    }
     for (let i = 0; i < pendingLaunches.length; ) {
-      const { since, known, file } = pendingLaunches[i] as (typeof pendingLaunches)[number]
+      const { since, known, file, group } = pendingLaunches[i] as (typeof pendingLaunches)[number]
+      if (namedByGroup.has(group) && now - since <= 120_000) {
+        i++
+        continue
+      }
       const candidates = [...list].reverse().filter((r) => r.createdAt >= since && !known.has(r.runId) && !attached.includes(r.runId))
       // Its own workflow file when the command named one: never another workflow's run.
       const fresh = file !== null ? candidates.find((r) => r.file === file) : candidates[0]
@@ -468,7 +493,7 @@ async function refresh($: EngineInterface, force = false): Promise<void> {
     // notices: the next poll sees its change from that baseline. Judged afresh wherever it
     // decides (inside the cache update, retries included, and at each notice and wake),
     // since attach() takes its generation before anything else it does.
-    const isLate = (id: string) => (attachedSeqOf.get(id) ?? 0) > pollSeq
+    const isLate = (id: string) => (attachedSeqOf.get(id) ?? 0) > pollSeq || attachingAtStart.has(id)
     const withAdded = (cur: Record<string, Detail>) => {
       const added = Object.entries(cur).filter(([id]) => (!snapshotIds.has(id) && !(id in kept)) || isLate(id))
       return added.length ? { ...kept, ...Object.fromEntries(added) } : kept
@@ -666,8 +691,18 @@ function refreshAll($: EngineInterface): Promise<void> {
 }
 
 async function attach($: EngineInterface, runId: string): Promise<void> {
-  // The generation first, before anything awaited: a poll committing meanwhile sees it.
+  // The generation first, before anything awaited: a poll committing meanwhile sees it,
+  // and one beginning before the baseline is written sees the run as attaching.
   attachedSeqOf.set(runId, ++attachSeq)
+  attaching.add(runId)
+  try {
+    await installBaseline($, runId)
+  } finally {
+    attaching.delete(runId)
+  }
+}
+
+async function installBaseline($: EngineInterface, runId: string): Promise<void> {
   const now = await $.clock.now()
   // Switching to another run leaves the last one's agent thread and pending prompts, as
   // select() does.
@@ -976,7 +1011,11 @@ export const register: Register = (on) => {
     // the output named are attached already, which discovery skips, and a record nothing
     // matches expires.
     if (isBash && isOk) {
-      for (const l of launches) if (l.target === null && (isBackgrounded || l.isBackground)) pendingLaunches.push({ since: startedAt - 1000, known, file: l.file })
+      const group = ++launchGroup
+      const unnamed = launches.filter((l) => l.target === null && (isBackgrounded || l.isBackground))
+      const namedNew = named.filter((id) => !targets.includes(id))
+      for (const l of unnamed) pendingLaunches.push({ since: startedAt - 1000, known, file: l.file, group })
+      if (unnamed.length && namedNew.length) namedByGroup.set(group, new Set(namedNew))
     }
     void $.ui.open({ id: PANE, title: TITLE })
     return ran
