@@ -51,6 +51,8 @@ export type FlowitionCockpitDetail = {
   fetchedAt: number
   /** Set when no status could be read whole: its workers and totals are not known. */
   isPartial?: boolean
+  /** The agents the engine runs now, by index, when its live status says. */
+  liveAgents?: number[]
 }
 
 /** One record of an agent's transcript (`agents/<n>.jsonl`), trimmed for drawing. */
@@ -156,6 +158,8 @@ export type FlowitionCockpitTimeline = {
   isEntriesCut: boolean
   /** Set when the lanes' fan-out paths were dropped to fit $.state (Structure cannot show them). */
   isPathsCut?: boolean
+  /** When the run's latest attempt began (its last started or resumed event). */
+  attemptAt?: number | null
   /** The phase the run last entered (a resume replays its phases from the first). */
   currentPhase: { index: number; title: string } | null
 }

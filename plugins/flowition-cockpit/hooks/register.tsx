@@ -59,6 +59,7 @@ import {
   THREAD_BUDGET,
   pairToolResults,
   shownState,
+  isAbandoned,
   readStatus,
   staleDetailIds,
   parseTranscript,
@@ -137,7 +138,14 @@ let lastStatus: string | undefined
 let lastClockDraw = 0
 // Set when this session launched a run whose id the tool output did not carry
 // (a backgrounded Bash call): the next new run created after it is attached.
-let attachNextSince: number | null = null
+// Launches Bash backgrounded (no id in their output yet), by when each began: each is
+// matched to its own new run as runs are listed, an unmatched one kept until it expires.
+const pendingLaunches: number[] = []
+// Each attach (a launch, a resume, a re-attach) takes the next generation; a poll that
+// began before a run's generation neither writes nor announces anything for that run,
+// so its notices start from the baseline attach() installed.
+let attachSeq = 0
+const attachedSeqOf = new Map<string, number>()
 // The handlers behind the desktop's faces (button.tsx, card.tsx), by the face's key:
 // each render sets its own, stamped with the render's number, and a face's click
 // (`ui.message` with `{ press }`) runs the newest. Pruned at the end of a render (never
@@ -359,17 +367,18 @@ async function refresh($: EngineInterface, force = false): Promise<void> {
       }
     }
 
-    if (attachNextSince !== null) {
-      const since = attachNextSince
-      const fresh = list.find((r) => r.createdAt >= since && !attached.includes(r.runId))
+    // Each backgrounded launch, oldest first, takes the oldest new run not yet attached.
+    for (let i = 0; i < pendingLaunches.length; ) {
+      const since = pendingLaunches[i] as number
+      const fresh = [...list].reverse().find((r) => r.createdAt >= since && !attached.includes(r.runId))
       if (fresh) {
-        attachNextSince = null
+        pendingLaunches.splice(i, 1)
         attached = [...attached, fresh.runId]
-        await update($, attachedAtom, (all) => (all.includes(fresh.runId) ? all : [...all, fresh.runId]))
-        await update($, detailsAtom, (all) => ({ ...all, [fresh.runId]: placeholder(fresh.runId, now) }))
-        await update($, selectedAtom, () => fresh.runId)
+        await attach($, fresh.runId)
       } else if (now - since > 120_000) {
-        attachNextSince = null
+        pendingLaunches.splice(i, 1)
+      } else {
+        i++
       }
     }
 
@@ -377,9 +386,10 @@ async function refresh($: EngineInterface, force = false): Promise<void> {
     const wake: string[] = await read($, wakeAtom)
     const watched = new Set([...attached, ...wake])
     const selected = await read($, selectedAtom)
+    // The generation this poll's snapshot is of: a run attached after it (during a status
+    // read) keeps the cache's entry for it and gets no notice from this poll.
+    const pollSeq = attachSeq
     const details: Record<string, Detail> = { ...(await read($, detailsAtom)) }
-    // What the cache held when this poll began: a detail added since (attach() during a
-    // status read) is kept when this poll writes its own, never erased by it.
     const snapshotIds = new Set(Object.keys(details))
     const ids = new Set(list.filter((r) => isLive(r.state)).map((r) => r.runId))
     // A watched run is polled until it ends: a detached launch reads `unknown` until it
@@ -395,7 +405,7 @@ async function refresh($: EngineInterface, force = false): Promise<void> {
       if (now - (polledAt.get(id) ?? 0) >= REVALIDATE_MS || (await eventsSize($, id)) !== eventsSizeAt.get(id)) ids.add(id)
     }
 
-    const toasts: string[] = []
+    const toasts: { id: string; text: string }[] = []
     const woken: string[] = []
     const polled = new Set<string>()
     for (const id of ids) {
@@ -415,7 +425,7 @@ async function refresh($: EngineInterface, force = false): Promise<void> {
       const prev = details[id]
       const next = withSeen(prev, readStatus(ran.stdout, ran.isStdoutTruncated, prev, id, now))
       polled.add(id)
-      if (watched.has(id)) toasts.push(...transitions(prev, next))
+      if (watched.has(id)) toasts.push(...transitions(prev, next).map((text) => ({ id, text })))
       if (hasEnded(prev, next)) mustList = true
       if (shouldWake(prev, next, wake.includes(id))) woken.push(id)
       // An unchanged poll keeps the old object, so nothing is redrawn for it.
@@ -446,11 +456,10 @@ async function refresh($: EngineInterface, force = false): Promise<void> {
       }
     }
     await write(async () => (sameJson(list, await read($, runsAtom)) ? undefined : update($, runsAtom, () => list)))
-    // A run attached while this poll ran (not watched when it began) keeps the cache's
-    // entry for it (the placeholder), not this poll's: its notices were not computed here,
-    // so the next poll must see its change from that baseline.
-    const attachedNow = await read($, attachedAtom)
-    const lateAttached = new Set(attachedNow.filter((id) => !watched.has(id)))
+    // A run attached (or attached again: a resume) after this poll began keeps the cache's
+    // entry for it (attach()'s baseline), not this poll's, and none of this poll's notices:
+    // the next poll sees its change from that baseline.
+    const lateAttached = new Set([...attachedSeqOf].filter(([, seq]) => seq > pollSeq).map(([id]) => id))
     const withAdded = (cur: Record<string, Detail>) => {
       const added = Object.entries(cur).filter(([id]) => (!snapshotIds.has(id) && !(id in kept)) || lateAttached.has(id))
       return added.length ? { ...kept, ...Object.fromEntries(added) } : kept
@@ -462,7 +471,7 @@ async function refresh($: EngineInterface, force = false): Promise<void> {
     await write(async () => ((await read($, listNoteAtom)) === listNote ? undefined : update($, listNoteAtom, () => listNote)))
     const shownError = listError ?? writeError
     await write(async () => ((await read($, errorAtom)) === shownError ? undefined : update($, errorAtom, () => shownError)))
-    for (const text of toasts) $.ui.toast(text, { timeoutMs: 8000 })
+    for (const { id, text } of toasts) if (!lateAttached.has(id)) $.ui.toast(text, { timeoutMs: 8000 })
     const status = statusLine(list, details)
     if (status !== lastStatus) {
       lastStatus = status
@@ -482,7 +491,7 @@ async function refresh($: EngineInterface, force = false): Promise<void> {
     if (woken.length) {
       // Only runs still armed now: one disarmed while this poll's status ran is skipped.
       const armed = await read($, wakeAtom)
-      const due = woken.filter((id) => armed.includes(id))
+      const due = woken.filter((id) => armed.includes(id) && !lateAttached.has(id))
       await update($, wakeAtom, (all) => all.filter((id) => !due.includes(id)))
       for (const id of due) {
         const run = list.find((r) => r.runId === id)
@@ -644,6 +653,7 @@ function refreshAll($: EngineInterface): Promise<void> {
 
 async function attach($: EngineInterface, runId: string): Promise<void> {
   const now = await $.clock.now()
+  attachedSeqOf.set(runId, ++attachSeq)
   await update($, attachedAtom, (list) => (list.includes(runId) ? list : [...list, runId]))
   // Its notices start from here: whatever a poll saw of it while it was not watched (its
   // question, its end) was never announced, so the baseline is a fresh placeholder.
@@ -925,7 +935,7 @@ export const register: Register = (on) => {
     if (runId) await attach($, runId)
     // No id in the output: only a launch Bash backgrounded (it reports no id until it
     // ends) arms the fallback; a failed launch, or an MCP error, arms nothing.
-    else if (isBash && ran.isError !== true && /running in background/i.test(ran.text ?? '')) attachNextSince = startedAt - 5000
+    else if (isBash && ran.isError !== true && /running in background/i.test(ran.text ?? '')) pendingLaunches.push(startedAt - 5000)
     void $.ui.open({ id: PANE, title: TITLE })
     return ran
   }).catch(($, e, next) => next(e))
@@ -1030,7 +1040,8 @@ export const register: Register = (on) => {
         const lanes = timeline && timeline.runId === selected && Array.isArray(timeline.lanes) ? timeline.lanes : []
         const known = d?.isPartial ? reconcileWorkers(d.workers, lanes) : (d?.workers ?? [])
         const raw = known.filter((x) => x.kind === 'agent' && x.index === agentView)
-        const w = lifetimeWorkers(raw, lanes).map((x) => ({ ...x, state: shownState(x.state, live) }))[0]
+        const attemptAt = timeline && timeline.runId === selected ? timeline.attemptAt : null
+        const w = lifetimeWorkers(raw, lanes).map((x) => ({ ...x, state: isAbandoned(x, d, lanes, attemptAt) ? 'interrupted' : shownState(x.state, live) }))[0]
         const canControl = live && w !== undefined && isActive(w.state)
         const label = w?.label ?? `agent ${agentView}`
         const wid = `${selected}:${agentView}`
@@ -1235,7 +1246,10 @@ export const register: Register = (on) => {
         // run with no status read whole shows the workers its events name.
         const lanes = timeline && timeline.runId === selected && Array.isArray(timeline.lanes) ? timeline.lanes : []
         const known = d?.isPartial ? reconcileWorkers(d.workers, lanes) : (d?.workers ?? [])
-        const workers = lifetimeWorkers(known, lanes).map((w) => ({ ...w, state: shownState(w.state, live) }))
+        // A worker shows as it is now: abandoned work (an ended run's, or an earlier attempt's
+        // a resume has not taken up again) as interrupted, which also takes its controls away.
+        const attemptAt = timeline && timeline.runId === selected ? timeline.attemptAt : null
+        const workers = lifetimeWorkers(known, lanes).map((w) => ({ ...w, state: isAbandoned(w, d, lanes, attemptAt) ? 'interrupted' : shownState(w.state, live) }))
         const runCost = workers.reduce((sum, w) => sum + (w.cost ?? 0), 0)
         const agents = workers.filter((w) => w.kind === 'agent')
         const counts = progress(workers)

@@ -199,6 +199,9 @@ export function parseStatus(stdout: string, fetchedAt: number): Detail {
     workers: [...agents, ...steps],
     questions,
     spentOutputTokens: num(obj(d.live).spentOutputTokens),
+    // The agents the engine runs now, when its live status says (a resumed run's earlier,
+    // abandoned agents are not among them).
+    ...(Array.isArray(obj(d.live).agents) ? { liveAgents: (obj(d.live).agents as unknown[]).map((a) => num(obj(a).index)).filter((i): i is number => i !== null) } : {}),
     cost: costs.length ? costs.reduce((s, c) => s + c, 0) : null,
     resultMarkdown:
       d.resultOmitted === true ? (isLive(str(d.state) ?? '') ? null : TOO_LARGE(runId)) : result.status === 'completed' && result.result !== undefined ? toMarkdown(result.result) : null,
@@ -304,14 +307,34 @@ const RUN_ID = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/
 
 /** The runId a launch printed: detached text, --json, or the foreground `run <id>` line. */
 export function extractRunId(text: string): string | null {
-  // Detached launch, --json, the foreground run/resume's last line (`run <id>: <status>`),
-  // and its event lines (`▶ run <id> — resumed`).
-  const patterns = [/started detached run (\S+)/, /"runId"\s*:\s*"([^"]+)"/, /^run (\S+?):? \w*$/m, /^run (\S+)$/m, /▶ run (\S+) —/]
-  for (const p of patterns) {
-    const id = p.exec(text)?.[1]
+  // The CLI's own lines, in the order written: the detached launch, the foreground event
+  // lines (`▶ run <id> — started`) and last line (`run <id>: <status>`), and a --json
+  // envelope (a line that is itself a JSON object with a top-level runId). The first
+  // wins: a foreground run prints its run line before its result, so a result printed
+  // after it, JSON with a runId field or not, is never taken for the run. Last, the whole
+  // text as one JSON object (an MCP tool's pretty-printed {runId}).
+  for (const line of text.split('\n')) {
+    const s = line.trim()
+    const id =
+      /^started detached run (\S+)/.exec(s)?.[1] ??
+      /^▶ run (\S+) —/.exec(s)?.[1] ??
+      /^run (\S+?):? \w*$/.exec(s)?.[1] ??
+      /^run (\S+)$/.exec(s)?.[1] ??
+      envelopeRunId(s)
     if (id && RUN_ID.test(id)) return id
   }
-  return null
+  const whole = envelopeRunId(text.trim())
+  return whole && RUN_ID.test(whole) ? whole : null
+}
+
+function envelopeRunId(json: string): string | null {
+  if (!json.startsWith('{')) return null
+  try {
+    const o = obj(JSON.parse(json))
+    return typeof o.runId === 'string' ? o.runId : null
+  } catch {
+    return null
+  }
 }
 
 /**
@@ -785,7 +808,10 @@ export function foldTimeline(prev: Timeline, text: string): Timeline {
       if (Array.isArray(r.phases)) out.declaredPhases = r.phases.map((p) => str(obj(p).title) ?? '').filter(Boolean)
       out.workflowFile = str(r.workflowFile) ?? out.workflowFile
       if (RUN_ENDED.has(state)) out.endedAt = t
-      else if (state === 'started' || state === 'resumed') out.endedAt = null
+      else if (state === 'started' || state === 'resumed') {
+        out.endedAt = null
+        out.attemptAt = t
+      }
       if (state) entry(t, 'run', `run ${state}${str(r.error) ? `: ${str(r.error)}` : ''}`, null, RUN_ENDED.has(state) ? stateColor(state) : 'suggestion')
     } else if (r.type === 'phase') {
       const index = num(r.phaseIndex) ?? out.phases.length
@@ -1353,6 +1379,20 @@ export function boundDetails(details: Record<string, Detail>, first: string[], b
     out[id] = d
   }
   return out
+}
+
+/**
+ * A worker the run's current attempt has not taken up again: a resumed run's agent still
+ * reads running from its earlier, crashed attempt until its new one starts. Known from
+ * the engine's live agents (a running worker it does not run), or from the run's events
+ * (its attempt began before the run's latest start or resume).
+ */
+export function isAbandoned(w: Worker, d: Detail | undefined, lanes: Lane[], attemptAt: number | null | undefined): boolean {
+  if (!isActive(w.state)) return false
+  if (w.state === 'running' && d?.liveAgents && w.index !== null && !d.liveAgents.includes(w.index)) return true
+  const lane = lanes.find((l) => l.id === w.id)
+  const began = lane?.startedAt ?? lane?.queuedAt ?? null
+  return attemptAt != null && lane !== undefined && isActive(lane.state) && began !== null && began < attemptAt
 }
 
 /** Work an ended run left running or queued was abandoned: it shows as interrupted. */
