@@ -1263,3 +1263,40 @@ test('P2: a huge nested timeline is bounded for $.state, its lanes and spend kep
   const kept = boundTimeline(whole)
   expect([JSON.stringify(kept).length <= 3 << 20, kept.isPathsCut, kept.lanes.length, kept.lanes.reduce((n, l) => n + l.outputTokens, 0)]).toEqual([true, true, 4096, 40_960])
 })
+
+test('P2: a wake taken resets its refusals, so a later completion of the same run gets its retries', async ($, on) => {
+  const { w } = started3(on)
+  await $.command.run(flo('flo_live'))
+  const ui = await $.ui.mount(PANE('terminal'))
+  // Three completions of one run (resumed in between), each refused twice, then taken.
+  for (let k = 0; k < 3; k++) {
+    w.states.flo_live = 'running'
+    await ui.press({ key: 'refresh' })
+    await ui.press({ key: 'wake' })
+    w.states.flo_live = 'completed'
+    w.dropPrompt = true
+    await ui.press({ key: 'refresh' })
+    await ui.press({ key: 'refresh' })
+    w.dropPrompt = false
+    await ui.press({ key: 'refresh' })
+    await ui.press({ key: 'refresh' })
+  }
+  expect(w.submitted.length).toBe(3)
+  await ui.unmount()
+})
+
+test('P2: every watched run keeps at least its baseline, however the cache is spent', () => {
+  const big = (runId: string, n: number) =>
+    parseStatus(JSON.stringify({ runId, state: 'running', agents: [], steps: [], questions: Array.from({ length: n }, (_, i) => ({ qid: `q${i}`, question: 'x'.repeat(400), t: i })), phases: [], result: null, live: { ok: true, questions: [] } }), 1)
+  // The selected run whole fills the budget but for 1,000 characters; four watched runs come after it.
+  const details = { sel: big('sel', 600), w1: big('w1', 50), w2: big('w2', 50), w3: big('w3', 50), w4: big('w4', 50) }
+  const kept = boundDetails(details, ['sel', 'w1', 'w2', 'w3', 'w4'], JSON.stringify(details.sel).length + 1_000)
+  expect(['sel', 'w1', 'w2', 'w3', 'w4'].map((id) => kept[id]?.questions.length ?? 0)).toEqual([600, 50, 50, 50, 50])
+})
+
+test('P2: thousands of long phase titles still leave the timeline within the $.state budget', () => {
+  const text = Array.from({ length: 20_000 }, (_, i) => `${JSON.stringify({ t: i, type: 'phase', title: `phase ${i} `.padEnd(400, 'p'), phaseIndex: i })}\n`).join('')
+  const whole = foldTimeline(emptyTimeline('r'), text)
+  expect(JSON.stringify(whole).length).toBeGreaterThan(4_194_304)
+  expect(JSON.stringify(boundTimeline(whole)).length).toBeLessThanOrEqual(3 << 20)
+})

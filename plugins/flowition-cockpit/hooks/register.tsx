@@ -464,7 +464,8 @@ async function refresh($: EngineInterface, force = false): Promise<void> {
             text: `Flowition run ${id}${run ? ` (${run.file})` : ''} just finished: ${d?.state ?? 'ended'}. Read its result with \`flowition result ${id}\` and give me a short summary.`,
           })
           .then(
-            (r) => (r.drop !== undefined ? rearmWake($, id, r.drop) : undefined),
+            // Taken: this completion's refusals are spent, and a later one starts afresh.
+            (r) => (r.drop !== undefined ? rearmWake($, id, r.drop) : void wakeRefusals.delete(id)),
             (err: unknown) => rearmWake($, id, err instanceof Error ? err.message : String(err)),
           )
       }

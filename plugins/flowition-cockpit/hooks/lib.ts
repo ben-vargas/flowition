@@ -1220,7 +1220,7 @@ export function trimDetail(d: Detail, room: number): Detail {
     workers: d.workers.map((w) => ({ ...w, error: clipped(w.error, 200) })),
   }
   if (size(out) <= room) return out
-  out = { ...out, isPartial: true, workers: out.workers.slice(0, 200), questions: out.questions.map((q) => (q.isOpen ? q : { ...q, question: '' })) }
+  out = { ...out, isPartial: true, phases: out.phases.slice(-100).map((p) => clip(p, 200)), workers: out.workers.slice(0, 200), questions: out.questions.map((q) => (q.isOpen ? q : { ...q, question: '' })) }
   if (size(out) <= room) return out
   return { ...out, workers: [], questions: out.questions.map((q) => ({ ...q, question: q.isOpen ? clip(q.question, 100) : '' })) }
 }
@@ -1237,7 +1237,23 @@ export function boundTimeline(tl: Timeline, budget = 3 << 20): Timeline {
   if (size(out) <= budget) return out
   out = { ...out, isPathsCut: true, lanes: out.lanes.map((l) => ({ ...l, path: [] })) }
   if (size(out) <= budget) return out
-  return { ...out, entries: out.entries.slice(-50), isEntriesCut: true, lanes: out.lanes.map((l) => ({ ...l, label: clip(l.label, 60) })) }
+  // Last, phase metadata (phase() has no count or title limit): titles clipped, then
+  // only the newest phases kept, with the narrative and labels cut down too.
+  const titled = <T extends { title: string }>(p: T): T => ({ ...p, title: clip(p.title, 60) })
+  out = {
+    ...out,
+    entries: out.entries.slice(-50),
+    isEntriesCut: true,
+    lanes: out.lanes.map((l) => ({ ...l, label: clip(l.label, 60) })),
+    declaredPhases: out.declaredPhases.map((p) => clip(p, 60)),
+    phases: out.phases.map(titled),
+    currentPhase: out.currentPhase && titled(out.currentPhase),
+  }
+  for (const n of [2000, 500, 100]) {
+    if (size(out) <= budget) break
+    out = { ...out, declaredPhases: out.declaredPhases.slice(0, n), phases: out.phases.slice(-n) }
+  }
+  return out
 }
 
 /**
@@ -1247,22 +1263,29 @@ export function boundTimeline(tl: Timeline, budget = 3 << 20): Timeline {
  */
 export function boundDetails(details: Record<string, Detail>, first: string[], budget = 3 << 20): Record<string, Detail> {
   const ids = [...new Set([...first.filter((id) => details[id]), ...Object.keys(details)])]
+  const isFirst = new Set(first)
+  const sizeOf = (id: string, d: Detail) => JSON.stringify(d).length + id.length + 8
+  // Room is set aside first for every watched run's baseline (its state and question
+  // ids), so however the rest is spent, none is ever polled as unknown: no question
+  // announced twice, no end missed.
+  const floor = new Map(ids.filter((id) => isFirst.has(id)).map((id) => [id, sizeOf(id, skeletonDetail(details[id] as Detail))]))
+  let reserved = [...floor.values()].reduce((a, b) => a + b, 0)
   const out: Record<string, Detail> = {}
   let used = 0
   for (const id of ids) {
     let d = details[id] as Detail
-    let n = JSON.stringify(d).length + id.length + 8
-    if (used + n > budget && first.includes(id)) {
-      d = trimDetail(d, budget - used - id.length - 8)
-      n = JSON.stringify(d).length + id.length + 8
-      // Past that, a watched run keeps its notices' baseline (state, question ids), so it
-      // is never polled as unknown: no question announced twice, no end missed.
-      if (used + n > budget) {
+    reserved -= floor.get(id) ?? 0
+    const room = budget - used - reserved
+    let n = sizeOf(id, d)
+    if (n > room && isFirst.has(id)) {
+      d = trimDetail(d, room - id.length - 8)
+      n = sizeOf(id, d)
+      if (n > room) {
         d = skeletonDetail(d)
-        n = JSON.stringify(d).length + id.length + 8
+        n = sizeOf(id, d)
       }
     }
-    if (used + n > budget) continue
+    if (n > room) continue
     used += n
     out[id] = d
   }
