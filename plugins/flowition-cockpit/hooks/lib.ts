@@ -766,6 +766,8 @@ export function foldTimeline(prev: Timeline, text: string): Timeline {
       const t = Number(/"t":(\d+)/.exec(line)?.[1])
       const lane = lanes.get(`a:${/"index":(\d+)/.exec(line)?.[1] ?? '?'}`)
       if (lane && Number.isFinite(t)) lane.lastSeenAt = Math.max(lane.lastSeenAt, t)
+      const made = Number(/"outputTokens":(\d+)/.exec(line)?.[1])
+      if (lane && Number.isFinite(made)) lane.openOutput = made
       continue
     }
     let r: unknown
@@ -825,6 +827,12 @@ export function foldTimeline(prev: Timeline, text: string): Timeline {
       lanes.set(id, lane)
       lane.lastSeenAt = Math.max(lane.lastSeenAt, t)
       if (num(r.phaseIndex) !== null) lane.phaseIndex = num(r.phaseIndex)
+      // A new attempt while the last never ended (it crashed and the run was resumed): the
+      // output that attempt was known to make stays spent.
+      if ((state === 'queued' || state === 'running') && (lane.openOutput ?? 0) > 0) {
+        lane.outputTokens += lane.openOutput ?? 0
+        lane.openOutput = 0
+      }
       if (state === 'queued') Object.assign(lane, { state, queuedAt: t, startedAt: null, endedAt: null })
       else if (state === 'running') Object.assign(lane, { state, startedAt: t, endedAt: null })
       else if (state === 'cached') {
@@ -840,6 +848,7 @@ export function foldTimeline(prev: Timeline, text: string): Timeline {
         lane.cost += num(usage.cost) ?? 0
         lane.outputTokens += num(usage.output) ?? 0
         lane.lastPaidAt = t
+        lane.openOutput = 0
       }
       if (kind === 'agent' && (state === 'running' || ENDED.has(state))) {
         const took = num(r.durationMs)
@@ -1356,12 +1365,17 @@ export const shownState = (state: string, isRunLive: boolean): string => (!isRun
  * `meta`) closes every open call rather than letting a later result match an earlier
  * attempt's call. Returns results by the call's `seq`, and the results so paired.
  */
-export function pairToolResults(events: ThreadEvent[]): { byCall: Map<number, ThreadEvent>; paired: Set<number> } {
+export function pairToolResults(events: ThreadEvent[]): { byCall: Map<number, ThreadEvent>; paired: Set<number>; attemptFrom: number } {
   const byCall = new Map<number, ThreadEvent>()
   const paired = new Set<number>()
   let open = new Map<string, number[]>()
+  // Where the current (last) attempt begins: a call before it with no result was cut off.
+  let attemptFrom = -1
   for (const ev of events) {
-    if (ev.kind === 'attempt' || ev.kind === 'meta') open = new Map()
+    if (ev.kind === 'attempt' || ev.kind === 'meta') {
+      open = new Map()
+      attemptFrom = ev.seq
+    }
     else if (ev.kind === 'tool' && ev.toolId) open.set(ev.toolId, [...(open.get(ev.toolId) ?? []), ev.seq])
     else if (ev.kind === 'tool-result' && ev.toolUseId) {
       const waiting = open.get(ev.toolUseId)
@@ -1372,5 +1386,5 @@ export function pairToolResults(events: ThreadEvent[]): { byCall: Map<number, Th
       }
     }
   }
-  return { byCall, paired }
+  return { byCall, paired, attemptFrom }
 }

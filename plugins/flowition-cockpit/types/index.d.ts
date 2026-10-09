@@ -127,6 +127,12 @@ export type FlowitionCockpitLane = {
   outputTokens: number
   /** When the last paid attempt read here ended (its done/failed/cancelled event), or null. */
   lastPaidAt: number | null
+  /**
+   * The output the lane's unfinished attempt was last known to make (its progress): added
+   * to `outputTokens` if a new attempt starts without that one ending (a crash, then a
+   * resume), replaced by final usage when it does end.
+   */
+  openOutput?: number
 }
 
 /** A run's timeline and phases, folded from `events.jsonl` (its progress lines skipped). */

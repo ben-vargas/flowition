@@ -366,6 +366,7 @@ async function refresh($: EngineInterface, force = false): Promise<void> {
         attachNextSince = null
         attached = [...attached, fresh.runId]
         await update($, attachedAtom, (all) => (all.includes(fresh.runId) ? all : [...all, fresh.runId]))
+        await update($, detailsAtom, (all) => ({ ...all, [fresh.runId]: placeholder(fresh.runId, now) }))
         await update($, selectedAtom, () => fresh.runId)
       } else if (now - since > 120_000) {
         attachNextSince = null
@@ -644,7 +645,9 @@ function refreshAll($: EngineInterface): Promise<void> {
 async function attach($: EngineInterface, runId: string): Promise<void> {
   const now = await $.clock.now()
   await update($, attachedAtom, (list) => (list.includes(runId) ? list : [...list, runId]))
-  await update($, detailsAtom, (all) => (all[runId] ? all : { ...all, [runId]: placeholder(runId, now) }))
+  // Its notices start from here: whatever a poll saw of it while it was not watched (its
+  // question, its end) was never announced, so the baseline is a fresh placeholder.
+  await update($, detailsAtom, (all) => ({ ...all, [runId]: placeholder(runId, now) }))
   await update($, selectedAtom, () => runId)
   mustList = true
 }
@@ -730,19 +733,24 @@ async function cancel($: EngineInterface, runId: string, index: number | null): 
 async function resumeRun($: EngineInterface, runId: string, isReplay = false): Promise<void> {
   const verb = isReplay ? 'Replay' : 'Resume'
   await update($, confirmAtom, () => null)
-  // The run's first event names its workflow file; `run --resume --detach` installs the
-  // resume handoff marker and restores the run's journaled adapter, cwd and args.
-  let file: string | null = null
-  try {
-    const head = await $.process.run(['head', '-n', '1', `${await ensureHome($)}/runs/${runId}/events.jsonl`])
-    const first: unknown = JSON.parse(head.stdout)
-    const wf = first !== null && typeof first === 'object' ? (first as { workflowFile?: unknown }).workflowFile : undefined
-    if (typeof wf === 'string') file = wf
-  } catch {
-    // reported below
+  // The run's workflow file: named by its first event, or (a run that failed before it
+  // started, e.g. its module would not load) by its journal's first record, the run's
+  // metadata. Only the file is taken from it (the record also holds the run's args).
+  // `run --resume --detach` installs the resume handoff marker and restores the run's
+  // journaled adapter, cwd and args.
+  const firstFile = async (name: string): Promise<string | null> => {
+    try {
+      const head = await $.process.run(['head', '-n', '1', `${await ensureHome($)}/runs/${runId}/${name}`])
+      const first: unknown = JSON.parse(head.stdout)
+      const wf = first !== null && typeof first === 'object' ? (first as { workflowFile?: unknown }).workflowFile : undefined
+      return typeof wf === 'string' && wf ? wf : null
+    } catch {
+      return null
+    }
   }
+  const file = (await firstFile('events.jsonl')) ?? (await firstFile('journal.jsonl'))
   if (!file) {
-    $.ui.toast(`Can't ${verb.toLowerCase()} ${runId}: its first event names no workflow file.`, { timeoutMs: 8000 })
+    $.ui.toast(`Can't ${verb.toLowerCase()} ${runId}: neither its events nor its journal name its workflow file.`, { timeoutMs: 8000 })
     return
   }
   const res = await control($, ['run', file, '--resume', runId, '--detach', '--json'])
@@ -1027,7 +1035,7 @@ export const register: Register = (on) => {
         const label = w?.label ?? `agent ${agentView}`
         const wid = `${selected}:${agentView}`
         const events = th?.events ?? []
-        const { byCall: results, paired } = pairToolResults(events)
+        const { byCall: results, paired, attemptFrom } = pairToolResults(events)
         // What a row draws, roughly, for the window below: the newest rows within the
         // thread's budget, so the newest reply and the controls after it always draw.
         const drawn = (ev: (typeof events)[number]): number => {
@@ -1092,9 +1100,11 @@ export const register: Register = (on) => {
                   : result.output
                     ? `${result.output.split('\n').length} lines`
                     : 'done'
-                : live && isActive(w?.state ?? '')
-                  ? 'running…'
-                  : ''
+                : ev.seq < attemptFrom
+                  ? 'interrupted: its attempt ended first'
+                  : live && isActive(w?.state ?? '')
+                    ? 'running…'
+                    : ''
               return (
                 <Box key={key} flexDirection="column">
                   {btn(`tool:${ev.seq}`, `${isOpen ? '▾' : '▸'} ${ev.name ?? 'tool'}  ${ev.summary ?? ''}`, () => toggle(key), 'plain', true)}
