@@ -102,11 +102,29 @@ test('a real SSE keepalive stays on schedule during a bounded 64 MiB search', { 
     fs.closeSync(fd)
   }
 
-  const keepaliveMs = 20
+  // What this proves is DESIGN §5.4.7's contract — "the event loop breathes every ≤1 MiB"
+  // of a search — witnessed by a real SSE keepalive. It used to be measured as wall-clock
+  // gaps (≤ 3 × a 20 ms keepalive) between pings received in this same process, which
+  // a shared CI runner breaks by itself: one preemption or GC pause of the test process
+  // reads as a starved keepalive (seen: a single 99 ms gap, every other gap ≤ 46 ms).
+  // It is now checked as ORDER, which the scheduler cannot perturb:
+  //   - the keepalive interval is 1 ms (the smallest Node timer), and every deadline check
+  //     the search makes costs ≥ 1.1 ms of CPU (the injected clock below). So between any
+  //     two chunks there is ≥ 1 ms of loop time, a keepalive is DUE at every timers phase
+  //     that separates them, and the only thing deciding whether one is written is
+  //     whether the search returned to the event loop. Preemption only makes it more due.
+  //   - the injected clock is also the search's per-chunk deadline check, so it marks the
+  //     chunk boundaries; keepalive writes are marked at the server's res.write. Both
+  //     happen on this one thread, so the interleaving is exact, not timed.
+  //   - the frozen clock never trips the 2 s deadline, so the whole 64 MiB is scanned on
+  //     any machine (deadline truncation has its own test).
+  const keepaliveMs = 1
   const handler = createStreamHandler({
     watch: false,
-    pollMs: 1000,
-    stateMs: 1000,
+    // Out of the way for the whole test: a poll drain or state probe in flight holds the
+    // connection's work queue, and keepalives queue behind it.
+    pollMs: 60_000,
+    stateMs: 60_000,
     keepaliveMs,
     deriveState: async () => ({ state: 'running' }),
   })
@@ -116,7 +134,17 @@ test('a real SSE keepalive stays on schedule during a bounded 64 MiB search', { 
       noteRunState() {},
     },
   }
+  const timeline = []
+  let written = 0
   const server = http.createServer((req, res) => {
+    const write = res.write
+    res.write = function (chunk, ...rest) {
+      if (chunk === ': ping\n\n') {
+        written++
+        timeline.push('ping')
+      }
+      return write.call(this, chunk, ...rest)
+    }
     const url = new URL(req.url, 'http://127.0.0.1')
     Promise.resolve(handler(ctx, req, res, url, { route: { runId } })).catch((error) => {
       if (res.headersSent) res.destroy(error)
@@ -128,7 +156,7 @@ test('a real SSE keepalive stays on schedule during a bounded 64 MiB search', { 
   })
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
 
-  const pings = []
+  let received = 0
   let source = ''
   const request = http.get({
     host: '127.0.0.1',
@@ -145,36 +173,49 @@ test('a real SSE keepalive stays on schedule during a bounded 64 MiB search', { 
     for (;;) {
       const at = source.indexOf(': ping\n\n')
       if (at === -1) break
-      pings.push(performance.now())
+      received++
       source = source.slice(at + 8)
     }
   })
-  const waitForPing = async (predicate) => {
-    const deadline = Date.now() + 3000
-    while (!predicate()) {
-      if (Date.now() >= deadline) throw new Error(`timed out waiting for SSE keepalive; saw ${pings.length}`)
+  const waitForPings = async (count) => {
+    const deadline = Date.now() + 5000
+    while (received < count) {
+      if (Date.now() >= deadline) throw new Error(`timed out waiting for SSE keepalive ${count}; received ${received}`)
       await new Promise((resolve) => setTimeout(resolve, 5))
     }
   }
+  const clock = () => {
+    timeline.push('check')
+    const until = performance.now() + 1.1
+    while (performance.now() < until) { /* ≥ 1 ms of loop time per chunk */ }
+    return 0
+  }
 
   try {
-    await waitForPing(() => pings.length > 0)
-    const searchStarted = performance.now()
-    const out = await searchRun(dir, 'not-present-anywhere')
-    const searchEnded = performance.now()
-    await waitForPing(() => pings.some((at) => at > searchEnded))
-    assert.equal(out.matches.length, 0)
-    assert.ok(pings.some((at) => at >= searchStarted && at <= searchEnded),
-      `no SSE keepalive arrived during the ${Math.round(searchEnded - searchStarted)}ms search`)
+    await waitForPings(1)
+    const from = timeline.length
+    const out = await searchRun(dir, 'not-present-anywhere', { now: clock })
+    const during = timeline.slice(from)
+    // the real keepalives written during the search reached the real client
+    await waitForPings(written)
+    assert.deepEqual(out, { matches: [], truncated: false })
 
-    const surrounding = [
-      pings.filter((at) => at < searchStarted).at(-1),
-      ...pings.filter((at) => at >= searchStarted && at <= searchEnded),
-      pings.find((at) => at > searchEnded),
-    ].filter((at) => at != null)
-    const gaps = surrounding.slice(1).map((at, index) => at - surrounding[index])
-    assert.ok(gaps.every((gap) => gap <= keepaliveMs * 3),
-      `SSE keepalive gap exceeded ${keepaliveMs * 3}ms: ${gaps.map((gap) => gap.toFixed(1)).join(', ')}`)
+    const checks = during.filter((entry) => entry === 'check').length
+    const mib = Math.ceil(fs.statSync(file).size / (1024 * 1024))
+    assert.ok(checks >= mib, `${checks} deadline checks across ${mib} MiB — the scan is not chunked at ≤ 1 MiB`)
+
+    // Checks between consecutive keepalive writes. Steady state is exactly 1 (one chunk
+    // per loop turn); the only 2 is at startup, where the deadline is computed and the
+    // first file is admitted back to back before the first read. A search that holds
+    // the loop across chunks shows up here as a run of many.
+    let run = 0
+    let longest = 0
+    for (const entry of during) {
+      if (entry === 'ping') run = 0
+      else longest = Math.max(longest, ++run)
+    }
+    assert.ok(longest <= 2,
+      `the search made ${longest} deadline checks without yielding to a due keepalive (${during.filter((entry) => entry === 'ping').length} keepalives across ${checks} checks)`)
   } finally {
     request.destroy()
     await new Promise((resolve) => server.close(resolve))

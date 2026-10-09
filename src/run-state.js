@@ -115,6 +115,10 @@ function resumeIsStarting(runDirPath) {
 }
 
 export async function deriveRunState(runDirPath) {
+  return derive(runDirPath, true)
+}
+
+async function derive(runDirPath, mayRederive) {
   if (resumeIsStarting(runDirPath)) {
     try {
       const { id, ...live } = await controlRequest(path.join(runDirPath, 'control.sock'), { cmd: 'status' }, CONTROL_TIMEOUT_MS)
@@ -186,6 +190,17 @@ export async function deriveRunState(runDirPath) {
   // timeout, or not yet at its first heartbeat — still HOLDS run.lock.
   const lockPid = liveLockPid(runDirPath)
   if (lockPid != null) return { state: 'running', ...detail, detail: `run.lock held by live pid ${lockPid} — an engine owns the run and has not produced a result yet` }
+  // These reads are not one atomic snapshot: result.json was found absent BEFORE the
+  // socket probe (up to CONTROL_TIMEOUT_MS) and this lock check, and a short run can
+  // complete its whole lifecycle in between (the suite's mock workflow goes lock → result
+  // in ~15ms — well inside one preempted reader on a loaded machine). Its terminal artifacts
+  // would then read "no lock, journal present": a COMPLETED run classified stale, which
+  // `result --wait`, flowition_result and the viewer all treat as a crash. The engine
+  // writes result.json BEFORE it releases run.lock, so a lock observed released makes a
+  // normally-finished engine's result visible to any read from here on: if one has
+  // appeared, derive again from it. Once — a second pass that loses the file again is
+  // racing a resume, and classifies that attempt from its own lock and heartbeat.
+  if (mayRederive && fs.existsSync(resultPath)) return derive(runDirPath, false)
   if (heartbeatAt != null || heartbeatError) return { state: 'stale', ...detail }
   // No lock held, no socket answering, no heartbeat, no result — but a journal
   // exists: an attempt started and died before its first heartbeat. Classify

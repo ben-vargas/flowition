@@ -214,7 +214,9 @@ Each adapter declares capabilities and builds argv per turn:
 Parsers normalize each CLI's JSONL into: `session`, `text`, `reasoning`, `tool`,
 `tool-result`, `usage`, `result`, `error` (+ `turn-end` for amp, which runs turns
 with stdin open but only flushes its `result` event at stdin EOF — flowition closes stdin
-on `assistant stop_reason=end_turn` instead).
+on `assistant stop_reason=end_turn` instead; + `warning` for codex, whose non-fatal
+`item.completed` items of type `error` are recorded as transcript `status` lines and never
+fail the turn or become the agent's current tool).
 
 `spec.system` rides a native flag where the CLI has one (claude/droid/pi:
 `--append-system-prompt`; grok: `--rules`); amp, codex, opencode, and cursor have none, so their builders
