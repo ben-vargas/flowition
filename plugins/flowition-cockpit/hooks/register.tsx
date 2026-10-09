@@ -104,9 +104,12 @@ let lastStatus: string | undefined
 // Set when this session launched a run whose id the tool output did not carry
 // (a backgrounded Bash call): the next new run created after it is attached.
 let attachNextSince: number | null = null
-// The handlers behind the desktop's button faces (button.tsx), by the face's key: each
-// render sets them, and a face's click (`ui.message` with `{ press }`) runs its own.
-const pressHandlers = new Map<string, () => unknown>()
+// The handlers behind the desktop's faces (button.tsx, card.tsx), by the face's key:
+// each render sets its own, stamped with the render's number, and a face's click
+// (`ui.message` with `{ press }`) runs the newest. Pruned at the end of a render (never
+// during one, which would strand faces it already drew), keeping the last two renders'.
+const pressHandlers = new Map<string, { fn: () => unknown; render: number }>()
+let renderCount = 0
 // Bumped by each message sent: part of the fields' keys, so a sent field draws empty.
 let sent = 0
 // The session's working directory: where a run started from the pane runs.
@@ -558,7 +561,7 @@ async function openLauncher($: EngineInterface): Promise<void> {
       sessionCwd = ''
     }
   }
-  await update($, launchAtom, () => ({ file: null, args: '', error: null }))
+  await update($, launchAtom, () => ({ file: null, args: '', error: null, query: '', limit: 20 }))
   const found: WorkflowFile[] = []
   const root = `${await ensureHome($)}/workflows`
   try {
@@ -669,11 +672,12 @@ export const register: Register = (on) => {
   // A face was clicked (button.tsx, card.tsx): run the handler its render registered.
   on('ui.message', async ($, e) => {
     const data = e.data !== null && typeof e.data === 'object' ? (e.data as { press?: unknown }) : {}
-    if (data.press === true) await pressHandlers.get(e.element)?.()
+    if (data.press === true) await pressHandlers.get(e.element)?.fn()
     return {}
   })
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
+    const render = ++renderCount
     try {
       const els = $.ui.resolve(e)
       const { Box, Text, Button, Markdown, Code } = els
@@ -689,8 +693,7 @@ export const register: Register = (on) => {
       // what it draws, so a long title would push the badge out of the card).
       const face = (key: string, props: CardProps, onPress: () => unknown, fallback: () => ReturnType<typeof Box>) => {
         if (!Client) return fallback()
-        if (pressHandlers.size > 500) pressHandlers.clear()
-        pressHandlers.set(key, onPress)
+        pressHandlers.set(key, { fn: onPress, render })
         return (
           <Box flexGrow={1} flexShrink={1} minWidth={0}>
             <Client key={key} module="./card.tsx" props={props} width="100%" />
@@ -701,8 +704,7 @@ export const register: Register = (on) => {
       // column (a Client alone is as wide as what it draws, and would spill out).
       const btn = (key: string, label: string, onPress: () => unknown, variant: ButtonFaceProps['variant'] = 'secondary', fill = false) => {
         if (Client) {
-          if (pressHandlers.size > 500) pressHandlers.clear()
-          pressHandlers.set(key, onPress)
+          pressHandlers.set(key, { fn: onPress, render })
           return fill ? (
             <Box flexGrow={1} flexShrink={1} minWidth={0}>
               <Client key={key} module="./button.tsx" props={{ label, variant }} width="100%" />
@@ -1329,6 +1331,8 @@ export const register: Register = (on) => {
       if (launch) {
         return launchView(c, launch, workflows, sessionCwd || 'this session’s folder', {
           pick: (file) => update($, launchAtom, (l) => (l ? { ...l, file, error: null } : l)),
+        filter: (query) => update($, launchAtom, (l) => (l ? { ...l, query, limit: 20 } : l)),
+        more: () => update($, launchAtom, (l) => (l ? { ...l, limit: l.limit + 20 } : l)),
           args: (text) => update($, launchAtom, (l) => (l ? { ...l, args: text } : l)),
           start: () => startRun($),
           close: () => update($, launchAtom, () => null),
@@ -1469,7 +1473,7 @@ export const register: Register = (on) => {
       const els = $.ui.resolve(e)
       const { Box, Text, Button } = els
       const recover = () => select($, null)
-      pressHandlers.set('recover', recover)
+      pressHandlers.set('recover', { fn: recover, render: renderCount })
       return (
         <Box flexDirection="column" gap={1}>
           <Text color="error" wrap="wrap">
@@ -1482,6 +1486,8 @@ export const register: Register = (on) => {
           )}
         </Box>
       )
+    } finally {
+      for (const [key, h] of pressHandlers) if (h.render < render - 1) pressHandlers.delete(key)
     }
   })
 }

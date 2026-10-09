@@ -44,7 +44,9 @@ const PANE = (surface: 'terminal' | 'desktop') =>
   }) as const
 
 const ok = (stdout: string) => ({ value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } })
-const entry = (name: string, kind: 'file' | 'dir') => ({ name, kind, size: 1, mtimeMs: 5, isLink: false })
+const entry = (name: string, kind: 'file' | 'dir', mtimeMs = 5) => ({ name, kind, size: 1, mtimeMs, isLink: false })
+// More workflows than the form lists at first: the filter and Show more must reach them all.
+const MANY = Array.from({ length: 25 }, (_, i) => entry(`wf-${String(i).padStart(2, '0')}.workflow.mjs`, 'file'))
 
 test('log, structure, filters, search, new run, resume and delete', async ($, on) => {
   const calls: string[] = []
@@ -52,7 +54,7 @@ test('log, structure, filters, search, new run, resume and delete', async ($, on
   mock.env(on, { HOME: '/home/t', FLOWITION_HOME: '/home/t/.flowition', FLOWITION_BIN: '/bin/flowition', PATH: '/usr/bin' })
   on('fs.stat', ($, e) => ({ value: { kind: 'file', size: e.path.endsWith('events.jsonl') ? EVENTS.length : 0, mtimeMs: 1, isLink: false } }))
   on('fs.list', ($, e) => ({
-    value: e.path === '/home/t/.flowition/workflows' ? [entry('demo', 'dir')] : e.path.endsWith('/workflows/demo') ? [entry('broken.workflow.mjs', 'file')] : [],
+    value: e.path === '/home/t/.flowition/workflows' ? [entry('demo', 'dir')] : e.path.endsWith('/workflows/demo') ? [entry('broken.workflow.mjs', 'file', 10), ...MANY] : [],
   }))
   on('ui.open', () => ({ value: { isPlaced: true } }))
   on('ui.panes', () => ({ value: [] }))
@@ -124,8 +126,20 @@ test('log, structure, filters, search, new run, resume and delete', async ($, on
     expect(calls).toContain('rm flo_bad --json')
     expect(await has('new')).toBe(true)
 
-    // New run: pick a workflow, start it, land on its run.
+    // Many redraws later, every control still answers its first press.
+    for (let k = 0; k < 6; k++) await press(k % 2 ? 'filter:all' : 'filter:completed')
+
+    // New run: every workflow is reachable (a filter, then Show more), then pick, start.
     await press('new')
+    const wfKey = (name: string) => (isDesktop ? `wf:/home/t/.flowition/workflows/demo/${name}` : `wf-pick:/home/t/.flowition/workflows/demo/${name}`)
+    expect(await has(wfKey('wf-24.workflow.mjs'))).toBe(false)
+    expect(await has('launch-more')).toBe(true)
+    await ui.input({ key: 'launch-filter', text: 'wf-24', kind: 'change' })
+    expect(await has(wfKey('wf-24.workflow.mjs'))).toBe(true)
+    expect(await has(wfKey('wf-03.workflow.mjs'))).toBe(false)
+    await ui.input({ key: 'launch-filter', text: '', kind: 'change' })
+    await press('launch-more')
+    expect(await has(wfKey('wf-24.workflow.mjs'))).toBe(true)
     await press(isDesktop ? `wf:${WF}` : `wf-pick:${WF}`)
     expect(await ui.find({ text: /full permissions in \/home\/t\/proj/ })).toBeDefined()
     calls.length = 0

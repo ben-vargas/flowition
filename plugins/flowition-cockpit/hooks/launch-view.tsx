@@ -7,17 +7,28 @@ import type { FlowitionCockpitWorkflowFile as WorkflowFile } from '../types'
 import type { Ctx } from './ctx'
 import { fmtAge } from './lib'
 
-export type LaunchState = { file: string | null; args: string; error: string | null }
+export type LaunchState = { file: string | null; args: string; error: string | null; query: string; limit: number }
 
 export function launchView(
   c: Ctx,
   launch: LaunchState,
   workflows: WorkflowFile[],
   cwd: string,
-  actions: { pick: (file: string) => unknown; args: (text: string) => unknown; start: () => unknown; close: () => unknown },
+  actions: {
+    pick: (file: string) => unknown
+    filter: (query: string) => unknown
+    more: () => unknown
+    args: (text: string) => unknown
+    start: () => unknown
+    close: () => unknown
+  },
 ): RenderElement {
   const { Box, Text, Input } = c
   const chosen = workflows.find((w) => w.path === launch.file)
+  // Every workflow is reachable: a filter by name or project, then more on request.
+  const q = (launch.query ?? '').trim().toLowerCase()
+  const matching = q ? workflows.filter((w) => `${w.project}/${w.name}`.toLowerCase().includes(q)) : workflows
+  const shown = matching.slice(0, launch.limit ?? 20)
   return (
     <Box key="launch" flexDirection="column" gap={1} width="100%">
       <Box gap={1} alignItems="center">
@@ -27,7 +38,13 @@ export function launchView(
       <Box flexDirection="column">
         <Text bold>Workflow</Text>
         {workflows.length ? null : <Text dimColor>No workflow files under ~/.flowition/workflows yet.</Text>}
-        {workflows.slice(0, 20).map((w) => {
+        {Input && workflows.length > 10 ? (
+          <Box marginTop={1}>
+            <Input key="launch-filter" placeholder="Filter workflows" onInput={(text) => actions.filter(text)} onSubmit={(text) => actions.filter(text)} />
+          </Box>
+        ) : null}
+        {q && !matching.length ? <Text dimColor>No workflow matches “{launch.query}”.</Text> : null}
+        {shown.map((w) => {
           const isChosen = w.path === launch.file
           return (
             <Box
@@ -44,6 +61,12 @@ export function launchView(
             </Box>
           )
         })}
+        {matching.length > shown.length ? (
+          <Box gap={1} alignItems="center" marginTop={1}>
+            {c.btn('launch-more', 'Show more', actions.more)}
+            <Text dimColor>{matching.length - shown.length} more</Text>
+          </Box>
+        ) : null}
       </Box>
       {chosen ? (
         <Box key="launch-form" flexDirection="column" gap={1}>
