@@ -156,7 +156,9 @@ const namedByGroup = new Map<number, { names: Set<string>; foreground: Map<strin
 const pendingResumes: { runId: string; since: number; wasLive: boolean; size: number | null }[] = []
 // Runs a launch's output may have named (a status JSON line inside a foreground run's
 // result): attached only once listed as created since the command began, a new run.
-const pendingNamed: { runId: string; since: number }[] = []
+// It must also be one of the command's own launches: a new-run launch of its workflow
+// (`candidates`, by file) that the runs the output named (`certain`) do not account for.
+const pendingNamed: { runId: string; since: number; known: Set<string>; group: number; candidates: (string | null)[]; certain: string[] }[] = []
 let launchGroup = 0
 // Each attach (a launch, a resume, a re-attach) takes the next generation; a poll that
 // began before a run's generation neither writes nor announces anything for that run,
@@ -399,12 +401,30 @@ async function refresh($: EngineInterface, force = false): Promise<void> {
     for (let i = 0; i < pendingNamed.length; ) {
       const p = pendingNamed[i] as (typeof pendingNamed)[number]
       const listed = list.find((r) => r.runId === p.runId)
-      if (listed && listed.file !== '?' && listed.createdAt >= p.since) {
-        pendingNamed.splice(i, 1)
-        if (!attached.includes(p.runId)) attached = [...attached, p.runId]
-        await attach($, p.runId)
-      } else if ((listed && listed.file !== '?') || now - p.since > 120_000) pendingNamed.splice(i, 1)
-      else i++
+      const certainFiles = p.certain.map((id) => list.find((r) => r.runId === id)?.file)
+      // Wait until it and the runs the output named are listed with their workflows.
+      if (!listed || listed.file === '?' || certainFiles.some((f) => f === undefined || f === '?')) {
+        if (now - p.since > 120_000) pendingNamed.splice(i, 1)
+        else i++
+        continue
+      }
+      pendingNamed.splice(i, 1)
+      // Listed before the command, or created before it: a run the result refers to.
+      if (p.known.has(p.runId) || listed.createdAt < p.since) continue
+      // The command's launches its named runs did not account for: one must be this run's.
+      const remaining = [...p.candidates]
+      for (const f of certainFiles) {
+        const at = remaining.indexOf(f as string)
+        const loose = at >= 0 ? at : remaining.indexOf(null)
+        if (loose >= 0) remaining.splice(loose, 1)
+      }
+      if (!remaining.includes(listed.file) && !remaining.includes(null)) continue
+      // Its launch is accounted for now: a discovery record kept for it goes too.
+      const record = pendingLaunches.findIndex((r) => r.group === p.group && r.file === listed.file)
+      const loose = record >= 0 ? record : pendingLaunches.findIndex((r) => r.group === p.group && r.file === null)
+      if (loose >= 0) pendingLaunches.splice(loose, 1)
+      if (!attached.includes(p.runId)) attached = [...attached, p.runId]
+      await attach($, p.runId)
     }
     // A resume runs when its run turns live having not been, or its events grow.
     for (let i = 0; i < pendingResumes.length; ) {
@@ -1089,10 +1109,15 @@ export const register: Register = (on) => {
     // command text shows); the output's own lines are the evidence they ran.
     const { ids: named, doubtful } = launchIdsIn(output)
     for (const runId of named) await attach($, runId)
-    if (isOk) for (const runId of doubtful) pendingNamed.push({ runId, since: startedAt - 1000 })
+    // A failing exit does not mean nothing ran (a workflow that fails exits 1 after its
+    // outcome): doubtful ids and resumes are judged on their own evidence either way.
+    const group = ++launchGroup
+    const fresh = launches.filter((l) => l.target === null)
+    const certain = named.filter((id) => !resumeIds.includes(id))
+    for (const runId of doubtful) if (!resumeIds.includes(runId)) pendingNamed.push({ runId, since: startedAt - 1000, known, group, candidates: fresh.map((l) => l.file), certain })
     // A resume the output did not name waits for evidence it ran.
-    const targets = isBash && isOk ? resumeIds : []
-    for (const r of resumeFrom) if (isBash && isOk && !named.includes(r.runId)) pendingResumes.push({ ...r, since: startedAt - 1000 })
+    const targets = isBash ? resumeIds : []
+    for (const r of resumeFrom) if (isBash && !named.includes(r.runId)) pendingResumes.push({ ...r, since: startedAt - 1000 })
     // New runs whose ids the output does not carry (launches Bash backgrounded report none
     // until they end) arm the fallback, one record each; a failed launch, or an MCP error,
     // arms none.
@@ -1101,8 +1126,6 @@ export const register: Register = (on) => {
     // the output named are attached already, which discovery skips, and a record nothing
     // matches expires.
     if (isBash && isOk) {
-      const group = ++launchGroup
-      const fresh = launches.filter((l) => l.target === null)
       const unnamed = fresh.filter((l) => isBackgrounded || l.isBackground)
       const namedNew = named.filter((id) => !targets.includes(id))
       for (const l of unnamed) pendingLaunches.push({ since: startedAt - 1000, known, file: l.file, group })

@@ -1,6 +1,7 @@
 // Regressions from the gpt-6-astra (xhigh) review loop, round 14: Astra's reproductions, as written,
-// except that the mixed-format A15 harness lists its launched runs created during the command, as
-// the real CLI does (createdAt is the evidence that separates a launched run from one a report names).
+// except that the mixed-format A15 harness lists its launched runs created during the command and
+// with their own workflow files, as the real CLI does (the evidence that separates a launched run
+// from one a report names).
 // Round 11 scratch reproductions. All process, filesystem and Bash responses are mocked.
 import { expect, mock, test } from 'claude-code/testing'
 import type { On } from 'claude-code'
@@ -89,7 +90,7 @@ for(const hasResult of [true,false])test(`A15 later foreground JSON outcome has 
  w.output='\nrun flo_first: completed\nReport first\n'+JSON.stringify({runId:'flo_second',status:'completed',result:hasResult?'Report second':undefined})+'\n'
  w.toolResult={stdout:w.output,stderr:'',interrupted:false}
  await $.tool.call({tool:'Bash',command:'flowition run first.mjs --quiet && flowition run second.mjs --json'})
- w.states={flo_first:'completed',flo_second:'completed'};w.created={flo_first:100_000,flo_second:100_000};w.mtime++
+ w.states={flo_first:'completed',flo_second:'completed'};w.created={flo_first:100_000,flo_second:100_000};w.files={flo_first:'first.mjs',flo_second:'second.mjs'};w.mtime++
  await clock.advance(30_000);await ui.press({key:'refresh'})
  expect(w.toasts.filter(t=>t==='flo_first completed')).toHaveLength(1)
  expect(w.toasts.filter(t=>t==='flo_second completed')).toHaveLength(1)
