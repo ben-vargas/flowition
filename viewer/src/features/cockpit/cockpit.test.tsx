@@ -139,11 +139,17 @@ describe('the show-args disclosure (§13 Q4)', () => {
     expect(document.body.textContent).not.toContain('flowition')
 
     reveal()
-    await waitFor(() => expect(argsFn).toHaveBeenCalledTimes(1))
+    // Wait for the RENDERED value, not for the call: the read starts synchronously inside
+    // the click, so "called" is already true on waitFor's first check, while the value
+    // only lands after the promise settles and React commits it. Asserting the panel then
+    // raced that commit (CI caught it mid-flight, showing 'reading args…').
+    await waitFor(() =>
+      expect(screen.getByRole('region', { name: /Run arguments/ }).textContent)
+        .toContain('"repo": "flowition"'))
+    expect(screen.getByRole('region', { name: /Run arguments/ }).textContent).toContain('"depth": 3')
+    // ...and once it has fully settled, it was read exactly once, for this run.
+    expect(argsFn).toHaveBeenCalledTimes(1)
     expect(argsFn.mock.calls[0]![0]).toBe(LIVE_RUN.runId)
-    const panel = screen.getByRole('region', { name: /Run arguments/ })
-    expect(panel.textContent).toContain('"repo": "flowition"')
-    expect(panel.textContent).toContain('"depth": 3')
 
     // Close and reopen: args are written once at admission, so a second look must not
     // manufacture a second `args-read` audit line (§5.4.1).

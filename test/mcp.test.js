@@ -1,6 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
+import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
 import { execFile, spawn, spawnSync } from 'node:child_process'
@@ -402,6 +403,43 @@ test('deriveRunState: the result-less branch honors run.lock and classifies earl
 
   // bare dir: no attempt ever ran — stays unknown
   assert.equal((await deriveRunState(mkdir('bare'))).state, 'unknown')
+})
+
+test('deriveRunState: an engine that finishes DURING the derivation reads as its result, never stale', async (t) => {
+  // The derivation is not one atomic snapshot: result.json is read first and run.lock
+  // last, with the control-socket probe (up to 300ms) — and, on a loaded machine, any
+  // reader preemption — in between. The mock basic workflow runs lock → result in ~15ms,
+  // so a whole run fits in that window: the engine closes its socket, writes result.json
+  // (finalize), THEN releases run.lock. A reader that saw "no result" and then "no lock,
+  // journal present" called a COMPLETED run stale — CI's `flowition result --wait`
+  // failure in cli.test.js. Here the "engine" completes on the reader's probe connection,
+  // which pins the interleaving instead of hoping a scheduler produces it.
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), 'flowition-finish-race-'))
+  t.after(() => fs.rmSync(base, { recursive: true, force: true }))
+  const dir = path.join(base, 'run')
+  fs.mkdirSync(dir)
+  const lockPath = path.join(dir, 'run.lock')
+  const sockPath = path.join(dir, 'control.sock')
+  // an engine past its journal's meta record but not yet at its first heartbeat
+  fs.writeFileSync(lockPath, JSON.stringify({ pid: process.pid, startedAt: Date.now() }))
+  fs.writeFileSync(path.join(dir, 'journal.jsonl'), JSON.stringify({ t: 1, type: 'meta', runId: 'flo_finish_race' }) + '\n')
+  const result = { runId: 'flo_finish_race', status: 'completed', result: 7 }
+  let probes = 0
+  const server = net.createServer((conn) => {
+    probes++
+    // the engine's own teardown order (src/engine.js runWorkflow): control.close()
+    // unlinks the socket, finalize() writes result.json, the finally releases the lock
+    fs.unlinkSync(sockPath)
+    server.close()
+    fs.writeFileSync(path.join(dir, 'result.json'), JSON.stringify(result))
+    fs.unlinkSync(lockPath)
+    conn.destroy() // the process exits; the probe is never answered
+  })
+  await new Promise((resolve, reject) => server.once('error', reject).listen(sockPath, resolve))
+  t.after(() => server.close())
+
+  assert.deepEqual(await deriveRunState(dir), { state: 'completed', result })
+  assert.equal(probes, 1, 'the derivation probed the live engine mid-run')
 })
 
 test('cli: detached resume preflights the journal before creating a run directory', async (t) => {
