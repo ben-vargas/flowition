@@ -185,7 +185,7 @@ declare module 'claude-code' {
       /** Recent's folded groups of repeated runs that are open, by group key. */
       openGroups: string[]
       /** The new-run form, while it shows: the chosen workflow and its args. */
-      launch: { file: string | null; args: string; error: string | null; query: string; limit: number } | null
+      launch: { file: string | null; args: string; error: string | null; query: string; limit: number; isStarting?: boolean } | null
       workflows: FlowitionCockpitWorkflowFile[]
       /** Set when the run list leaves older history out: what it shows of how many. */
       listNote: string | null

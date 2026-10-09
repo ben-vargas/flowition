@@ -2,7 +2,7 @@
 // on the code before its fix.
 import { expect, mock, test } from 'claude-code/testing'
 import type { On } from 'claude-code'
-import { boundDetails, boundTimeline, emptyTimeline, filterRuns, foldTimeline, lifetimeWorkers, parseStatus, parseTimeline, RUNS_FILTER_JS, STATUS_SLIM_JS, statusLine, transitions } from './lib'
+import { appendEvents, boundDetails, boundTimeline, emptyTimeline, runDuration, filterRuns, foldTimeline, lifetimeWorkers, parseStatus, parseTimeline, RUNS_FILTER_JS, STATUS_SLIM_JS, statusLine, transitions } from './lib'
 
 type World = { states: Record<string, string>; listFails: boolean; transcriptFails: boolean; transcriptGrowth: number; calls: string[]; submitted: string[] }
 
@@ -967,7 +967,7 @@ test('R6-F18: a long thread draws its newest reply and its controls, saying what
   const { w } = world4(on)
   w.states.flo_a = 'running'
   w.agents = [{ index: 0, label: 'a', adapter: 'claude', state: 'running' }]
-  w.transcript = lines([{ t: 1, kind: 'meta', prompt: 'p' }, ...Array.from({ length: 20 }, (_, i) => ({ t: 2 + i, kind: 'text', text: `reply ${i}: `.padEnd(6000, 'x') })), { t: 30, kind: 'text', text: 'LATEST REPLY' }])
+  w.transcript = lines([{ t: 1, kind: 'meta', prompt: 'p' }, ...Array.from({ length: 20 }, (_, i) => [{ t: 2 + i, kind: 'text', text: `reply ${i}: `.padEnd(6000, 'x') }, { t: 2 + i, kind: 'status', text: `turn ${i} done` }]).flat(), { t: 30, kind: 'text', text: 'LATEST REPLY' }])
   await $.command.run(flo('flo_a'))
   const ui = await $.ui.mount(PANE('terminal'))
   await ui.press({ key: 'agent:0' })
@@ -1320,4 +1320,156 @@ test('P2: a phase with more agents than the tab draws still spans every one of t
   // The last agent (ending 10 minutes in) is past the tab's drawing budget, not its span.
   expect(await ui.find({ text: /^400 agents · 10m 00s/ })).toBeDefined()
   await ui.unmount()
+})
+
+// ---- Astra (gpt-6-astra xhigh) round 1 ---------------------------------------------
+
+function deferred() {
+  let resolve!: () => void
+  const promise = new Promise<void>((r) => {
+    resolve = r
+  })
+  return { promise, resolve }
+}
+
+function astra(on: On) {
+  const clock = mock.clock(on, { now: 100_000 })
+  const w = {
+    states: { flo_live: 'running' } as Record<string, string>,
+    toasts: [] as string[],
+    startGate: null as ReturnType<typeof deferred> | null,
+    statusGate: null as ReturnType<typeof deferred> | null,
+    entered: null as ReturnType<typeof deferred> | null,
+    starts: 0,
+    transcript: '',
+    events: '',
+    agents: [] as object[],
+  }
+  mock.env(on, { HOME: '/home/t', FLOWITION_HOME: '/home/t/.flowition', FLOWITION_BIN: '/bin/flowition', PATH: '/usr/bin' })
+  on('session.start', ($, e) => ({ cwd: e.cwd }))
+  on('command.register', ($, e) => ({ value: { command: e.name } }))
+  on('fs.stat', ($, e) => ({ value: { kind: 'file', size: e.path.includes('/agents/') ? w.transcript.length : e.path.endsWith('events.jsonl') ? w.events.length : 0, mtimeMs: 1, isLink: false } }))
+  on('fs.list', ($, e) => ({ value: e.path.endsWith('/workflows') ? [{ name: 'demo.workflow.mjs', kind: 'file' as const, size: 1, mtimeMs: 1, isLink: false }] : [] }))
+  on('ui.open', () => ({ value: { isPlaced: true } }))
+  on('ui.panes', () => ({ value: [] }))
+  on('ui.status', () => ({ value: undefined }))
+  on('ui.toast', ($, e) => {
+    w.toasts.push(e.text)
+    return { value: undefined }
+  })
+  on('ui.scroll', () => ({}))
+  on('ui.log', () => ({ value: undefined }))
+  on('tool.call', { tool: 'Bash' }, () => ({ result: 'mock detached launch', text: 'started detached run flo_new' }))
+  on('process.run', async ($, e) => {
+    const args = e.argv.slice(1).join(' ')
+    if (e.argv[0] === 'pwd') return ok('/home/t')
+    if (e.argv[0] === '/bin/sh') {
+      const from = Number(e.argv[4]) - 1
+      return ok((e.argv[5]?.includes('/agents/') ? w.transcript : w.events).slice(from, from + Number(e.argv[6])))
+    }
+    if (args === 'runs --json') return ok(JSON.stringify(Object.entries(w.states).map(([runId, state]) => ({ runId, state, file: 'demo.workflow.mjs', createdAt: 1000 }))))
+    if (args.startsWith('status ')) {
+      const runId = e.argv[2] as string
+      if (runId === 'flo_live' && w.statusGate) {
+        w.entered?.resolve()
+        await w.statusGate.promise
+      }
+      return ok(JSON.stringify({ runId, state: w.states[runId], result: null, phases: [], agents: w.agents, steps: [], questions: [], live: null }))
+    }
+    if (args.startsWith('run ')) {
+      const n = ++w.starts
+      w.entered?.resolve()
+      if (w.startGate) await w.startGate.promise
+      w.states[`flo_started_${n}`] = 'running'
+      return ok(JSON.stringify({ runId: `flo_started_${n}`, detached: true, status: 'started' }))
+    }
+    return ok('{"ok":true}')
+  })
+  return { w, clock }
+}
+const DEMO = '/home/t/.flowition/workflows/demo.workflow.mjs'
+
+for (const surface of ['terminal', 'desktop'] as const) {
+  test(`A1: a second Start while the first launch is pending starts nothing more (${surface})`, async ($, on) => {
+    const { w, clock } = astra(on)
+    await $.command.run(flo(''))
+    const ui = await $.ui.mount(PANE(surface))
+    const press = async (key: string) => {
+      if (surface === 'terminal') return ui.press({ key })
+      await ui.pointer({ in: key, type: 'down', x: 1, y: 0, button: 'left' })
+      await ui.pointer({ in: key, type: 'up', x: 1, y: 0, button: 'left' })
+    }
+    await press('new')
+    await press(surface === 'terminal' ? `wf-pick:${DEMO}` : `wf:${DEMO}`)
+    w.startGate = deferred()
+    w.entered = deferred()
+    const first = press('launch-start')
+    await w.entered.promise
+    const second = press('launch-start')
+    await clock.settle()
+    const pending = [w.starts, (await ui.find({ key: 'launch-start' }))?.props.label]
+    w.startGate.resolve()
+    await Promise.all([first, second])
+    expect(pending).toEqual([1, surface === 'terminal' ? 'Starting…' : undefined])
+    expect(w.starts).toBe(1)
+    await ui.unmount()
+  })
+}
+
+test('A2: a poll in flight never erases a run attached meanwhile, so its end is still announced', async ($, on) => {
+  const { w } = astra(on)
+  await $.command.run(flo('flo_live'))
+  const ui = await $.ui.mount(PANE('terminal'))
+  w.statusGate = deferred()
+  w.entered = deferred()
+  const refreshing = ui.press({ key: 'refresh' })
+  await w.entered.promise
+  await $.tool.call({ tool: 'Bash', command: 'flowition run demo.workflow.mjs --detach' })
+  w.states.flo_new = 'completed'
+  w.statusGate.resolve()
+  await refreshing
+  w.statusGate = null
+  await ui.press({ key: 'refresh' })
+  expect(w.toasts.filter((t) => t.includes('flo_new') && t.includes('completed'))).toHaveLength(1)
+  await ui.unmount()
+})
+
+test('A3: an ended run took from its start to its last run event, not its last agent; with none recorded, unknown', () => {
+  const run = { runId: 'flo_x', state: 'completed', file: 'demo.workflow.mjs', createdAt: 1000 }
+  const detail = parseStatus(JSON.stringify({ runId: 'flo_x', state: 'completed', result: { status: 'completed', result: 'ok' }, agents: [{ index: 0, state: 'done', t: 2000 }], steps: [], questions: [], phases: [] }), 700_000)
+  // An operator answered ask() ten minutes after the last agent finished.
+  const tl = foldTimeline(emptyTimeline('flo_x'), lines([{ t: 1000, type: 'run', state: 'started' }, { t: 1000, type: 'agent', index: 0, state: 'running' }, { t: 2000, type: 'agent', index: 0, state: 'done' }, { t: 601_000, type: 'run', state: 'completed' }]))
+  expect(runDuration(run, detail, 700_000, tl)).toBe(600_000)
+  // A crashed (stale) run recorded no end: unknown, not its last agent's time.
+  const stale = foldTimeline(emptyTimeline('flo_x'), lines([{ t: 1000, type: 'run', state: 'started' }, { t: 2000, type: 'agent', index: 0, state: 'done' }]))
+  expect(runDuration({ ...run, state: 'stale' }, { ...detail, state: 'stale' }, 700_000, stale)).toBeNull()
+})
+
+test('A4: a quiet live run on screen keeps its Elapsed moving on the poll timer alone', async ($, on) => {
+  const { clock } = astra(on)
+  await $.session.start({ cwd: '/home/t', surface: 'terminal', isInteractive: true })
+  await $.command.run(flo('flo_live'))
+  const ui = await $.ui.mount(PANE('terminal'))
+  await clock.advance(1000)
+  const before = (await ui.find({ key: 't:time' }))?.text
+  await clock.advance(30_000)
+  expect((await ui.find({ key: 't:time' }))?.text).not.toBe(before)
+  await ui.unmount()
+})
+
+test('A5: streamed text fragments read as one reply, and a long one keeps its newest part', async ($, on) => {
+  const { w } = astra(on)
+  w.agents = [{ index: 0, label: 'OpenCode', adapter: 'opencode', state: 'running' }]
+  w.transcript = lines(['Hello', ' **world', '**.'].map((text, i) => ({ t: i + 1, kind: 'text', text })))
+  await $.command.run(flo('flo_live'))
+  const ui = await $.ui.mount(PANE('terminal'))
+  await ui.press({ key: 'agent:0' })
+  expect((await ui.findAll({ type: 'Markdown' })).map((m) => m.text)).toEqual(['Hello **world**.'])
+  await ui.unmount()
+  // Across reads, and past the cap: one event, its newest text kept.
+  const ev = (seq: number, text: string, kind = 'text') => ({ seq, t: seq, kind, text, name: null, summary: null, input: null, output: null, isError: false, toolId: null, toolUseId: null, redacted: false, attempt: null })
+  const joined = appendEvents([ev(0, 'a'.repeat(15_000))], [ev(1, 'b'.repeat(10_000)), ev(2, 'END')])
+  expect([joined.length, joined[0]?.text?.endsWith('END'), joined[0]?.text?.startsWith('[… ')]).toEqual([1, true, true])
+  // An attempt boundary or another kind is never joined over.
+  expect(appendEvents([ev(0, 'x')], [ev(1, null as unknown as string, 'attempt'), ev(2, 'y')]).length).toBe(3)
 })

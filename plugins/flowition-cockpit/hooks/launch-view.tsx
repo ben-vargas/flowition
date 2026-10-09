@@ -7,7 +7,7 @@ import type { FlowitionCockpitWorkflowFile as WorkflowFile } from '../types'
 import type { Ctx } from './ctx'
 import { fmtAge } from './lib'
 
-export type LaunchState = { file: string | null; args: string; error: string | null; query: string; limit: number }
+export type LaunchState = { file: string | null; args: string; error: string | null; query: string; limit: number; isStarting?: boolean }
 
 export function launchView(
   c: Ctx,
@@ -89,7 +89,7 @@ export function launchView(
             Its agents run with full permissions in {cwd}, detached: the run goes on if this session ends.
           </Text>
           <Box gap={1}>
-            {c.btn('launch-start', `Start ${chosen.name}`, actions.start, 'primary')}
+            {c.btn('launch-start', launch.isStarting ? 'Starting…' : `Start ${chosen.name}`, actions.start, 'primary')}
             {c.btn('launch-cancel', 'Cancel', actions.close)}
           </Box>
         </Box>

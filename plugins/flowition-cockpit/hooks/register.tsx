@@ -50,6 +50,7 @@ import {
   boundDetails,
   boundTimeline,
   clipDraw,
+  clipTail,
   newestWithin,
   firstWithin,
   TAB_BUDGET,
@@ -61,6 +62,7 @@ import {
   readStatus,
   staleDetailIds,
   parseTranscript,
+  appendEvents,
   phaseGroups,
   placeholder,
   progress,
@@ -129,6 +131,8 @@ let mustList = true
 let isBusy = false
 let isAgain = false
 let lastStatus: string | undefined
+// When a live run on screen was last redrawn for its clock alone (see refresh).
+let lastClockDraw = 0
 // Set when this session launched a run whose id the tool output did not carry
 // (a backgrounded Bash call): the next new run created after it is attached.
 let attachNextSince: number | null = null
@@ -359,7 +363,7 @@ async function refresh($: EngineInterface, force = false): Promise<void> {
       if (fresh) {
         attachNextSince = null
         attached = [...attached, fresh.runId]
-        await update($, attachedAtom, () => attached)
+        await update($, attachedAtom, (all) => (all.includes(fresh.runId) ? all : [...all, fresh.runId]))
         await update($, selectedAtom, () => fresh.runId)
       } else if (now - since > 120_000) {
         attachNextSince = null
@@ -371,6 +375,9 @@ async function refresh($: EngineInterface, force = false): Promise<void> {
     const watched = new Set([...attached, ...wake])
     const selected = await read($, selectedAtom)
     const details: Record<string, Detail> = { ...(await read($, detailsAtom)) }
+    // What the cache held when this poll began: a detail added since (attach() during a
+    // status read) is kept when this poll writes its own, never erased by it.
+    const snapshotIds = new Set(Object.keys(details))
     const ids = new Set(list.filter((r) => isLive(r.state)).map((r) => r.runId))
     // A watched run is polled until it ends: a detached launch reads `unknown` until it
     // writes its journal, and is not done.
@@ -436,7 +443,14 @@ async function refresh($: EngineInterface, force = false): Promise<void> {
       }
     }
     await write(async () => (sameJson(list, await read($, runsAtom)) ? undefined : update($, runsAtom, () => list)))
-    await write(async () => (sameJson(kept, await read($, detailsAtom)) ? undefined : update($, detailsAtom, () => kept)))
+    const withAdded = (cur: Record<string, Detail>) => {
+      const added = Object.entries(cur).filter(([id]) => !snapshotIds.has(id) && !(id in kept))
+      return added.length ? { ...kept, ...Object.fromEntries(added) } : kept
+    }
+    await write(async () => {
+      const cur = await read($, detailsAtom)
+      return sameJson(withAdded(cur), cur) ? undefined : update($, detailsAtom, (latest) => withAdded(latest))
+    })
     await write(async () => ((await read($, listNoteAtom)) === listNote ? undefined : update($, listNoteAtom, () => listNote)))
     const shownError = listError ?? writeError
     await write(async () => ((await read($, errorAtom)) === shownError ? undefined : update($, errorAtom, () => shownError)))
@@ -445,6 +459,14 @@ async function refresh($: EngineInterface, force = false): Promise<void> {
     if (status !== lastStatus) {
       lastStatus = status
       $.ui.status(status)
+    }
+    // A live run on screen redraws every few seconds even when nothing it shows changed
+    // (polls write only what changed), so its Elapsed keeps time while it waits or works
+    // quietly.
+    const shownState = selected ? (details[selected]?.state ?? list.find((r) => r.runId === selected)?.state) : undefined
+    if (shownState && isLive(shownState) && now - lastClockDraw >= 5_000) {
+      lastClockDraw = now
+      $.ui.invalidate('ui.render')
     }
 
 
@@ -568,7 +590,7 @@ async function refreshThread($: EngineInterface, now: number): Promise<void> {
   if (ran.exitCode !== 0) return
   const { body, consumed } = sliceLines(ran.stdout, offset, size, isAligned)
   const fresh = parseTranscript(body, (events[events.length - 1]?.seq ?? -1) + 1)
-  events = [...events, ...fresh]
+  events = appendEvents(events, fresh)
   if (events.length > MAX_EVENTS) {
     events = events.slice(-MAX_EVENTS)
     isPartial = true
@@ -785,7 +807,22 @@ async function openLauncher($: EngineInterface): Promise<void> {
 }
 
 /** Starts the chosen workflow, detached, and opens its run. */
+// A launch in flight: claimed before anything is awaited, so a second press (a double
+// click, Enter again) while the CLI starts the run is turned away, never a second run.
+let isLaunching = false
+
 async function startRun($: EngineInterface): Promise<void> {
+  if (isLaunching) return
+  isLaunching = true
+  try {
+    await launchOnce($)
+  } finally {
+    isLaunching = false
+    await update($, launchAtom, (l) => (l?.isStarting ? { ...l, isStarting: false } : l))
+  }
+}
+
+async function launchOnce($: EngineInterface): Promise<void> {
   const launch = await read($, launchAtom)
   if (!launch?.file) return
   const args = launch.args.trim()
@@ -797,6 +834,7 @@ async function startRun($: EngineInterface): Promise<void> {
       return
     }
   }
+  await update($, launchAtom, (l) => (l ? { ...l, isStarting: true, error: null } : l))
   const ran = await flo($, ['run', launch.file, ...(args ? ['--args', args] : []), '--detach', '--json'], 30_000).catch((err: unknown) => ({
     exitCode: 1,
     stdout: '',
@@ -1018,7 +1056,7 @@ export const register: Register = (on) => {
             case 'text':
               return (
                 <Box key={key} flexDirection="column">
-                  <Markdown key={`md:${ev.seq}`} text={clipDraw(ev.text ?? '')} />
+                  <Markdown key={`md:${ev.seq}`} text={clipTail(ev.text ?? '')} />
                 </Box>
               )
             case 'reasoning': {
@@ -1179,7 +1217,7 @@ export const register: Register = (on) => {
         const agents = workers.filter((w) => w.kind === 'agent')
         const counts = progress(workers)
         const done = counts.find((c) => c.tone === 'success')?.count ?? 0
-        const took = runDuration(run, d, now)
+        const took = runDuration(run, d, now, timeline)
         const isWoken = wake.includes(selected)
 
         const tile = (key: string, label: string, value: string) => (

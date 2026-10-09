@@ -343,11 +343,14 @@ export const fmtTokens = (n: number): string =>
 export const fmtCost = (c: number): string => (c < 0.01 ? '<$0.01' : `$${c.toFixed(2)}`)
 
 /** How long the run took (or has taken): from its creation to its last agent event. */
-export function runDuration(run: Run | undefined, d: Detail | undefined, now: number): number | null {
+export function runDuration(run: Run | undefined, d: Detail | undefined, now: number, tl?: Timeline | null): number | null {
   if (!run?.createdAt) return null
   if (d && isLive(d.state)) return now - run.createdAt
-  const last = Math.max(0, ...(d?.workers.map((w) => w.lastAt ?? 0) ?? []))
-  return last > run.createdAt ? last - run.createdAt : null
+  // Ended: from its first start to its last terminal run event, as its events record
+  // them (work after the last agent, an operator's answer, counts). A run that ended
+  // with none recorded (crashed: stale) has no known duration, not its last agent's.
+  if (tl && tl.runId === run.runId && tl.endedAt !== null) return tl.endedAt - (tl.startedAt ?? run.createdAt)
+  return null
 }
 
 /** The status line: live runs and waiting questions, or nothing when all is quiet. */
@@ -516,6 +519,9 @@ export const QUESTIONS_BUDGET = 20_000
 /** A text as drawn: at most `n` characters, saying how many more there are. */
 export const clipDraw = (s: string, n = DRAW_ITEM): string => clip(s, n)
 
+/** A text's newest `n` characters, saying how many earlier ones are left out: for a reply that streams. */
+export const clipTail = (s: string, n = DRAW_ITEM): string => (s.length > n ? `[… ${s.length - n} earlier chars] ${s.slice(-n)}` : s)
+
 /** The first items whose drawn size fits `budget` (always the first one), and how many later ones are left out. */
 export function firstWithin<T>(items: T[], size: (item: T) => number, budget: number): { shown: T[]; hidden: number } {
   const { shown, hidden } = newestWithin([...items].reverse(), size, budget)
@@ -600,6 +606,26 @@ export function parseTranscript(text: string, seq: number): ThreadEvent[] {
       redacted: r.redacted === true,
       attempt: num(r.attempt) ?? num(r.n),
     })
+  }
+  return out
+}
+
+/**
+ * A thread's events with a read's new ones appended: adjacent text (or reasoning)
+ * fragments, which streaming adapters write a piece at a time, join into one, as the
+ * viewer's transcript does, so a sentence or a code fence reads whole and fragments do
+ * not use up the thread's window. An attempt boundary is an event, so never joined over.
+ */
+export function appendEvents(events: ThreadEvent[], fresh: ThreadEvent[]): ThreadEvent[] {
+  const out = [...events]
+  for (const ev of fresh) {
+    const prior = out[out.length - 1]
+    if (prior && prior.kind === ev.kind && (ev.kind === 'text' || ev.kind === 'reasoning')) {
+      // A joined reply keeps its newest part when long: it is what a live thread follows.
+      out[out.length - 1] = { ...prior, t: ev.t, text: clipTail(`${prior.text ?? ''}${ev.text ?? ''}`, 20_000), redacted: prior.redacted || ev.redacted }
+      continue
+    }
+    out.push(ev)
   }
   return out
 }
