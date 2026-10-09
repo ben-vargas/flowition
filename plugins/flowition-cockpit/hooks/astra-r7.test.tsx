@@ -67,7 +67,7 @@ for(const switchRun of [false,true])test(`An answer submitted for A cannot land 
  const gate=deferred(),entered=deferred()
  on('ui.input',async($,e,next)=>{if(e.kind==='submit'){entered.resolve();await gate.promise};return next(e)})
  await $.command.run(flo('flo_a'));const ui=await $.ui.mount(PANE('terminal'))
- const input=ui.input({key:'answer:q0:0',text:'Answer intended for A'})
+ const input=ui.input({key:'answer:q0:0:flo_a:1000',text:'Answer intended for A'})
  await entered.promise
  if(switchRun){await $.command.run(flo('flo_b'));await ui.redraw()}
  gate.resolve();await input.catch(err=>{if(!switchRun)throw err})

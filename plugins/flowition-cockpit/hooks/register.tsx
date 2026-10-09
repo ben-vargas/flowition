@@ -1788,7 +1788,9 @@ export const register: Register = (on) => {
                     </Text>
                     {!q.isOpen ? null : Input ? (
                       <Input
-                        key={`answer:${q.qid}:${sent}`}
+                        // The field is this run's and this question event's: a draft typed
+                        // for one run never stays in a field another run's question reuses.
+                        key={`answer:${q.qid}:${sent}:${selected}:${q.t ?? ''}`}
                         placeholder="Type an answer…"
                         submitLabel="Answer"
                         onSubmit={(text) => answer($, selected, q.qid, text)}
