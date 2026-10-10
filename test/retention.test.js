@@ -795,6 +795,41 @@ for (const [phase, when] of [['holds its lock', 'beforeCommit'], ['has moved the
   })
 }
 
+test('resume vs delete: a delete that finishes between a failed claim and its check still hands the run over', async () => {
+  // The resume's claim fails on the delete's lock; the delete releases it before the
+  // resume checks whether one is in progress. That check now says no, and the failed
+  // claim saw a state that no longer holds: one more claim must decide, not the error.
+  const runId = 'flo_rwf'
+  const p = runWorkflow({ file: fx('cancel.workflow.js'), defaults: { adapter: 'mock', cwd: process.cwd() }, runId, quiet: true })
+  await until(async () => (await controlRequest(sockOf(runId), { cmd: 'status' }).catch(() => null))?.ok)
+  await controlRequest(sockOf(runId), { cmd: 'cancel' })
+  assert.equal((await p).status, 'interrupted')
+
+  const lockPath = path.join(runDir(runId), 'run.lock')
+  fs.writeFileSync(lockPath, JSON.stringify({ pid: process.pid, startedAt: Date.now(), op: 'delete' }))
+  // The delete releases its lock the moment the claim has read it.
+  const read = fs.readFileSync
+  fs.readFileSync = function (file, ...rest) {
+    const out = read.call(this, file, ...rest)
+    if (file === lockPath) {
+      fs.readFileSync = read
+      fs.unlinkSync(lockPath)
+    }
+    return out
+  }
+  let resumed
+  try {
+    resumed = runWorkflow({ file: fx('cancel.workflow.js'), defaults: { adapter: 'mock', cwd: process.cwd() }, resumeId: runId, quiet: true })
+      .then((outcome) => outcome.status, (err) => String(err.message))
+    await until(async () => (await controlRequest(sockOf(runId), { cmd: 'status' }).catch(() => null))?.ok || typeof (await Promise.race([resumed, null])) === 'string')
+  } finally {
+    fs.readFileSync = read
+  }
+  await controlRequest(sockOf(runId), { cmd: 'cancel' }).catch(() => null)
+  assert.equal(await resumed, 'interrupted', 'the resume took the run once the delete was gone')
+  fs.rmSync(runDir(runId), { recursive: true, force: true })
+})
+
 test('resume vs delete: a marker installed DURING the under-lock state check still wins', async () => {
   // The seam the two tests above cannot reach, and the one that was open: the marker
   // baseline used to be snapshotted AFTER the under-lock `deriveRunState()`.
