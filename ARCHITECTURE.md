@@ -335,7 +335,11 @@ Run dir: `$FLOWITION_HOME/runs/<flo_id>/` (default `~/.flowition`):
 
 - `run.lock` — exclusive per-run lock (pid-stamped, stale locks from dead
   processes are reclaimed). Two engines can never execute the same run
-  concurrently; the lock is held until `result.json` is written.
+  concurrently; the lock is held until `result.json` is written. A delete's
+  lock is marked `op: "delete"`: a resume that finds the run under it, or
+  moved into the trash with it (a resume launched into the delete's commit
+  window, which the delete then rolls back), waits up to 15s for the delete
+  to finish instead of exiting, and takes the run if it comes back.
 - `journal.jsonl` — resume log: `meta` (fileHash/graphHash/args/seed/defaults/
   budgetTotal/keyVersion), `started`, `session` (provider session id per agent
   key), `usage-cum` (running-total usage snapshots: the provider thread's

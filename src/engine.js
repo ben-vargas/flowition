@@ -5,7 +5,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import crypto from 'node:crypto'
 import { pathToFileURL, fileURLToPath } from 'node:url'
-import { acquireRunLock as acquireLock, RunLockError } from './run-lock.js'
+import { acquireRunLock as acquireLock, deleteInProgress, DELETE_WAIT_MS, RunLockError } from './run-lock.js'
 import { Journal } from './journal.js'
 import { EventSink } from './events.js'
 import { Semaphore } from './semaphore.js'
@@ -14,7 +14,7 @@ import { AgentJob, AgentError, DEFAULT_STALL_MS } from './agent-proc.js'
 import { serveControl } from './control.js'
 import { getAdapter } from './adapters/index.js'
 import * as K from './keys.js'
-import { sha256, canonical, ensureDir, runDir, shortId, truncate, assertJsonValue } from './util.js'
+import { sha256, canonical, ensureDir, runDir, shortId, trashDir, truncate, assertJsonValue } from './util.js'
 import { validate } from './schema.js'
 import { loadSeedSource } from './seed.js'
 
@@ -52,6 +52,43 @@ function acquireRunLock(dir, { resuming = false, runId = null } = {}) {
       throw new WorkflowError(`run ${runId ?? path.basename(dir)} disappeared while the resume was starting — it was deleted`)
     }
     throw err
+  }
+}
+
+/**
+ * Takes ownership of the run's directory: its lock, after a resume has found the
+ * directory in place (a new run creates it). While a delete is in progress on the run, a
+ * resume retries (up to DELETE_WAIT_MS) instead of exiting: see settleDelete.
+ */
+async function claimRun(dir, runId, isResume) {
+  const deadline = Date.now() + DELETE_WAIT_MS
+  for (;;) {
+    try {
+      // A RESUME never creates anything under runs/<id> — not the run dir, not scratch —
+      // before it owns the run (DESIGN §7.3.3). A recursive ensureDir here would resurrect
+      // `runs/<id>` in the instant after retention has renamed it into the trash, so the
+      // delete's rollback would find the name taken and fail: the real journal stranded in
+      // trash, a stub at the original path. Requiring the directory to already exist makes
+      // the delete's rename the only linearization point, exactly as run-lock.js documents.
+      if (isResume) {
+        let st = null
+        try { st = fs.lstatSync(dir) } catch { /* gone or never existed */ }
+        if (!st?.isDirectory()) throw new WorkflowError(`run ${runId} does not exist — nothing to resume`)
+      } else {
+        ensureDir(dir, 0o700)
+      }
+      // Run dirs made by older flowition versions (or a launcher racing an inherited umask) may
+      // sit at 0755 — tighten best-effort at the ownership point, before the lock.
+      try { fs.chmodSync(dir, 0o700) } catch { /* non-posix fs */ }
+      // The lock comes before ANY journal read: even the strict loader's torn-tail
+      // repair must never touch a journal another engine is actively writing. It is also
+      // where a resume takes ownership — a lock write into a directory that moved fails
+      // with ENOENT rather than recreating it, so the delete still wins that ordering.
+      return acquireRunLock(dir, { resuming: isResume, runId })
+    } catch (err) {
+      if (!isResume || Date.now() >= deadline || !deleteInProgress(dir, trashDir(), runId)) throw err
+      await new Promise((resolve) => setTimeout(resolve, 50))
+    }
   }
 }
 
@@ -571,27 +608,7 @@ export async function runWorkflow(opts) {
   let dir
   try { dir = runDir(runId) } catch (err) { throw new WorkflowError(err.message) }
   const scratch = path.join(dir, 'scratch')
-  // A RESUME never creates anything under runs/<id> — not the run dir, not scratch —
-  // before it owns the run (DESIGN §7.3.3). A recursive ensureDir here would resurrect
-  // `runs/<id>` in the instant after retention has renamed it into the trash, so the
-  // delete's rollback would find the name taken and fail: the real journal stranded in
-  // trash, a stub at the original path. Requiring the directory to already exist makes
-  // the delete's rename the only linearization point, exactly as run-lock.js documents.
-  if (opts.resumeId) {
-    let st = null
-    try { st = fs.lstatSync(dir) } catch { /* gone or never existed */ }
-    if (!st?.isDirectory()) throw new WorkflowError(`run ${runId} does not exist — nothing to resume`)
-  } else {
-    ensureDir(dir, 0o700)
-  }
-  // Run dirs made by older flowition versions (or a launcher racing an inherited umask) may
-  // sit at 0755 — tighten best-effort at the ownership point, before the lock.
-  try { fs.chmodSync(dir, 0o700) } catch { /* non-posix fs */ }
-  // The lock comes before ANY journal read: even the strict loader's torn-tail
-  // repair must never touch a journal another engine is actively writing. It is also
-  // where a resume takes ownership — a lock write into a directory that moved fails
-  // with ENOENT rather than recreating it, so the delete still wins that ordering.
-  const runLock = acquireRunLock(dir, { resuming: Boolean(opts.resumeId), runId })
+  const runLock = await claimRun(dir, runId, Boolean(opts.resumeId))
   // Ownership established: now the run's working directories may be (re)created.
   ensureDir(scratch, 0o700)
   try { fs.chmodSync(scratch, 0o700) } catch { /* non-posix fs */ }

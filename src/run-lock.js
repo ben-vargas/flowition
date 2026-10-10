@@ -48,6 +48,11 @@ const pidStartedAfter = (pid, lockStartedAt) => {
   } catch { return false }
 }
 
+// A lock retention's delete holds says so (`op: 'delete'`), so a resume that finds the
+// run held, or moved into the trash, can tell a delete in its commit window — which ends
+// in moments, and may roll back to hand the run over — from an engine that owns the run.
+export const DELETE_OP = 'delete'
+
 /**
  * Exclusive per-run lock: two engines on one run dir would interleave journal
  * writes and duplicate provider side effects, and a delete racing either would
@@ -59,11 +64,11 @@ const pidStartedAfter = (pid, lockStartedAt) => {
  * @returns {{path: string, stillOurs: () => boolean, release: () => void}}
  * @throws {RunLockError} on every refusal; raw fs errors on unexpected IO failure.
  */
-export function acquireRunLock(dir) {
+export function acquireRunLock(dir, { op = null } = {}) {
   const lockPath = path.join(dir, 'run.lock')
   for (let attempt = 0; attempt < 10; attempt++) {
     try {
-      const body = JSON.stringify({ pid: process.pid, startedAt: Date.now() })
+      const body = JSON.stringify({ pid: process.pid, startedAt: Date.now(), ...(op ? { op } : {}) })
       fs.writeFileSync(lockPath, body, { flag: 'wx' })
       // Exact-bytes identity. Only the writer of these bytes can match them, so a
       // holder that reads its own body back knows the lock is still its own — which
@@ -123,6 +128,41 @@ export function acquireRunLock(dir) {
     }
   }
   throw new RunLockError('could not acquire run lock', 'exhausted')
+}
+
+/**
+ * Whether a delete is in progress on a run: a `run.lock` at the run's directory `dir`,
+ * or in one of its entries under `trashRoot` (`<runId>.<stamp>…`, where the lock travels
+ * with a committing delete), written by retention, by a live process, within the last
+ * minute. A delete holds its lock for its checks and commit, a moment, so anything older
+ * is not one in progress.
+ */
+export function deleteInProgress(dir, trashRoot, runId) {
+  let entries = []
+  try { entries = fs.readdirSync(trashRoot).filter((n) => n.startsWith(`${runId}.`)).map((n) => path.join(trashRoot, n)) } catch { /* no trash yet */ }
+  for (const d of [dir, ...entries]) {
+    let holder = null
+    try { holder = JSON.parse(fs.readFileSync(path.join(d, 'run.lock'), 'utf8')) } catch { continue }
+    const age = Date.now() - (typeof holder?.startedAt === 'number' ? holder.startedAt : 0)
+    if (holder?.op === DELETE_OP && holder.pid != null && pidAlive(holder.pid) && age < 60_000) return true
+  }
+  return false
+}
+
+// How long a resume waits for a delete in progress on its run to finish.
+export const DELETE_WAIT_MS = 15_000
+
+/**
+ * Waits, at most `ms`, while a delete is in progress on the run. A resume can be launched
+ * into a delete's commit window (§7.3.3): its launcher installed `.resuming` after the
+ * delete's checks and before its rename, so the delete will find the marker and roll
+ * back, but until then the resume finds the run in the trash or under the delete's lock.
+ * Waiting it out lets a delete that rolls back hand the run over; one that commits
+ * leaves it gone, which the resume reports as before.
+ */
+export async function settleDelete(dir, trashRoot, runId, ms = DELETE_WAIT_MS) {
+  const deadline = Date.now() + ms
+  while (Date.now() < deadline && deleteInProgress(dir, trashRoot, runId)) await new Promise((resolve) => setTimeout(resolve, 50))
 }
 
 // ─── the resume handoff ─────────────────────────────────────────────────────────

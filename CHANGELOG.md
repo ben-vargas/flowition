@@ -5,6 +5,12 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- A resume accepted while a delete of the same run was committing no longer fails quietly. The launcher accepts it by installing `.resuming` after the delete's checks and before its rename, and the delete then rolls back, but an engine that started before the rollback finished found the run in the trash ("no journal") or under the delete's lock ("already being executed") and exited, so the accepted resume never ran. A delete's lock is now marked as such, and a resume waits (up to 15s) while a delete is in progress on its run, then takes the run if the delete rolled back; if the delete committed, it fails as before.
+
 ## [0.8.0] — 2026-10-09
 
 ### Added

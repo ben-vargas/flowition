@@ -8,6 +8,7 @@ export const shortId = (prefix) => prefix + '_' + crypto.randomBytes(4).toString
 
 export const home = () => process.env.FLOWITION_HOME || path.join(os.homedir(), '.flowition')
 export const runsDir = () => path.join(home(), 'runs')
+export const trashDir = () => path.join(home(), 'trash')
 // Run ids become path components under the flowition home: a crafted id with path
 // separators (--run-id ../../victim) would point the engine's destructive prep
 // (scratch sweep, result.json unlink) OUTSIDE the home. This is the single
