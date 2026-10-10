@@ -397,14 +397,21 @@ async function refresh($: EngineInterface, force = false): Promise<void> {
     // that was not listed before it and is not attached, preferring its own workflow file:
     // never a run another session started just before.
     // A doubtful id is a launch only if its run was created since its command began.
+    // A command's doubtful ids are judged in the order its output named them, each one
+    // taken using up its launch for the rest (they share the command's `certain` list).
+    const waiting = new Set<number>()
     for (let i = 0; i < pendingNamed.length; ) {
       const p = pendingNamed[i] as (typeof pendingNamed)[number]
       const listed = list.find((r) => r.runId === p.runId)
       const certainFiles = p.certain.map((id) => list.find((r) => r.runId === id)?.file)
-      // Wait until it and the runs the output named are listed with their workflows.
-      if (!listed || listed.file === '?' || certainFiles.some((f) => f === undefined || f === '?')) {
+      // Wait until it and the runs the output named are listed with their workflows, and
+      // the command's earlier doubtful ids are judged.
+      if (waiting.has(p.group) || !listed || listed.file === '?' || certainFiles.some((f) => f === undefined || f === '?')) {
         if (now - p.since > 120_000) pendingNamed.splice(i, 1)
-        else i++
+        else {
+          waiting.add(p.group)
+          i++
+        }
         continue
       }
       pendingNamed.splice(i, 1)
@@ -423,6 +430,7 @@ async function refresh($: EngineInterface, force = false): Promise<void> {
       const record = pendingLaunches.findIndex((r) => r.group === p.group && r.file === listed.file)
       const loose = record >= 0 ? record : pendingLaunches.findIndex((r) => r.group === p.group && r.file === null)
       if (loose >= 0) pendingLaunches.splice(loose, 1)
+      p.certain.push(p.runId)
       if (!attached.includes(p.runId)) attached = [...attached, p.runId]
       await attach($, p.runId)
     }
