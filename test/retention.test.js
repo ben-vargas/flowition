@@ -616,6 +616,27 @@ async function reapResumer(runId, ms = 8000) {
   return pid
 }
 
+// Run a shipped launcher whose detached engine must not start until the returned
+// `open()`: the spawn is preloaded with fixtures/spawn-gate.cjs, which parks the child
+// before any flowition code runs. Only that spawn inherits the hold — detachRun passes
+// `process.env` at spawn time, and both variables are restored before this returns.
+let gates = 0
+async function launchHeld(launch) {
+  const gate = path.join(HOME, `spawn-gate-${++gates}`)
+  const saved = { NODE_OPTIONS: process.env.NODE_OPTIONS, FLOWITION_TEST_GATE: process.env.FLOWITION_TEST_GATE }
+  process.env.NODE_OPTIONS = [saved.NODE_OPTIONS, `--require ${JSON.stringify(fx('spawn-gate.cjs'))}`].filter(Boolean).join(' ')
+  process.env.FLOWITION_TEST_GATE = gate
+  try {
+    await launch()
+  } finally {
+    for (const [k, v] of Object.entries(saved)) {
+      if (v === undefined) delete process.env[k]
+      else process.env[k] = v
+    }
+  }
+  return () => fs.writeFileSync(gate, '')
+}
+
 test('resume vs delete: a resume launched INSIDE the commit window still wins', async () => {
   // The window the sequential test above cannot reach: the delete has passed every
   // guard — artifacts, containment, the lock, the final deriveRunState — and is about to
@@ -627,14 +648,26 @@ test('resume vs delete: a resume launched INSIDE the commit window still wins', 
   await controlRequest(sockOf(runId), { cmd: 'cancel' })
   assert.equal((await p).status, 'interrupted')
 
+  // The launch lands inside the window, but the engine it spawns is a separate process
+  // that boots while removeRun finishes its synchronous tail (audit → rename → diff →
+  // restore → release). An engine that reaches the run before that tail completes finds
+  // it in the trash ("no journal") or finds the delete's own lock, held by this live pid
+  // ("already being executed"), and exits — the engine does not retry — so the ownership
+  // check at the end timed out whenever this process was preempted for longer than a
+  // node boot (CI, node 18.17.1: `took ownership` false after 8 s; stalling this process
+  // 1.5 s right after the launch reproduces it every time). The engine is therefore held
+  // at process start until the delete has returned, which pins the interleaving this
+  // test means — launched inside the window, running after the delete lost — instead of
+  // hoping the scheduler produces it.
   const mark = auditMark()
   let accepted = false
+  let openGate = null
   await assert.rejects(
     removeRun(runId, {
       // A REAL detached resume through the shipped launcher — same code path the
       // viewer's POST /resume uses — driven into the contested window deterministically.
       beforeCommit: async () => {
-        await cli(['run', fx('cancel.workflow.js'), '--resume', runId, '--detach', '--json', '--adapter', 'mock'])
+        openGate = await launchHeld(() => cli(['run', fx('cancel.workflow.js'), '--resume', runId, '--detach', '--json', '--adapter', 'mock']))
         accepted = true
       },
     }),
@@ -651,7 +684,13 @@ test('resume vs delete: a resume launched INSIDE the commit window still wins', 
     { op: 'delete', runId, outcome: 'ok' },
     { op: 'delete', runId, outcome: 'rolled-back', reason: 'resume_raced' },
   ])
-  // the resume genuinely proceeds — the delete released the lock instead of holding it
+  // the delete released the lock instead of holding it — observable directly now, since
+  // the held engine cannot have touched run.lock yet — and the accepted handoff came back
+  // with the run
+  assert.ok(!fs.existsSync(path.join(runDir(runId), 'run.lock')), 'the delete released its lock')
+  assert.ok(fs.existsSync(path.join(runDir(runId), '.resuming')), 'the handoff marker survived the rollback')
+  // the resume genuinely proceeds: the engine launched inside the window takes the run
+  openGate()
   const pid = await reapResumer(runId)
   assert.ok(pid != null, 'the resumed engine took ownership of the run')
   fs.rmSync(runDir(runId), { recursive: true, force: true })
