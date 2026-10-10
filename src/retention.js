@@ -13,7 +13,7 @@
 // accept deletes a user's data. Where a check could go either way it refuses.
 import fs from 'node:fs'
 import path from 'node:path'
-import { home, runsDir, runDir, ensureDir, trashDir } from './util.js'
+import { runsDir, runDir, ensureDir, trashDir } from './util.js'
 import { deriveRunState, listRunIds } from './run-state.js'
 import { acquireRunLock as acquireLock, DELETE_OP, resumeMarks, RunLockError } from './run-lock.js'
 import { appendAudit } from './viewer/audit.js'
