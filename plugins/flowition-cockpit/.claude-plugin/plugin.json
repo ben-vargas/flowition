@@ -1,0 +1,11 @@
+{
+  "name": "flowition-cockpit",
+  "version": "0.1.0",
+  "description": "Watch and steer flowition runs from Claude Code: a status line, a /flo pane with run cards, agent threads, timeline, phases, log and structure, and auto-attach to runs the session launches.",
+  "author": { "name": "Ben Vargas" },
+  "homepage": "https://github.com/ben-vargas/flowition/tree/main/plugins/flowition-cockpit",
+  "repository": "https://github.com/ben-vargas/flowition",
+  "license": "MIT",
+  "keywords": ["flowition", "agents", "workflow", "monitoring", "pane"],
+  "types": "./types/index.d.ts"
+}
