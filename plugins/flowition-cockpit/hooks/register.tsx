@@ -29,7 +29,6 @@ import {
   groupByDay,
   hasEnded,
   isActive,
-  isFlowitionLaunch,
   isLive,
   isTerminal,
   catchUpTimeline,
