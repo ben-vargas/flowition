@@ -240,6 +240,14 @@ describe('two roving lists, one keyboard (§2.7 × §3.6)', () => {
 
   it('moves only the rail on the rail\'s j/k — Home\'s cursor stays where it was', async () => {
     const { rows } = await mountShell()
+    // mountShell waits for the RAIL's rows, but the `j` below is aimed at HOME, whose table
+    // is a separate poll that can land a beat later — and even once its rows are painted,
+    // Home answers keys through a window listener React re-subscribes in a passive effect,
+    // after that commit. A `j` sent in either gap moves a cursor over `runs = []`, so Home
+    // stays on row 0 and the final Enter opens RUNS[0] (CI caught exactly that). Wait for
+    // the listener itself: it claims (preventDefault) `Home` only when it holds rows, and
+    // `Home` puts the cursor on row 0, where it starts anyway.
+    await waitFor(() => expect(fireEvent.keyDown(window, { key: 'Home' })).toBe(false))
     // Home's cursor: row 1, moved by a key aimed at the page (nothing focused).
     fireEvent.keyDown(window, { key: 'j' })
 
