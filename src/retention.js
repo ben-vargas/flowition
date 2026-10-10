@@ -13,9 +13,9 @@
 // accept deletes a user's data. Where a check could go either way it refuses.
 import fs from 'node:fs'
 import path from 'node:path'
-import { home, runsDir, runDir, ensureDir } from './util.js'
+import { home, runsDir, runDir, ensureDir, trashDir } from './util.js'
 import { deriveRunState, listRunIds } from './run-state.js'
-import { acquireRunLock as acquireLock, resumeMarks, RunLockError } from './run-lock.js'
+import { acquireRunLock as acquireLock, DELETE_OP, resumeMarks, RunLockError } from './run-lock.js'
 import { appendAudit } from './viewer/audit.js'
 
 // Trash entries survive a week (§7.3.4): "irreversible" becomes "recoverable for a week".
@@ -48,7 +48,7 @@ export class RetentionError extends Error {
 
 const refuse = (message, code, reason, runId) => { throw new RetentionError(message, { code, reason, runId }) }
 
-export const trashDir = () => path.join(home(), 'trash')
+export { trashDir }
 
 function hasRunArtifact(dir) {
   for (const name of RUN_ARTIFACTS) {
@@ -121,7 +121,8 @@ function resolveRunDir(runId) {
 //   contention → someone else reclaimed it first          → 409 conflict
 function acquireRunLock(dir, runId) {
   try {
-    return acquireLock(dir)
+    // Marked as a delete's: a resume launched into the commit window waits it out (engine.js).
+    return acquireLock(dir, { op: DELETE_OP })
   } catch (err) {
     if (err instanceof RunLockError) {
       const reason = err.code === 'live' ? 'live' : 'locked'

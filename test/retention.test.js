@@ -703,8 +703,9 @@ test('resume vs delete: a resume running INSIDE the post-rename window cannot re
   // `runs/<id>` (a recursive ensureDir before it owns the run) the rollback finds the
   // name taken, the real journal is stranded in trash and a stub is left behind.
   // §7.3.3 requires the rename to be the single linearization point: the resume finds
-  // no run directory and refuses, the delete rolls back, delete loses. Nobody wins by
-  // destroying anything.
+  // no run directory and, seeing the delete still in progress, waits without creating
+  // anything; the delete rolls back (delete loses) and the resume then takes the run.
+  // Nobody wins by destroying anything.
   const runId = 'flo_rwp'
   const p = runWorkflow({ file: fx('cancel.workflow.js'), defaults: { adapter: 'mock', cwd: process.cwd() }, runId, quiet: true })
   await until(async () => (await controlRequest(sockOf(runId), { cmd: 'status' }).catch(() => null))?.ok)
@@ -713,7 +714,8 @@ test('resume vs delete: a resume running INSIDE the post-rename window cannot re
   const journalBefore = fs.readFileSync(path.join(runDir(runId), 'journal.jsonl'), 'utf8')
 
   const mark = auditMark()
-  const attempts = []
+  let resumed = null
+  let launched = null
   let recreated = null
   await assert.rejects(
     removeRun(runId, {
@@ -723,23 +725,23 @@ test('resume vs delete: a resume running INSIDE the post-rename window cannot re
       // the run directory is in the trash at this instant. Advance the REAL resume —
       // the engine's own entry point, and the shipped detached launcher — through it.
       afterCommit: async () => {
-        attempts.push(await runWorkflow({ file: fx('cancel.workflow.js'), defaults: { adapter: 'mock', cwd: process.cwd() }, resumeId: runId, quiet: true })
-          .then(() => null, (err) => String(err.message)))
-        attempts.push(await cli(['run', fx('cancel.workflow.js'), '--resume', runId, '--detach', '--json', '--adapter', 'mock'])
-          .then(() => null, (err) => String(err.message)))
+        // the engine waits for the delete in progress rather than exiting or creating anything
+        resumed = runWorkflow({ file: fx('cancel.workflow.js'), defaults: { adapter: 'mock', cwd: process.cwd() }, resumeId: runId, quiet: true })
+          .then((outcome) => outcome.status, (err) => String(err.message))
+        // the detached launcher refuses before it spawns: there is no journal to resume
+        launched = await cli(['run', fx('cancel.workflow.js'), '--resume', runId, '--detach', '--json', '--adapter', 'mock'])
+          .then(() => null, (err) => String(err.message))
+        await new Promise((r) => setTimeout(r, 300))
         recreated = fs.existsSync(runDir(runId))
       },
     }),
     refusal('conflict', 'live'),
   )
 
-  // both resume paths refused, and said why, instead of resurrecting the directory
   assert.equal(recreated, false, 'no resume path recreated runs/<id> while the run was in the trash')
-  assert.deepEqual(attempts, [
-    `run ${runId} does not exist — nothing to resume`,        // the engine's own entry point
-    `no journal for run ${runId}`,                            // the detached launcher, refusing before it spawns
-  ])
+  assert.equal(launched, `no journal for run ${runId}`)
   // the delete rolled back cleanly: the original run is back, byte-for-byte, trash empty
+  // (read before this test yields to a timer, so the waiting resume has not taken it yet)
   assert.ok(fs.existsSync(runDir(runId)), 'the run is restored at its original path')
   assert.equal(fs.readFileSync(path.join(runDir(runId), 'journal.jsonl'), 'utf8'), journalBefore)
   assert.ok(fs.existsSync(path.join(runDir(runId), 'result.json')), 'the whole directory came back, not a stub')
@@ -748,8 +750,50 @@ test('resume vs delete: a resume running INSIDE the post-rename window cannot re
     { op: 'delete', runId, outcome: 'ok' },
     { op: 'delete', runId, outcome: 'rolled-back', reason: 'resume_raced' },
   ])
+  // ...and the resume that waited it out now owns the run
+  await until(async () => (await controlRequest(sockOf(runId), { cmd: 'status' }).catch(() => null))?.ok)
+  await controlRequest(sockOf(runId), { cmd: 'cancel' })
+  assert.equal(await resumed, 'interrupted')
   fs.rmSync(runDir(runId), { recursive: true, force: true })
 })
+
+// The production race behind the commit-window test above: the engine a launcher
+// spawned inside the window starts while the delete is still finishing, either before
+// its rename (it finds the delete's lock) or after it (it finds the run in the trash).
+// It must wait the delete out and take the run when it rolls back, not exit and leave
+// an accepted resume that never runs.
+for (const [phase, when] of [['holds its lock', 'beforeCommit'], ['has moved the run to the trash', 'afterCommit']]) {
+  test(`resume vs delete: an accepted resume starting while the delete ${phase} waits and takes the run`, async () => {
+    const runId = `flo_rw${when === 'beforeCommit' ? 'b' : 'a'}`
+    const p = runWorkflow({ file: fx('cancel.workflow.js'), defaults: { adapter: 'mock', cwd: process.cwd() }, runId, quiet: true })
+    await until(async () => (await controlRequest(sockOf(runId), { cmd: 'status' }).catch(() => null))?.ok)
+    await controlRequest(sockOf(runId), { cmd: 'cancel' })
+    assert.equal((await p).status, 'interrupted')
+
+    let openGate = null
+    // Give the started engine time to boot and reach the run (a node start, well under
+    // 1.5 s) while the delete cannot move on.
+    const runEngine = async () => {
+      openGate()
+      await new Promise((r) => setTimeout(r, 1500))
+    }
+    await assert.rejects(
+      removeRun(runId, {
+        beforeCommit: async () => {
+          openGate = await launchHeld(() => cli(['run', fx('cancel.workflow.js'), '--resume', runId, '--detach', '--json', '--adapter', 'mock']))
+          if (when === 'beforeCommit') await runEngine()
+        },
+        afterCommit: async () => {
+          if (when === 'afterCommit') await runEngine()
+        },
+      }),
+      refusal('conflict', 'live'),
+    )
+    const pid = await reapResumer(runId, 20_000)
+    assert.ok(pid != null, 'the resumed engine took ownership of the run')
+    fs.rmSync(runDir(runId), { recursive: true, force: true })
+  })
+}
 
 test('resume vs delete: a marker installed DURING the under-lock state check still wins', async () => {
   // The seam the two tests above cannot reach, and the one that was open: the marker

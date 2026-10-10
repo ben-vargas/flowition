@@ -7,10 +7,10 @@ import { Journal } from './journal.js'
 import { foldEvents, renderEvent } from './events.js'
 import { controlRequest } from './control.js'
 import { getAdapter, listAdapters } from './adapters/index.js'
-import { home, runDir, ensureDir, readJsonl, shortId, fmtDuration } from './util.js'
+import { home, runDir, ensureDir, readJsonl, shortId, fmtDuration, trashDir } from './util.js'
 import { deriveRunState, listRunIds } from './run-state.js'
 import { removeRun, pruneRuns, purgeTrash, RetentionError, TRASH_TTL_DAYS } from './retention.js'
-import { installResumeMarker, RunLockError } from './run-lock.js'
+import { installResumeMarker, RunLockError, settleDelete } from './run-lock.js'
 import { GUIDE } from './guide.js'
 import { ByteTail, drainTail } from './viewer/tail.js'
 
@@ -219,6 +219,9 @@ export async function main(argv) {
         // change agent keys; explicit conflicting overrides are rejected by the
         // engine's defaults check. (The detach path above skips this — the
         // detached child re-enters this command and merges here itself.)
+        // A detached launch's child lands here: wait out a delete still finishing on the
+        // run (it may roll back to hand the run over) before reading its journal.
+        await settleDelete(runDir(flags.resume), trashDir(), flags.resume)
         let meta = null
         try { meta = Journal.load(runDir(flags.resume)).meta } catch (err) { throw new WorkflowError(`cannot resume ${flags.resume}: ${err.message}`) }
         if (!meta) throw new WorkflowError(`no journal for run ${flags.resume}`)
@@ -275,6 +278,8 @@ export async function main(argv) {
       if (flags['seed-from'] != null) throw new WorkflowError('--seed-from applies to fresh runs only — this run\'s seed hits (if any) were materialized into its journal when it started and replay on resume')
       const concurrency = flags.concurrency != null ? integerOption(flags.concurrency, '--concurrency', 1) : undefined
       const budgetTotal = flags.budget != null ? integerOption(flags.budget, '--budget', 0) : undefined
+      // The MCP and viewer launchers' detached child lands here: as for `run --resume`.
+      await settleDelete(runDir(runId), trashDir(), runId)
       let prior
       try { prior = Journal.load(runDir(runId)) } catch (err) { throw new WorkflowError(`cannot resume ${runId}: ${err.message}`) }
       if (!prior.meta) { console.error(`no journal for run ${runId}`); return 1 }
