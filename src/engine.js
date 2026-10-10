@@ -58,10 +58,13 @@ function acquireRunLock(dir, { resuming = false, runId = null } = {}) {
 /**
  * Takes ownership of the run's directory: its lock, after a resume has found the
  * directory in place (a new run creates it). While a delete is in progress on the run, a
- * resume retries (up to DELETE_WAIT_MS) instead of exiting: see settleDelete.
+ * resume retries (up to DELETE_WAIT_MS) instead of exiting: see settleDelete. Once none
+ * is, one more claim decides, since a delete can finish between a failed claim and that
+ * check, and the claim that failed then saw a state that no longer holds.
  */
 async function claimRun(dir, runId, isResume) {
   const deadline = Date.now() + DELETE_WAIT_MS
+  let isFinal = false
   for (;;) {
     try {
       // A RESUME never creates anything under runs/<id> — not the run dir, not scratch —
@@ -86,8 +89,9 @@ async function claimRun(dir, runId, isResume) {
       // with ENOENT rather than recreating it, so the delete still wins that ordering.
       return acquireRunLock(dir, { resuming: isResume, runId })
     } catch (err) {
-      if (!isResume || Date.now() >= deadline || !deleteInProgress(dir, trashDir(), runId)) throw err
-      await new Promise((resolve) => setTimeout(resolve, 50))
+      if (!isResume || isFinal || Date.now() >= deadline) throw err
+      if (deleteInProgress(dir, trashDir(), runId)) await new Promise((resolve) => setTimeout(resolve, 50))
+      else isFinal = true
     }
   }
 }

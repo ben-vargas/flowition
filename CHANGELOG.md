@@ -5,6 +5,12 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- A resume could still exit when a delete in progress on its run finished between the resume's failed claim on the run and its check for a delete (#12's wait missed that gap). Once no delete is in progress, the resume now makes one more claim on the settled state before giving up.
+
 ## [0.8.1] — 2026-10-09
 
 ### Fixed
