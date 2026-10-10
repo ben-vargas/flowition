@@ -242,7 +242,7 @@ test('R2-F8: a status that cannot run for one run never stops another run\'s wak
   await ui.unmount()
 })
 
-test('R2-F2: a captured release one cell outside a confirmation does not fire it', async ($, on) => {
+test('R2-F2: a captured release off a confirmation (past its drawn border) does not fire it', async ($, on) => {
   const { w } = started(on)
   await $.command.run(flo('flo_live'))
   const ui = await $.ui.mount(PANE('desktop'))
@@ -253,8 +253,8 @@ test('R2-F2: a captured release one cell outside a confirmation does not fire it
   await click('cancel-run')
   w.calls.length = 0
   await ui.pointer({ in: 'cancel-run-yes', type: 'down', x: 1, y: 0, button: 'left' })
-  await ui.pointer({ in: 'cancel-run-yes', type: 'move', x: -1, y: 0, button: 'left' })
-  await ui.pointer({ in: 'cancel-run-yes', type: 'up', x: -1, y: 0, button: 'left' })
+  await ui.pointer({ in: 'cancel-run-yes', type: 'move', x: -2, y: 0, button: 'left' })
+  await ui.pointer({ in: 'cancel-run-yes', type: 'up', x: -2, y: 0, button: 'left' })
   expect(w.calls).not.toContain('cancel flo_live')
   await click('cancel-run-yes')
   expect(w.calls).toContain('cancel flo_live')

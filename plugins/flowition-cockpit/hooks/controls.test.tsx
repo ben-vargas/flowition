@@ -248,3 +248,20 @@ for (const surface of ['terminal', 'desktop'] as const) for (const state of ['fa
   expect(w.calls.filter((a) => a[1] === 'run' && a.includes('--resume'))).toHaveLength(1)
   await ui.unmount()
 })
+
+// The desktop draws a face's border and padding around the cells it counts (a chip is one
+// row): a click on the lower half of a chip reads row 1, and still presses it.
+test('a click on a chip\'s border or padding presses it', async ($, on) => {
+  const { w } = setup(on)
+  w.states = { flo_a: 'completed' }
+  await $.session.start({ cwd: '/home/t', surface: 'desktop', isInteractive: true })
+  await $.command.run(flo(''))
+  const ui = await $.ui.mount(PANE('desktop'))
+  const variants = async () => Object.fromEntries((await ui.findAll({ type: 'Client' })).filter((c) => String(c.key).startsWith('filter:')).map((c) => [String(c.key).slice(7), (c.props as { props: { variant: string } }).props.variant]))
+  for (const [key, x, y] of [['filter:live', 2, 1], ['filter:all', 4, 1], ['filter:completed', -1, 0]] as const) {
+    await ui.pointer({ in: key, type: 'down', x, y, button: 'left' })
+    await ui.pointer({ in: key, type: 'up', x, y, button: 'left' })
+    expect((await variants())[key.slice(7)]).toBe('primary')
+  }
+  await ui.unmount()
+})

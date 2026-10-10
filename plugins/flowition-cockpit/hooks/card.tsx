@@ -20,14 +20,17 @@ const Card: ClientModule<CardProps, CardState> = (props, surface) => {
   // the press (dragged away: cancelled, as a click is). Nothing waits on a redraw after
   // the `down` (a trackpad tap delivers down and up in one frame): the flag is set on
   // the state object the running listener holds, and stored for the next.
-  // Outside the region, as ClientPointerEvent defines it: a negative cell, or one at or
-  // past the region's laid-out size (unknown, 0, before the first layout).
+  // Off the face, for a captured move or release: the desktop draws a face's border and
+  // padding around the cells it counts (`columns` x `rows`: a chip is one row), so the
+  // face a person sees reaches a cell past them on every side, and only past that has
+  // the pointer left it (unknown sizes, 0 before the first layout, bound nothing).
   const isOutside = (x: number, y: number) =>
-    x < 0 || y < 0 || (surface.columns > 0 && x >= surface.columns) || (surface.rows > 0 && y >= surface.rows)
+    x < -1 || y < -1 || (surface.columns > 0 && x > surface.columns) || (surface.rows > 0 && y > surface.rows)
   surface.onPointer((e) => {
     if (e.type === 'enter') surface.setState({ ...state, isHover: true, isCancelled: false })
     else if (e.type === 'leave') surface.setState({ ...state, isHover: false, isCancelled: true })
-    else if (e.type === 'down' && e.button === 'left' && !isOutside(e.x, e.y)) {
+    else if (e.type === 'down' && e.button === 'left') {
+      // Delivered with nothing captured, a down is on the face, whatever cell it reads.
       state.isPressed = true
       state.isCancelled = false
       surface.setState({ isHover: true, isCancelled: false, isPressed: true })
