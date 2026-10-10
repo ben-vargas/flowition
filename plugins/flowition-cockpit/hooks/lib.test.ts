@@ -3,7 +3,8 @@ import { describe, expect, test } from 'claude-code/testing'
 
 import {
   deepLink,
-  extractRunId,
+  runIdsIn,
+  launchesIn,
   badgeSvg,
   fmtDuration,
   isFlowitionLaunch,
@@ -86,11 +87,24 @@ describe('launch detection', () => {
     expect(isFlowitionLaunch('overflo run')).toBe(false)
   })
 
-  test('reads the runId from detached text, --json and the foreground line', async () => {
-    expect(extractRunId('started detached run flo_ab12cd34\n  status: …')).toBe('flo_ab12cd34')
-    expect(extractRunId('{"runId":"my-audit","pid":1}')).toBe('my-audit')
-    expect(extractRunId('run flo_99\n…')).toBe('flo_99')
-    expect(extractRunId('nothing here')).toBe(null)
+  test('reads each launch off the command: its workflow, the run it resumes, whether & backgrounds it', async () => {
+    const of = (c: string) => launchesIn(c).map((l) => [l.kind, l.file, l.target, l.isBackground])
+    expect(of('flowition run review.workflow.mjs --detach --json')).toEqual([['run', 'review.workflow.mjs', null, false]])
+    expect(of(`flowition run --json --args '{"a":"b; c"}' "my dir/w.mjs" &`)).toEqual([['run', 'w.mjs', null, true]])
+    expect(of('flowition run w.mjs > out.log 2>&1 &')).toEqual([['run', 'w.mjs', null, true]])
+    expect(of('cd x && npx -y flowition resume flo_1 --json')).toEqual([['resume', null, 'flo_1', false]])
+    expect(of('timeout 600 flowition run w.mjs --resume=flo_2 --detach')).toEqual([['resume', null, 'flo_2', false]])
+    expect(of('for f in *.mjs; do flowition run "$f"; done')).toEqual([['run', null, null, false]])
+    expect(of('echo flowition run w.mjs')).toEqual([])
+  })
+
+  test('reads the runs a launch printed, not the ids a foreground result quotes', async () => {
+    expect(runIdsIn('started detached run flo_ab12cd34\n  status: …')).toEqual(['flo_ab12cd34'])
+    expect(runIdsIn('{"runId":"a1","detached":true}\n{"runId":"a2","detached":true}')).toEqual(['a1', 'a2'])
+    expect(runIdsIn('{"runId":"my-audit","pid":1}')).toEqual(['my-audit'])
+    expect(runIdsIn('run flo_99\n▶ run flo_99 — started\n\nrun flo_99: completed\nSee:\n▶ run flo_ref — failed\nrun flo_other: failed\n')).toEqual(['flo_99'])
+    expect(runIdsIn('\nrun flo_1: completed\n{"runId":"flo_ref","status":"failed"}')).toEqual(['flo_1'])
+    expect(runIdsIn('nothing here')).toEqual([])
   })
 })
 

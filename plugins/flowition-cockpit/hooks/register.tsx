@@ -18,7 +18,6 @@ import { structureView } from './structure-view'
 import {
   badgeSvg,
   deepLink,
-  extractRunId,
   filterRuns,
   foldRepeats,
   fmtAge,
@@ -39,13 +38,8 @@ import {
   laneSvg,
   laneText,
   parseRuns,
-  parseFilteredRuns,
   listNoteOf,
   keepRuns,
-  readLines,
-  RUNS_FILTER_JS,
-  RUNS_KEPT,
-  STATUS_SLIM_JS,
   lifetimeWorkers,
   reconcileWorkers,
   boundDetails,
@@ -66,9 +60,8 @@ import {
   parseTranscript,
   appendEvents,
   baselineOf,
-  launchIdsIn,
   launchesIn,
-  type Invocation,
+  runIdsIn,
   boundThread,
   phaseGroups,
   placeholder,
@@ -140,27 +133,9 @@ let isAgain = false
 let lastStatus: string | undefined
 // When a live run on screen was last redrawn for its clock alone (see refresh).
 let lastClockDraw = 0
-// Set when this session launched a run whose id the tool output did not carry
-// (a backgrounded Bash call): the next new run created after it is attached.
-// Launches Bash backgrounded (no id in their output yet), by when each began: each is
-// matched to its own new run as runs are listed, an unmatched one kept until it expires.
-const pendingLaunches: { since: number; known: Set<string>; file: string | null; group: number }[] = []
-// The runs a backgrounded command's output named (attached already) that no record has
-// been reconciled with yet, by command: once listed, each takes back the record of its
-// own workflow file, and until then that command's records match nothing.
-// `foreground`: the command's new-run launches it did not background, by file (''
-// for a file the shell expands), which named runs account for before any record.
-const namedByGroup = new Map<number, { names: Set<string>; foreground: Map<string, number> }>()
-// Resumes a command named on its command line: attached only on evidence the resume
-// ran (the run turns live having not been, or its events grow), never on syntax alone
-// (a branch that did not run, a resume that was refused).
-const pendingResumes: { runId: string; since: number; wasLive: boolean; size: number | null }[] = []
-// Runs a launch's output may have named (a status JSON line inside a foreground run's
-// result): attached only once listed as created since the command began, a new run.
-// It must also be one of the command's own launches: a new-run launch of its workflow
-// (`candidates`, by file) that the runs the output named (`certain`) do not account for.
-const pendingNamed: { runId: string; since: number; known: Set<string>; group: number; candidates: { file: string | null; isRepeated: boolean }[]; certain: string[] }[] = []
-let launchGroup = 0
+// Launches Bash backgrounded (no id in their output yet), by when each began: each takes
+// the next new run of its workflow as runs are listed; one nothing matches expires.
+const pendingLaunches: { since: number; known: Set<string>; file: string | null }[] = []
 // Each attach (a launch, a resume, a re-attach) takes the next generation; a poll that
 // began before a run's generation neither writes nor announces anything for that run,
 // so its notices start from the baseline attach() installed.
@@ -247,60 +222,6 @@ async function flo($: EngineInterface, args: string[], timeoutMs = 15_000): Prom
   throw failure
 }
 
-/** The environment a node program (lib's *_JS) runs in after the resolved CLI. */
-async function nodeEnv($: EngineInterface, js: string): Promise<Record<string, string>> {
-  const env: Record<string, string> = { FLOWITION_COCKPIT_JS: js }
-  if (bin?.includes('/')) env.PATH = `${dirname(bin)}:${(await $.env.get('PATH')) ?? '/usr/bin:/bin'}`
-  return env
-}
-
-// The filtered listing goes to a private temp file whose path and size come back; the
-// file is then read in chunks and removed.
-const LIST_TO_FILE =
-  'f=$(mktemp "${TMPDIR:-/tmp}/flowition-cockpit-runs.XXXXXX") || exit 1; ' +
-  'if "$0" runs --json | node -e "$FLOWITION_COCKPIT_JS" "$1" "$2" > "$f"; then printf "%s\\n" "$f"; wc -c < "$f"; else rm -f "$f"; exit 1; fi'
-
-/**
- * Every run, for a history too long for one `runs --json` read (over $.process.run's
- * 4 MiB stdout): every unfinished run, the newest RUNS_KEPT and this session's runs
- * (`attached`, however old), with the full count,
- * however many rows that is. Null when it cannot run: the caller falls back to the
- * newest rows it did read.
- */
-async function listLongHistory($: EngineInterface, attached: string[]): Promise<{ runs: Run[]; total: number | null; isComplete: boolean } | null> {
-  if (!bin) return null
-  let file = ''
-  try {
-    const made = await $.process.run(['/bin/sh', '-c', LIST_TO_FILE, bin, String(RUNS_KEPT), JSON.stringify(attached)], { env: await nodeEnv($, RUNS_FILTER_JS), timeoutMs: 60_000 })
-    const [path, size] = made.stdout.split('\n')
-    if (made.exitCode !== 0 || !path?.startsWith('/')) return null
-    file = path
-    const bytes = Number(size?.trim())
-    if (!Number.isSafeInteger(bytes)) return null
-    const read = await readLines(file, bytes, (argv) => $.process.run(argv, { timeoutMs: 10_000 }))
-    const out = parseFilteredRuns(read.lines)
-    return out.total === null ? null : { ...out, isComplete: read.isComplete }
-  } catch {
-    return null
-  } finally {
-    if (file) await $.process.run(['rm', '-f', file]).catch(() => undefined)
-  }
-}
-
-/**
- * A status too large to read whole (a huge completed result) read again without the
- * result's value, so its workers and totals still show. Null when that is not possible.
- */
-async function slimStatus($: EngineInterface, runId: string): Promise<ProcessRunResult | null> {
-  if (!bin) return null
-  try {
-    const ran = await $.process.run(['/bin/sh', '-c', '"$0" status "$1" --json | node -e "$FLOWITION_COCKPIT_JS"', bin, runId], { env: await nodeEnv($, STATUS_SLIM_JS), timeoutMs: 30_000 })
-    return ran.exitCode === 0 && !ran.isStdoutTruncated ? ran : null
-  } catch {
-    return null
-  }
-}
-
 /** A control command (`send`, `answer`, `cancel`): its JSON reply, or why it failed. */
 async function control($: EngineInterface, args: string[]): Promise<{ ok: boolean; reply: Record<string, unknown>; error: string | null }> {
   try {
@@ -360,31 +281,10 @@ async function refresh($: EngineInterface, force = false): Promise<void> {
       try {
         const ran = await flo($, ['runs', '--json'])
         if (ran.exitCode !== 0) throw new Error(firstLine(ran.stderr) || `flowition runs exited ${ran.exitCode}`)
-        let all: Run[]
-        let total: number | null
-        let isComplete = true
-        if (ran.isStdoutTruncated) {
-          // Cut short, the listing holds only the newest rows: an older run still live
-          // would be missed, so the whole history is filtered down instead.
-          const long = await listLongHistory($, attached)
-          all = long ? long.runs : parseRuns(ran.stdout)
-          total = long ? long.total : null
-          isComplete = long?.isComplete ?? false
-          // A listing not read whole may lack this session's older runs: their last
-          // known rows stay (a complete listing without one means it was deleted).
-          if (total === null || !isComplete) {
-            const known = await read($, runsAtom)
-            const missing = known.filter((r) => attached.includes(r.runId) && !all.some((x) => x.runId === r.runId))
-            if (missing.length) all = [...all, ...missing].sort((a, b) => b.createdAt - a.createdAt)
-          }
-        } else {
-          all = parseRuns(ran.stdout)
-          total = all.length
-        }
-        // What the pane keeps of it ($.state holds 4 MiB a value), and says it left out.
-        const kept = keepRuns(all, attached)
-        list = kept.runs
-        listNote = listNoteOf(list.length, total, isComplete && !kept.isCut)
+        // A history over the 4 MiB stdout cap is read as its newest complete rows.
+        const all = parseRuns(ran.stdout)
+        list = keepRuns(all, attached)
+        listNote = listNoteOf(list.length, ran.isStdoutTruncated ? null : all.length)
         lastListAt = now
         runsDirMtime = mtime
         mustList = false
@@ -394,106 +294,17 @@ async function refresh($: EngineInterface, force = false): Promise<void> {
     }
 
     // Each backgrounded launch, oldest first, takes the oldest run created since it began
-    // that was not listed before it and is not attached, preferring its own workflow file:
-    // never a run another session started just before.
-    // A doubtful id is a launch only if its run was created since its command began.
-    // A command's doubtful ids are judged in the order its output named them, each one
-    // taken using up its launch for the rest (they share the command's `certain` list).
-    const waiting = new Set<number>()
-    for (let i = 0; i < pendingNamed.length; ) {
-      const p = pendingNamed[i] as (typeof pendingNamed)[number]
-      const listed = list.find((r) => r.runId === p.runId)
-      const certainFiles = p.certain.map((id) => list.find((r) => r.runId === id)?.file)
-      // Wait until it and the runs the output named are listed with their workflows, and
-      // the command's earlier doubtful ids are judged.
-      if (waiting.has(p.group) || !listed || listed.file === '?' || certainFiles.some((f) => f === undefined || f === '?')) {
-        if (now - p.since > 120_000) pendingNamed.splice(i, 1)
-        else {
-          waiting.add(p.group)
-          i++
-        }
-        continue
-      }
-      pendingNamed.splice(i, 1)
-      // Listed before the command, or created before it: a run the result refers to.
-      if (p.known.has(p.runId) || listed.createdAt < p.since) continue
-      // The command's launches its named runs did not account for: one must be this run's.
-      // A launch in a loop runs any number of times, so the runs it made never use it up.
-      const remaining = [...p.candidates]
-      for (const f of certainFiles) {
-        const own = remaining.findIndex((c) => c.file === f)
-        const at = own >= 0 ? own : remaining.findIndex((c) => c.file === null)
-        if (at >= 0 && !remaining[at]?.isRepeated) remaining.splice(at, 1)
-      }
-      if (!remaining.some((c) => c.file === listed.file || c.file === null)) continue
-      // Its launch is accounted for now: a discovery record kept for it goes too.
-      const record = pendingLaunches.findIndex((r) => r.group === p.group && r.file === listed.file)
-      const loose = record >= 0 ? record : pendingLaunches.findIndex((r) => r.group === p.group && r.file === null)
-      if (loose >= 0) pendingLaunches.splice(loose, 1)
-      p.certain.push(p.runId)
-      if (!attached.includes(p.runId)) attached = [...attached, p.runId]
-      await attach($, p.runId)
-    }
-    // A resume runs when its run turns live having not been, or its events grow.
-    for (let i = 0; i < pendingResumes.length; ) {
-      const p = pendingResumes[i] as (typeof pendingResumes)[number]
-      const listed = list.find((r) => r.runId === p.runId)
-      // Ordinary progress of an attempt already running is no evidence: a new attempt is
-      // (the run turning live having not been, or a run-resumed event written since).
-      const size = await eventsSize($, p.runId)
-      const grown = size !== null && size > (p.size ?? 0) ? await resumedSince($, p.runId, p.size ?? 0, size) : false
-      if ((listed && isLive(listed.state) && !p.wasLive) || grown) {
-        pendingResumes.splice(i, 1)
-        if (!attached.includes(p.runId)) attached = [...attached, p.runId]
-        await attach($, p.runId)
-      } else if (now - p.since > 120_000) pendingResumes.splice(i, 1)
-      else i++
-    }
-    // First, a command's named runs, once listed, take back their own records.
-    // (A run listed before its journal exists reads file '?': it waits until it names its
-    // workflow.) A named run first accounts for a foreground launch of its own workflow,
-    // and only then takes back a backgrounded one's record.
-    for (const [group, { names, foreground }] of namedByGroup) {
-      for (const id of [...names]) {
-        const run = list.find((r) => r.runId === id)
-        if (!run || run.file === '?') continue
-        names.delete(id)
-        // Exact matches before wildcards: a foreground launch of its file, then a record of
-        // its file, then an unknown-file foreground launch, then an unknown-file record.
-        const take = (fg: string) => {
-          const n = (foreground.get(fg) ?? 1) - 1
-          if (n > 0) foreground.set(fg, n)
-          else foreground.delete(fg)
-        }
-        const exactRecord = pendingLaunches.findIndex((p) => p.group === group && p.file === run.file)
-        if (foreground.has(run.file)) take(run.file)
-        else if (exactRecord >= 0) pendingLaunches.splice(exactRecord, 1)
-        else if (foreground.has('')) take('')
-        else {
-          const loose = pendingLaunches.findIndex((p) => p.group === group && p.file === null)
-          if (loose >= 0) pendingLaunches.splice(loose, 1)
-        }
-      }
-      if (!names.size || !pendingLaunches.some((p) => p.group === group)) namedByGroup.delete(group)
-    }
+    // that was not listed before it and is not attached, of its own workflow when the
+    // command named one: never a run another session started just before.
     for (let i = 0; i < pendingLaunches.length; ) {
-      const { since, known, file, group } = pendingLaunches[i] as (typeof pendingLaunches)[number]
-      if (namedByGroup.has(group) && now - since <= 120_000) {
-        i++
-        continue
-      }
-      const candidates = [...list].reverse().filter((r) => r.createdAt >= since && !known.has(r.runId) && !attached.includes(r.runId))
-      // Its own workflow file when the command named one: never another workflow's run.
-      const fresh = file !== null ? candidates.find((r) => r.file === file) : candidates[0]
+      const { since, known, file } = pendingLaunches[i] as (typeof pendingLaunches)[number]
+      const fresh = [...list].reverse().find((r) => r.createdAt >= since && !known.has(r.runId) && !attached.includes(r.runId) && (file === null || r.file === file))
       if (fresh) {
         pendingLaunches.splice(i, 1)
         attached = [...attached, fresh.runId]
         await attach($, fresh.runId)
-      } else if (now - since > 120_000) {
-        pendingLaunches.splice(i, 1)
-      } else {
-        i++
-      }
+      } else if (now - since > 120_000) pendingLaunches.splice(i, 1)
+      else i++
     }
 
     // Poll the live runs, the ones this session watches, and the one on screen.
@@ -529,7 +340,6 @@ async function refresh($: EngineInterface, force = false): Promise<void> {
         continue
       }
       if (ran.exitCode !== 0) continue
-      if (ran.isStdoutTruncated) ran = (await slimStatus($, id)) ?? ran
       polledAt.set(id, now)
       const size = await eventsSize($, id)
       if (size !== null) eventsSizeAt.set(id, size)
@@ -739,17 +549,6 @@ async function refreshThread($: EngineInterface, now: number): Promise<void> {
 
 // ---- actions ---------------------------------------------------------------------
 
-/** Whether a run's events.jsonl gained a run started/resumed event past byte `from` (up to 1 MiB of it). */
-async function resumedSince($: EngineInterface, runId: string, from: number, size: number): Promise<boolean> {
-  try {
-    const file = `${await ensureHome($)}/runs/${runId}/events.jsonl`
-    const ran = await $.process.run(['/bin/sh', '-c', 'tail -c +"$1" "$2" | head -c "$3"', 'sh', String(from + 1), file, String(Math.min(size - from, 1 << 20))], { timeoutMs: 10_000 })
-    return ran.stdout.split('\n').some((line) => line.includes('"type":"run"') && /"state":"(resumed|started)"/.test(line))
-  } catch {
-    return false
-  }
-}
-
 /** The size of a run's events.jsonl, or null when it cannot be read. */
 async function eventsSize($: EngineInterface, runId: string): Promise<number | null> {
   try {
@@ -888,8 +687,23 @@ async function cancel($: EngineInterface, runId: string, index: number | null): 
   void refresh($, true)
 }
 
+// Runs a Resume or Replay is starting: claimed before anything is awaited, so a second
+// press while the first reads the run's metadata or starts it starts nothing more.
+const resuming = new Set<string>()
+
 /** Resumes a failed, interrupted or stale run (or replays a completed one), detached, as the viewer does. */
 async function resumeRun($: EngineInterface, runId: string, isReplay = false): Promise<void> {
+  if (resuming.has(runId)) return
+  resuming.add(runId)
+  try {
+    await resumeOnce($, runId, isReplay)
+  } finally {
+    resuming.delete(runId)
+    $.ui.invalidate('ui.render')
+  }
+}
+
+async function resumeOnce($: EngineInterface, runId: string, isReplay: boolean): Promise<void> {
   const verb = isReplay ? 'Replay' : 'Resume'
   await update($, confirmAtom, () => null)
   // The run's workflow file: named by its first event, or (a run that failed before it
@@ -1018,7 +832,7 @@ async function launchOnce($: EngineInterface): Promise<void> {
     stdout: '',
     stderr: err instanceof Error ? err.message : String(err),
   }))
-  const runId = ran.exitCode === 0 ? extractRunId(ran.stdout) : null
+  const runId = ran.exitCode === 0 ? (runIdsIn(ran.stdout)[0] ?? null) : null
   if (!runId) {
     await update($, launchAtom, (l) => (l ? { ...l, error: firstLine(ran.stderr) || 'flowition did not start the run', failures: (l.failures ?? 0) + 1 } : l))
     return
@@ -1083,27 +897,11 @@ export const register: Register = (on) => {
   // asks a question or ends.
   on('tool.call', async ($, e, next) => {
     const isBash = e.tool === 'Bash'
-    const isLaunch = isBash ? isFlowitionLaunch(e.command) : /flowition_(run|resume)$/.test(String(e.tool))
-    if (!isLaunch) return next(e)
-    // The runs listed before the command starts: a poll may list the launched run while
-    // the command is still running, and it must stay eligible for its launch. And, for each
-    // resume the command names, where that run stood: what a resume would change.
-    const before = await read($, runsAtom)
-    const known = new Set(before.map((r) => r.runId))
-    const launches: Invocation[] = isBash ? launchesIn(e.command).invocations : [{ file: null, target: null, isBackground: false, isRepeated: false }]
-    const resumeIds = [...new Set(launches.map((l) => l.target).filter((id): id is string => id !== null))]
-    // Read fresh, just before the command: a cached listing may be behind (another
-    // session resumed it meanwhile). A state that cannot be read counts as live, so it is
-    // no evidence; the events boundary still is.
-    const freshState = async (runId: string): Promise<string> => {
-      try {
-        const ran = await flo($, ['status', runId, '--json'])
-        return ran.exitCode === 0 ? readStatus(ran.stdout, ran.isStdoutTruncated, undefined, runId, 0).state : 'running'
-      } catch {
-        return 'running'
-      }
-    }
-    const resumeFrom = await Promise.all(resumeIds.map(async (runId) => ({ runId, wasLive: isLive(await freshState(runId)), size: await eventsSize($, runId) })))
+    const launches = isBash ? launchesIn(e.command) : /flowition_(run|resume)$/.test(String(e.tool)) ? [{ kind: 'run' as const, file: null, target: null, isBackground: false }] : []
+    if (!launches.length) return next(e)
+    // The runs listed before the command: a backgrounded launch takes only a run not among
+    // them (a poll may list it while the command still runs).
+    const known = new Set((await read($, runsAtom)).map((r) => r.runId))
     const startedAt = await $.clock.now()
     const ran = await next(e)
     if (ran.deny !== undefined) return ran
@@ -1112,37 +910,15 @@ export const register: Register = (on) => {
     const record = isBash && ran.result !== null && typeof ran.result === 'object' ? (ran.result as { stdout?: unknown; backgroundTaskId?: unknown }) : {}
     const output = [typeof record.stdout === 'string' ? record.stdout : '', ran.text ?? ''].join('\n')
     const isBackgrounded = typeof record.backgroundTaskId === 'string' || /running in background|moved to the background|manually backgrounded/i.test(ran.text ?? '')
-    // Every run the output names, however many (a loop launches more runs than the
-    // command text shows); the output's own lines are the evidence they ran.
-    const { ids: named, doubtful } = launchIdsIn(output)
-    for (const runId of named) await attach($, runId)
-    // A failing exit does not mean nothing ran (a workflow that fails exits 1 after its
-    // outcome): doubtful ids and resumes are judged on their own evidence either way.
-    const group = ++launchGroup
-    const fresh = launches.filter((l) => l.target === null)
-    const certain = named.filter((id) => !resumeIds.includes(id))
-    for (const runId of doubtful) if (!resumeIds.includes(runId)) pendingNamed.push({ runId, since: startedAt - 1000, known, group, candidates: fresh.map((l) => ({ file: l.file, isRepeated: l.isRepeated })), certain })
-    // A resume the output did not name waits for evidence it ran.
-    const targets = isBash ? resumeIds : []
-    for (const r of resumeFrom) if (isBash && !named.includes(r.runId)) pendingResumes.push({ ...r, since: startedAt - 1000 })
-    // New runs whose ids the output does not carry (launches Bash backgrounded report none
-    // until they end) arm the fallback, one record each.
-    // Which new run each launch made is not known from the output (ids carry no file), so
-    // every new-run launch Bash or the shell (`… &`) backgrounded keeps a record; the runs
-    // the output named are attached already, which discovery skips, and a record nothing
-    // matches expires.
-    // A failing exit does not mean a backgrounded launch did not run (`… & wait` on a
-    // workflow that fails, a later command in the list failing): the records are kept
-    // either way, and each takes only a new run of its own workflow.
-    if (isBash) {
-      const unnamed = fresh.filter((l) => isBackgrounded || l.isBackground)
-      const namedNew = named.filter((id) => !targets.includes(id))
-      for (const l of unnamed) pendingLaunches.push({ since: startedAt - 1000, known, file: l.file, group })
-      if (unnamed.length && namedNew.length) {
-        const foreground = new Map<string, number>()
-        for (const l of fresh) if (!(isBackgrounded || l.isBackground)) foreground.set(l.file ?? '', (foreground.get(l.file ?? '') ?? 0) + 1)
-        namedByGroup.set(group, { names: new Set(namedNew), foreground })
-      }
+    // The runs the output names, and the runs the command resumes (named or not: Bash may
+    // have backgrounded it). A failing exit does not mean nothing ran.
+    const named = runIdsIn(output)
+    const resumed = launches.flatMap((l) => (l.target !== null && !named.includes(l.target) ? [l.target] : []))
+    for (const runId of [...named, ...resumed]) await attach($, runId)
+    // A new run whose id the output does not carry yet (Bash or `&` backgrounded its
+    // launch) is found as runs are listed: the next one of its workflow created since.
+    if (isBash && !named.length) {
+      for (const l of launches) if (l.kind === 'run' && (isBackgrounded || l.isBackground)) pendingLaunches.push({ since: startedAt - 1000, known, file: l.file })
     }
     void $.ui.open({ id: PANE, title: TITLE })
     return ran
@@ -1889,7 +1665,9 @@ export const register: Register = (on) => {
                 btn('cancel-run', 'Cancel run…', () => askToCancel($, selected, `the whole run`), 'danger')
               ) : null}
               {!live && RESUMABLE.has(state) ? (
-                confirm === `resume:${selected}` ? (
+                resuming.has(selected) ? (
+                  <Text dimColor>{state === 'completed' ? 'Replaying…' : 'Resuming…'}</Text>
+                ) : confirm === `resume:${selected}` ? (
                   <>
                     <Text>
                       {state === 'completed'

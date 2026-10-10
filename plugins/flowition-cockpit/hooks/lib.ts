@@ -59,84 +59,20 @@ export function parseRuns(stdout: string): Run[] {
   return out
 }
 
-/** How many of the newest runs a history too long for one read keeps (with every unfinished one). */
+/** How many of the newest runs the pane keeps (with every unfinished one and this session's). */
 export const RUNS_KEPT = 2000
-
-// Node programs run on `flowition … --json` output when it is too large for one
-// $.process.run read (4 MiB of stdout). node is the CLI's own runtime, so it is there
-// wherever the CLI runs; each program reads stdin and takes its options in argv.
-const ON_STDIN = (body: string) => `let s='';process.stdin.setEncoding('utf8');process.stdin.on('data',(d)=>{s+=d});process.stdin.on('end',()=>{${body}})`
-
-/**
- * `runs --json` filtered down to every unfinished run, the newest RUNS_KEPT (argv[1])
- * and the runs this session launched (argv[2], a JSON array of ids), one JSON row per line after a first line holding the full count. It is
- * written to a file and read back in chunks, so no number of rows is too many.
- */
-export const RUNS_FILTER_JS = ON_STDIN(
-  `const rows=JSON.parse(s);const done=new Set(${JSON.stringify([...TERMINAL])});const n=Number(process.argv[1]);const pin=new Set(JSON.parse(process.argv[2]||'[]'));process.stdout.write([String(rows.length),...rows.filter((r,i)=>i<n||!done.has(r&&r.state)||pin.has(r&&r.runId)).map((r)=>JSON.stringify(r))].join('\\n')+'\\n')`,
-)
-
-/**
- * `status --json` made to fit one read (3 MB): the completed result's value left out
- * (`resultOmitted`), then its long texts (errors, questions, labels, previews) clipped
- * harder until it fits; past that the question texts are emptied and the worker lists
- * capped (`listsCut`, so the pane treats the detail as partial), then the question
- * entries cut to their identity (qid, event) and capped, the open ones kept first, then
- * entries whose qid alone is too long to carry dropped and the rest capped further;
- * and if nothing else fits, only the run's state. Sizes are UTF-8 bytes, as stdout is.
- */
-export const STATUS_SLIM_JS = ON_STDIN(
-  `const d=JSON.parse(s);const clip=(x,n)=>typeof x==='string'&&x.length>n?x.slice(0,n)+'…':x;const arr=(x)=>Array.isArray(x)?x:[];const qs=[...arr(d.questions),...arr(d.live&&d.live.questions)];const ws=[...arr(d.agents),...arr(d.steps)];const r=d.result&&typeof d.result==='object'?d.result:null;if(r&&'result' in r){r.result=null;d.resultOmitted=true}const fits=()=>Buffer.byteLength(JSON.stringify(d))<3e6;for(const n of [20000,4000,1000,200]){if(r)r.error=clip(r.error,n);d.phases=arr(d.phases).map((p)=>clip(p,n));for(const q of qs)q.question=clip(q.question,n);for(const w of ws){w.error=clip(w.error,n);for(const k of ['label','name','promptPreview','resultPreview'])w[k]=clip(w[k],200)}if(fits())break}if(!fits()){d.listsCut=true;for(const q of qs)q.question='';if(!fits()){d.agents=arr(d.agents).slice(0,500);d.steps=arr(d.steps).slice(0,500)}}if(!fits()){const open=new Set(arr(d.live&&d.live.questions).map((q)=>q&&q.qid));d.questions=arr(d.questions).map((q)=>({qid:q&&q.qid,t:q&&q.t,question:''})).sort((a,b)=>Number(open.has(b.qid))-Number(open.has(a.qid)));if(d.live)d.live.questions=arr(d.live.questions).map((q)=>({qid:q&&q.qid}));for(const n of [20000,5000,1000]){d.questions=d.questions.slice(0,n);if(d.live)d.live.questions=d.live.questions.slice(0,n);if(fits())break}}if(!fits()){const ok=(q)=>q&&typeof q.qid==='string'&&q.qid.length<=1000;d.questions=d.questions.filter(ok);if(d.live)d.live.questions=d.live.questions.filter(ok);d.phases=arr(d.phases).slice(-200);for(const n of [200,50,10,0]){if(fits())break;d.questions=d.questions.slice(0,n);if(d.live)d.live.questions=d.live.questions.slice(0,n)}}if(!fits()){process.stdout.write(JSON.stringify({runId:d.runId,state:d.state,result:r?{status:r.status,error:clip(r.error,1000)}:null,resultOmitted:!!d.resultOmitted,phases:[],agents:[],steps:[],questions:[],live:null,listsCut:true}));return}process.stdout.write(JSON.stringify(d))`,
-)
-
-/** The filtered listing's lines: the rows it kept, and how many runs there are in all. */
-export function parseFilteredRuns(lines: string[]): { runs: Run[]; total: number | null } {
-  const total = Number(lines[0])
-  const runs: Run[] = []
-  for (const line of lines.slice(1)) {
-    try {
-      runs.push(...parseRuns(`[${line}]`))
-    } catch {
-      // a row cut short: the reader stops at whole lines, so none should be
-    }
-  }
-  return { runs, total: lines.length > 0 && Number.isSafeInteger(total) ? total : null }
-}
 
 const grouped = (n: number): string => String(n).replace(/\B(?=(\d{3})+(?!\d))/g, ',')
 
-/** The characters of run rows kept in $.state, which refuses a value over 4 MiB. */
-export const RUNS_STATE_BUDGET = 3 << 20
+/** The runs the pane keeps, newest first: the newest RUNS_KEPT, every unfinished one, and `pinned` (this session's). */
+export const keepRuns = (runs: Run[], pinned: string[]): Run[] => runs.filter((r, i) => i < RUNS_KEPT || !isTerminal(r.state) || pinned.includes(r.runId))
 
 /**
- * The runs the pane keeps, newest first: every unfinished run, the ones `pinned` (this
- * session's), and the newest RUNS_KEPT, within RUNS_STATE_BUDGET. Past the budget the
- * live and pinned runs are kept first, then the rest newest first; `isCut` says
- * whether any wanted run was left out.
+ * What the run list says it leaves out, or null when it shows every run: `total` is null
+ * when the listing was cut at the 4 MiB stdout cap and only its newest rows were read.
  */
-export function keepRuns(runs: Run[], pinned: string[]): { runs: Run[]; isCut: boolean } {
-  const pin = new Set(pinned)
-  const wanted = runs.filter((r, i) => i < RUNS_KEPT || !isTerminal(r.state) || pin.has(r.runId))
-  const isFirst = (r: Run) => isLive(r.state) || pin.has(r.runId)
-  const keep = new Set<Run>()
-  let budget = RUNS_STATE_BUDGET
-  for (const r of [...wanted.filter(isFirst), ...wanted.filter((r) => !isFirst(r))]) {
-    const n = JSON.stringify(r).length + 1
-    if (n > budget) break
-    budget -= n
-    keep.add(r)
-  }
-  return { runs: wanted.filter((r) => keep.has(r)), isCut: keep.size < wanted.length }
-}
-
-/**
- * What the run list says it leaves out, or null when it shows every run: `total` is
- * null when only the newest rows could be read, and `isComplete` false when the
- * unfinished runs could not all be read or kept.
- */
-export function listNoteOf(shown: number, total: number | null, isComplete = true): string | null {
+export function listNoteOf(shown: number, total: number | null): string | null {
   if (total === null) return 'The run history is too long to list in full: older runs are not shown.'
-  if (!isComplete) return `The run history (${grouped(total)} runs) is too large to list in full: some unfinished runs may not be shown.`
   return total > shown ? `Showing every unfinished run and the newest ${grouped(RUNS_KEPT)} of ${grouped(total)} runs.` : null
 }
 
@@ -203,12 +139,9 @@ export function parseStatus(stdout: string, fetchedAt: number): Detail {
     // abandoned agents are not among them).
     ...(Array.isArray(obj(d.live).agents) ? { liveAgents: (obj(d.live).agents as unknown[]).map((a) => num(obj(a).index)).filter((i): i is number => i !== null) } : {}),
     cost: costs.length ? costs.reduce((s, c) => s + c, 0) : null,
-    resultMarkdown:
-      d.resultOmitted === true ? (isLive(str(d.state) ?? '') ? null : TOO_LARGE(runId)) : result.status === 'completed' && result.result !== undefined ? toMarkdown(result.result) : null,
+    resultMarkdown: result.status === 'completed' && result.result !== undefined ? toMarkdown(result.result) : null,
     error: clipped(str(result.error), 4_000),
     fetchedAt,
-    // A status slimmed to fit by cutting its lists: its workers are not all known.
-    ...(d.listsCut === true ? { isPartial: true } : {}),
   }
 }
 
@@ -299,347 +232,186 @@ export function transitions(prev: Detail | undefined, next: Detail): string[] {
   return out
 }
 
-/** Did this shell command launch or resume a flowition run? Read as launchesIn reads it. */
-export const isFlowitionLaunch = (command: string): boolean => launchesIn(command).count > 0
+/** Did this shell command launch or resume a flowition run? */
+export const isFlowitionLaunch = (command: string): boolean => launchesIn(command).length > 0
 
 const RUN_ID = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/
 
-/** The runId a launch printed: detached text, --json, or the foreground `run <id>` line. */
-/** Run statuses the CLI's last line (`run <id>: <status>`) and event lines name. */
+/** Run statuses the CLI's run lines name (`run <id>: <status>`, `▶ run <id> — <state>`). */
 const RUN_LINE_STATES = /^(started|resumed|completed|failed|interrupted|cancelled|stale)$/
 
 /**
- * Every run a launch's output names, in order: the CLI's own lines (a detached launch,
- * an event line, the run's last line with a real run status, a --json envelope that
- * says detached or carries a status), at most `max` (the launches in the command). A
- * workflow's result printed after a run line is not one of these, JSON with a runId
- * field or not. With none, the whole text as one JSON object (an MCP tool's {runId}).
+ * The runs a launch's output names, in order, by the CLI's own lines: a detached launch,
+ * a foreground run's first line (`run <id>`, on stderr) and event lines, its last line
+ * (`run <id>: <status>`), and a --json outcome (`{"runId":…,"detached"|"status":…}`). A
+ * foreground run prints its result after its last line, so reading stops there: ids the
+ * result quotes are not launches. With none, the whole text as one JSON object (an MCP
+ * tool's pretty-printed {runId}).
  */
-export function extractRunIds(text: string, max = Infinity): string[] {
-  return launchIdsIn(text, max).ids
-}
-
-/**
- * The runs a launch's output names: `ids`, by the CLI's own lines (see extractRunIds),
- * and `doubtful`, any such line inside a foreground run's result region: the next
- * launch's output in a compound command or a loop, or the result's own text quoting the
- * CLI, which the bytes alone cannot tell apart. A doubtful id is a launch only on
- * evidence it is a new run of one of the command's launches.
- */
-export function launchIdsIn(text: string, max = Infinity): { ids: string[]; doubtful: string[] } {
+export function runIdsIn(text: string): string[] {
   const out: string[] = []
-  const doubtful: string[] = []
-  // A foreground run prints its result after its run line (the CLI writes
-  // `\nrun <id>: <status>\n` then the result): from there to the end, every line is
-  // that result's text or a later command's output.
-  let isInResult = false
   for (const line of text.split('\n')) {
-    if (out.length >= max) break
     const s = line.trim()
-    const ran = /^run (\S+?): (\w+)$/.exec(s)
+    const last = /^run (\S+?): (\w+)$/.exec(s)
     const event = /^▶ run (\S+) — (\w+)/.exec(s)
-    const ranId = ran && RUN_LINE_STATES.test(ran[2] ?? '') ? ran[1] : undefined
+    const isLast = last !== null && RUN_LINE_STATES.test(last[2] ?? '')
     const id =
       /^started detached run (\S+)/.exec(s)?.[1] ??
-      (event && RUN_LINE_STATES.test(event[2] ?? '') ? event[1] : undefined) ??
-      ranId ??
       /^run (\S+)$/.exec(s)?.[1] ??
-      launchEnvelope(s)?.runId
-    if (id && RUN_ID.test(id)) {
-      if (!isInResult) {
-        if (!out.includes(id)) out.push(id)
-      } else if (!doubtful.includes(id)) doubtful.push(id)
-    }
-    if (ranId) isInResult = true
+      (event && RUN_LINE_STATES.test(event[2] ?? '') ? event[1] : undefined) ??
+      (isLast ? last[1] : undefined) ??
+      outcomeRunId(s)
+    if (id && RUN_ID.test(id) && !out.includes(id)) out.push(id)
+    if (isLast) break
   }
-  if (out.length) return { ids: out, doubtful: doubtful.filter((id) => !out.includes(id)) }
-  const whole = envelopeRunId(text.trim())
-  return { ids: whole && RUN_ID.test(whole) ? [whole] : [], doubtful: [] }
+  if (out.length) return out
+  const whole = outcomeRunId(text.trim(), true)
+  return whole && RUN_ID.test(whole) ? [whole] : []
 }
 
 /**
- * A --json launch line: a JSON object naming its run beside `detached` or a status. The
- * CLI writes runId first, then detached or status, so a line cut short (a large result
- * Bash keeps only the head of) still names it; a runId nested in a result never does.
+ * A --json outcome line's run: a JSON object whose runId comes with `detached` or a
+ * status (the CLI writes them first, so a line cut short still names it), or, `isAny`,
+ * any object with a runId.
  */
-function launchEnvelope(line: string): { runId: string; isDetached: boolean } | null {
+function outcomeRunId(line: string, isAny = false): string | null {
   if (!line.startsWith('{')) return null
   try {
     const o = obj(JSON.parse(line))
-    return typeof o.runId === 'string' && (o.detached === true || typeof o.status === 'string') ? { runId: o.runId, isDetached: o.detached === true } : null
+    return typeof o.runId === 'string' && (isAny || o.detached === true || typeof o.status === 'string') ? o.runId : null
   } catch {
-    const m = /^\{"runId":"([^"\\]+)","(detached|status)":/.exec(line)
-    return m ? { runId: m[1] as string, isDetached: m[2] === 'detached' } : null
+    return /^\{"runId":"([^"\\]+)","(detached|status)":/.exec(line)?.[1] ?? null
   }
 }
 
-type ShellToken = { op: string } | { word: string; isDynamic: boolean }
+// The CLI's options that take a value (`--opt v`, or one word `--opt=v`) (src/cli.js).
+const VALUE_FLAGS = new Set(['args', 'args-file', 'adapter', 'model', 'effort', 'cwd', 'concurrency', 'budget', 'resume', 'run-id', 'seed-from', 'agent', 'run', 'older-than', 'port', 'idle-timeout', 'tailscale-origin'])
+// Commands that run the command after them, their own options and durations skipped.
+const WRAPPERS = new Set(['env', 'nohup', 'npx', 'node', 'bun', 'time', 'timeout', 'exec', 'command', 'nice', 'caffeinate'])
+// Reserved words a launch may follow (`do flowition run …`, `then …`).
+const KEYWORDS = new Set(['do', 'then', 'else', 'elif', 'if', 'while', 'until', '{', '!'])
+
+type Word = { text: string; isDynamic: boolean }
 
 /**
- * A shell command as words and operators: quotes and backslashes resolved (a
- * backslash-newline continues the line), `;`, `&`, `&&`, `|`, `||`, newlines and
- * parentheses as operators, a redirection's `&` (`2>&1`, `&>`) kept in its word, and a
- * heredoc's body dropped (it is data, not commands). A word the shell would expand
- * ($VAR, `cmd`, a glob) is dynamic: its value is not known until it runs.
+ * A shell command's simple commands as words, split at unquoted `;`, `&`, `&&`, `|`, `||`,
+ * parentheses and newlines, quotes and backslashes resolved; `isBackground` when `&`
+ * ends one. A word the shell would expand ($VAR, a glob) is dynamic.
  */
-export function shellTokens(command: string): ShellToken[] {
-  const out: ShellToken[] = []
-  let word = ''
+function simpleCommands(command: string): { words: Word[]; isBackground: boolean }[] {
+  const out: { words: Word[]; isBackground: boolean }[] = []
+  let words: Word[] = []
+  let text = ''
   let isWord = false
   let isDynamic = false
-  const heredocs: { delim: string; strip: boolean }[] = []
-  const flush = () => {
-    if (isWord) out.push({ word, isDynamic })
-    word = ''
+  const endWord = () => {
+    if (isWord) words.push({ text, isDynamic })
+    text = ''
     isWord = false
     isDynamic = false
+  }
+  const endCommand = (isBackground: boolean) => {
+    endWord()
+    if (words.length) out.push({ words, isBackground })
+    words = []
   }
   for (let i = 0; i < command.length; i++) {
     const c = command[i] as string
     if (c === "'") {
       const close = command.indexOf("'", i + 1)
-      word += command.slice(i + 1, close < 0 ? undefined : close)
+      text += command.slice(i + 1, close < 0 ? undefined : close)
       isWord = true
       i = close < 0 ? command.length : close
     } else if (c === '"') {
       let j = i + 1
       for (; j < command.length && command[j] !== '"'; j++) {
-        if (command[j] === '\\' && j + 1 < command.length) j++
+        if (command[j] === '\\') j++
         if (command[j] === '$' || command[j] === '`') isDynamic = true
-        word += command[j]
+        text += command[j] ?? ''
       }
       isWord = true
       i = j
     } else if (c === '\\') {
-      // A backslash before a newline continues the line: both vanish.
       if (command[i + 1] !== '\n') {
-        word += command[i + 1] ?? ''
+        text += command[i + 1] ?? ''
         isWord = true
       }
       i++
-    } else if (c === '<' && command[i + 1] === '<' && command[i + 2] !== '<') {
-      // A heredoc: its delimiter word, then (from the next line) a body skipped below.
-      flush()
-      i += 2
-      const strip = command[i] === '-'
-      if (strip) i++
-      while (command[i] === ' ' || command[i] === '\t') i++
-      let delim = ''
-      for (; i < command.length && !/[\s;&|()<>]/.test(command[i] as string); i++) if (command[i] !== "'" && command[i] !== '"' && command[i] !== '\\') delim += command[i]
-      i--
-      if (delim) heredocs.push({ delim, strip })
-    } else if (c === '\n') {
-      flush()
-      out.push({ op: ';' })
-      // Heredoc bodies begin on the next line and end at their delimiter line.
-      for (const { delim, strip } of heredocs.splice(0)) {
-        let end = i
-        for (;;) {
-          const next = command.indexOf('\n', end + 1)
-          const line = command.slice(end + 1, next < 0 ? undefined : next)
-          end = next < 0 ? command.length : next
-          if ((strip ? line.replace(/^\t+/, '') : line) === delim || next < 0) break
-        }
-        i = end
-      }
-    } else if (/\s/.test(c)) {
-      flush()
-    } else if (c === ';' || c === '(' || c === ')') {
-      flush()
-      out.push({ op: c })
-    } else if (c === '&' && (word.endsWith('>') || word.endsWith('<') || command[i + 1] === '>')) {
-      // A redirection (`2>&1`, `>&2`, `&>file`): part of its word, not a background.
-      word += c
+    } else if (c === '&' && (/[<>]$/.test(text) || command[i + 1] === '>')) {
+      text += c // a redirection (`2>&1`, `&>file`), not a background
       isWord = true
-    } else if (c === '&' || c === '|') {
-      flush()
-      const isDouble = command[i + 1] === c
-      out.push({ op: isDouble ? c + c : c })
-      if (isDouble) i++
+    } else if (c === '&' && command[i + 1] !== '&') {
+      endCommand(true)
+    } else if (/[;&|()\n]/.test(c)) {
+      endCommand(false)
+      if ((c === '&' || c === '|') && command[i + 1] === c) i++
+    } else if (/\s/.test(c)) {
+      endWord()
     } else {
-      if (c === '$' || c === '`' || c === '*' || c === '?' || c === '[') isDynamic = true
-      word += c
+      if (/[$`*?[]/.test(c)) isDynamic = true
+      text += c
       isWord = true
     }
   }
-  flush()
+  endCommand(false)
   return out
 }
 
-// The CLI's options (src/cli.js): these take a value (`--opt v` or `--opt=v`); the rest
-// do not.
-const VALUE_FLAGS = new Set(['args', 'args-file', 'adapter', 'model', 'effort', 'cwd', 'concurrency', 'budget', 'resume', 'run-id', 'seed-from', 'agent', 'run', 'older-than', 'port', 'idle-timeout', 'tailscale-origin'])
-// Commands that run another (their options skipped, and these options' values): a
-// launch may be `npx -y flowition run …`, `node bin/flowition.js run …`, `nohup …`.
-const WRAPPERS = new Set(['env', 'nohup', 'npx', 'node', 'bun', 'time', 'exec', 'command', 'nice', 'caffeinate'])
-const WRAPPER_VALUE_OPTIONS = new Set(['-p', '--package', '-r', '--require', '--import', '-C', '--conditions'])
-const isFlowitionWord = (w: string) => /(^|\/)(flo|flowition)(\.js)?$/.test(w)
-
-type Word = { word: string; isDynamic: boolean }
+/**
+ * One flowition launch in a shell command: a new run of `file` (its basename, null when
+ * the shell expands it) or a resume of `target`, and whether `&` backgrounds it.
+ */
+export type Launch = { kind: 'run' | 'resume'; file: string | null; target: string | null; isBackground: boolean }
 
 /**
- * One launch in a command: a new run of `file` (null when the shell expands it) or a
- * resume of `target`; backgrounded by the shell or not; and repeated when it sits in a
- * loop, which runs it any number of times.
+ * The flowition launches a shell command holds, in order: each simple command whose
+ * command word (past variable assignments, wrappers and reserved words) is flowition (or
+ * flo) with `run` or `resume`, its words read with the CLI's option grammar.
  */
-export type Invocation = { file: string | null; target: string | null; isBackground: boolean; isRepeated: boolean }
-
-// Reserved words that open or close a compound command (a group whose commands share
-// what follows its close: `if …; fi &` backgrounds them all), and those within one.
-const OPENERS = new Set(['{', 'if', 'while', 'until', 'for', 'case', 'select'])
-const CLOSERS = new Set(['}', 'fi', 'done', 'esac'])
-// Those whose body runs any number of times.
-const LOOPS = new Set(['while', 'until', 'for', 'select'])
-const INNER = new Set(['then', 'do', 'else', 'elif', '!', 'in'])
-const isRedirect = (w: string) => /^(\d*|&)?(>>?|<)/.test(w) || /^\d*>&/.test(w)
-
-/**
- * The launches a command holds, in order (`flowition run <file>`, `flowition resume <id>`,
- * `run <file> --resume <id>`), read from the shell's structure: simple commands within
- * lists, pipelines, subshells and compound commands, heredoc bodies excluded, and each
- * launch's words read with the CLI's own option grammar. Each is a new run of a workflow
- * file (its basename, or null when the shell expands it) or a resume of a named run, and
- * whether the shell backgrounds it: `&` backgrounds its whole and-or list, groups and
- * pipelines included.
- */
-export function launchesIn(command: string): { files: (string | null)[]; count: number; invocations: Invocation[] } {
-  // Simple commands, and the list items they belong to (per group depth).
-  const cmds: { words: Word[]; isBackground: boolean; isRepeated: boolean }[] = []
-  type Frame = { item: number[]; all: number[]; isLoop: boolean }
-  const frames: Frame[] = [{ item: [], all: [], isLoop: false }]
-  const top = () => frames[frames.length - 1] as Frame
-  let cur: Word[] = []
-  const endCommand = () => {
-    if (cur.length) {
-      cmds.push({ words: cur, isBackground: false, isRepeated: frames.some((f) => f.isLoop) })
-      top().item.push(cmds.length - 1)
-      top().all.push(cmds.length - 1)
-    }
-    cur = []
-  }
-  const endItem = (isBackground: boolean) => {
-    if (isBackground) for (const i of top().item) (cmds[i] as (typeof cmds)[number]).isBackground = true
-    top().item = []
-  }
-  const open = (isLoop: boolean) => {
-    endCommand()
-    frames.push({ item: [], all: [], isLoop })
-  }
-  const close = () => {
-    endCommand()
-    endItem(false)
-    if (frames.length > 1) {
-      const inner = frames.pop() as Frame
-      top().item.push(...inner.all)
-      top().all.push(...inner.all)
-    }
-  }
-  for (const t of shellTokens(command)) {
-    if ('op' in t) {
-      if (t.op === '(') open(false)
-      else if (t.op === ')') close()
-      else if (t.op === '&') {
-        endCommand()
-        endItem(true)
-      } else if (t.op === ';') {
-        endCommand()
-        endItem(false)
-      } else endCommand() // && || |: the same list item goes on
-    } else if (!cur.length && OPENERS.has(t.word)) open(LOOPS.has(t.word))
-    else if (!cur.length && CLOSERS.has(t.word)) close()
-    else if (!cur.length && INNER.has(t.word)) continue
-    else cur.push(t)
-  }
-  endCommand()
-  endItem(false)
-  while (frames.length > 1) close()
-
-  const invocations: Invocation[] = []
-  for (const { words, isBackground, isRepeated } of cmds) {
-    // The command word: past variable assignments and wrappers (env, nohup, npx, …); a
-    // flowition word anywhere else (echo flowition run …) is an argument, not a launch.
+export function launchesIn(command: string): Launch[] {
+  const out: Launch[] = []
+  for (const { words, isBackground } of simpleCommands(command)) {
     let at = 0
     while (at < words.length) {
-      const w = words[at]?.word ?? ''
-      if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(w)) at++
+      const w = (words[at] as Word).text
+      if (/^[A-Za-z_]\w*=/.test(w) || KEYWORDS.has(w)) at++
       else if (WRAPPERS.has(w)) {
         at++
-        while (at < words.length && (words[at]?.word ?? '').startsWith('-')) at += WRAPPER_VALUE_OPTIONS.has(words[at]?.word ?? '') ? 2 : 1
+        while (at < words.length && /^(-|\d+[smhd]?$)/.test((words[at] as Word).text)) at++
       } else break
     }
-    if (!isFlowitionWord(words[at]?.word ?? '')) continue
-    const sub = words[at + 1]?.word
+    if (!/(^|\/)(flo|flowition)(\.js)?$/.test(words[at]?.text ?? '')) continue
+    const sub = words[at + 1]?.text
     if (sub !== 'run' && sub !== 'resume') continue
     let positional: Word | null = null
     let resume: Word | null = null
     const rest = words.slice(at + 2)
     for (let k = 0; k < rest.length; k++) {
       const w = rest[k] as Word
-      if (isRedirect(w.word)) {
-        // A redirection: its target is the next word when not written into this one.
-        if (/^(\d*|&)?(>>?|<)$/.test(w.word)) k++
-        continue
-      }
-      if (w.word === '--') {
+      if (w.text === '--') {
         positional ??= rest[k + 1] ?? null
         break
       }
-      if (w.word.startsWith('--')) {
-        const eq = w.word.indexOf('=')
-        const name = eq < 0 ? w.word.slice(2) : w.word.slice(2, eq)
-        const value = eq >= 0 ? { word: w.word.slice(eq + 1), isDynamic: w.isDynamic } : VALUE_FLAGS.has(name) ? (rest[++k] ?? null) : null
+      if (/^(\d*|&)[<>]/.test(w.text)) {
+        if (/^(\d*|&)[<>]+$/.test(w.text)) k++ // its target is the next word
+      } else if (w.text.startsWith('--')) {
+        const eq = w.text.indexOf('=')
+        const name = w.text.slice(2, eq < 0 ? undefined : eq)
+        const value = eq >= 0 ? { text: w.text.slice(eq + 1), isDynamic: w.isDynamic } : VALUE_FLAGS.has(name) ? (rest[++k] ?? null) : null
         if (name === 'resume') resume = value
-      } else if (w.word === '-a') k++
-      else if (w.word !== '-f') positional ??= w
+      } else if (w.text === '-a') k++
+      else if (!w.text.startsWith('-')) positional ??= w
     }
     const id = sub === 'resume' ? positional : resume
-    const target = id && !id.isDynamic && RUN_ID.test(id.word) ? id.word : null
-    const file = sub === 'run' && !resume && positional && !positional.isDynamic ? (positional.word.split('/').pop() ?? null) : null
-    invocations.push({ file, target, isBackground, isRepeated })
+    const isResume = id !== null
+    out.push({
+      kind: isResume ? 'resume' : 'run',
+      file: !isResume && positional && !positional.isDynamic ? (positional.text.split('/').pop() ?? null) : null,
+      target: id && !id.isDynamic && RUN_ID.test(id.text) ? id.text : null,
+      isBackground,
+    })
   }
-  return { files: invocations.map((v) => v.file), count: invocations.length, invocations }
-}
-
-export function extractRunId(text: string): string | null {
-  // The CLI's own lines, in the order written: the detached launch, the foreground event
-  // lines (`▶ run <id> — started`) and last line (`run <id>: <status>`), and a --json
-  // envelope (a line that is itself a JSON object with a top-level runId). The first
-  // wins: a foreground run prints its run line before its result, so a result printed
-  // after it, JSON with a runId field or not, is never taken for the run. Last, the whole
-  // text as one JSON object (an MCP tool's pretty-printed {runId}).
-  for (const line of text.split('\n')) {
-    const s = line.trim()
-    const id =
-      /^started detached run (\S+)/.exec(s)?.[1] ??
-      /^▶ run (\S+) —/.exec(s)?.[1] ??
-      /^run (\S+?):? \w*$/.exec(s)?.[1] ??
-      /^run (\S+)$/.exec(s)?.[1] ??
-      envelopeRunId(s)
-    if (id && RUN_ID.test(id)) return id
-  }
-  const whole = envelopeRunId(text.trim())
-  return whole && RUN_ID.test(whole) ? whole : null
-}
-
-function envelopeRunId(json: string): string | null {
-  if (!json.startsWith('{')) return null
-  try {
-    const o = obj(JSON.parse(json))
-    return typeof o.runId === 'string' ? o.runId : null
-  } catch {
-    return null
-  }
-}
-
-/**
- * The run a resume command names (`flowition resume <id>`, `run <file> --resume <id>`),
- * read off the command itself: known when Bash backgrounds the command (no output yet),
- * and for a resumed run whose creation time is long past.
- */
-export function resumeTarget(command: string): string | null {
-  const m = /(?:^|[\s;&|(/])(?:flo|flowition)(?:\.js)?\s+resume\s+([^\s;&|)]+)/.exec(command) ?? /--resume(?:=|\s+)([^\s;&|)]+)/.exec(command)
-  const id = m?.[1]?.replace(/^['"]|['"]$/g, '')
-  return id && RUN_ID.test(id) ? id : null
+  return out
 }
 
 /** `http://host/#/?t=…` → `http://host/#/run/<id>?t=…`, the viewer's run route. */
@@ -1486,30 +1258,6 @@ export async function catchUpTimeline(tl: Timeline, size: number, file: string, 
   return { ...out, total: size }
 }
 
-/**
- * The whole lines of a file's first `size` bytes, read a chunk at a time (each well under
- * the stdout cap); `isComplete` is false when a read failed or a line outgrew a chunk.
- */
-export async function readLines(file: string, size: number, run: RunCommand, chunk = 2 << 20, maxChunks = 64): Promise<{ lines: string[]; isComplete: boolean }> {
-  const lines: string[] = []
-  let at = 0
-  for (let k = 0; k < maxChunks && at < size; k++) {
-    let ran: Awaited<ReturnType<RunCommand>>
-    try {
-      ran = await run(['/bin/sh', '-c', READ, 'sh', String(at + 1), file, String(Math.min(chunk, size - at))])
-    } catch {
-      break // a read refused or timed out: what was read stands, marked incomplete
-    }
-    if (ran.exitCode !== 0 || ran.isStdoutTruncated) break
-    const last = ran.stdout.lastIndexOf('\n')
-    if (last < 0) break
-    const body = ran.stdout.slice(0, last + 1)
-    for (const line of body.split('\n')) if (line) lines.push(line)
-    at += byteLength(body)
-  }
-  return { lines, isComplete: at === size }
-}
-
 // ---- reconciling cached details with the run list ---------------------------------
 
 /**
@@ -1596,12 +1344,6 @@ export function reconcileWorkers(workers: Worker[], lanes: Lane[]): Worker[] {
 }
 
 /**
- * A detail cut down to `room` characters, for one the pane must keep (on screen, or
- * watched): long texts clipped, then the workers capped and the question texts of all
- * but the open ones emptied (partial: the events fill in the workers). Every question
- * entry stays, so none is announced twice.
- */
-/**
  * A cached detail of any shape (one an earlier version of this module stored) as a
  * notice baseline: its state and its questions' identities, or null when unreadable.
  */
@@ -1619,92 +1361,35 @@ export function baselineOf(cached: unknown): Detail | null {
 }
 
 /**
- * The least a watched run's detail can be and still carry what its notices compare: its
- * state, and each question's identity (qid, event, open). Partial: nothing else is known.
- */
-export const skeletonDetail = (d: Detail): Detail => ({
-  ...placeholder(d.runId, d.fetchedAt),
-  state: d.state,
-  questions: d.questions.map((q) => ({ ...q, question: '' })),
-  isPartial: true,
-})
-
-export function trimDetail(d: Detail, room: number): Detail {
-  const size = (x: Detail) => JSON.stringify(x).length
-  let out: Detail = {
-    ...d,
-    resultMarkdown: d.resultMarkdown === null ? null : clip(d.resultMarkdown, 4_000),
-    error: clipped(d.error, 1_000),
-    questions: d.questions.map((q) => ({ ...q, question: clip(q.question, 500) })),
-    workers: d.workers.map((w) => ({ ...w, error: clipped(w.error, 200) })),
-  }
-  if (size(out) <= room) return out
-  out = { ...out, isPartial: true, phases: out.phases.slice(-100).map((p) => clip(p, 200)), workers: out.workers.slice(0, 200), questions: out.questions.map((q) => (q.isOpen ? q : { ...q, question: '' })) }
-  if (size(out) <= room) return out
-  return { ...out, workers: [], questions: out.questions.map((q) => ({ ...q, question: q.isOpen ? clip(q.question, 100) : '' })) }
-}
-
-/**
  * A timeline made to fit $.state (which refuses a value over 4 MiB): its narrative's
  * texts clipped, then, for a huge nested run, its lanes' fan-out paths dropped
- * (`isPathsCut`: the Structure tab says so). Lanes, spend and phases stay whole.
+ * (`isPathsCut`: the Structure tab says so).
  */
 export function boundTimeline(tl: Timeline, budget = 3 << 20): Timeline {
   const size = (x: Timeline) => JSON.stringify(x).length
   if (size(tl) <= budget) return tl
-  let out: Timeline = { ...tl, entries: tl.entries.map((e) => ({ ...e, text: clip(e.text, 300) })) }
-  if (size(out) <= budget) return out
-  out = { ...out, isPathsCut: true, lanes: out.lanes.map((l) => ({ ...l, path: [] })) }
-  if (size(out) <= budget) return out
-  // Last, phase metadata (phase() has no count or title limit): titles clipped, then
-  // only the newest phases kept, with the narrative and labels cut down too.
-  const titled = <T extends { title: string }>(p: T): T => ({ ...p, title: clip(p.title, 60) })
-  out = {
-    ...out,
-    entries: out.entries.slice(-50),
-    isEntriesCut: true,
-    lanes: out.lanes.map((l) => ({ ...l, label: clip(l.label, 60) })),
-    declaredPhases: out.declaredPhases.map((p) => clip(p, 60)),
-    phases: out.phases.map(titled),
-    currentPhase: out.currentPhase && titled(out.currentPhase),
-  }
-  for (const n of [2000, 500, 100]) {
-    if (size(out) <= budget) break
-    out = { ...out, declaredPhases: out.declaredPhases.slice(0, n), phases: out.phases.slice(-n) }
-  }
-  return out
+  const out: Timeline = { ...tl, entries: tl.entries.map((e) => ({ ...e, text: clip(e.text, 300) })) }
+  return size(out) <= budget ? out : { ...out, isPathsCut: true, lanes: out.lanes.map((l) => ({ ...l, path: [] })) }
 }
 
 /**
  * The details the pane keeps within `budget` characters ($.state refuses a value over
- * 4 MiB): the ids in `first` (on screen, watched) before the rest, each of those kept in
- * a trimmed form if it is too large whole. Another left out is polled afresh when needed.
+ * 4 MiB): the ones in `first` (on screen, watched) before the rest, which are left out
+ * once the budget is spent (polled afresh when needed). One in `first` too large to keep
+ * whole keeps what its notices compare, its state and questions, so none repeats.
  */
 export function boundDetails(details: Record<string, Detail>, first: string[], budget = 3 << 20): Record<string, Detail> {
-  const ids = [...new Set([...first.filter((id) => details[id]), ...Object.keys(details)])]
-  const isFirst = new Set(first)
-  const sizeOf = (id: string, d: Detail) => JSON.stringify(d).length + id.length + 8
-  // Room is set aside first for every watched run's baseline (its state and question
-  // ids), so however the rest is spent, none is ever polled as unknown: no question
-  // announced twice, no end missed.
-  const floor = new Map(ids.filter((id) => isFirst.has(id)).map((id) => [id, sizeOf(id, skeletonDetail(details[id] as Detail))]))
-  let reserved = [...floor.values()].reduce((a, b) => a + b, 0)
   const out: Record<string, Detail> = {}
   let used = 0
-  for (const id of ids) {
-    let d = details[id] as Detail
-    reserved -= floor.get(id) ?? 0
-    const room = budget - used - reserved
-    let n = sizeOf(id, d)
-    if (n > room && isFirst.has(id)) {
-      d = trimDetail(d, room - id.length - 8)
-      n = sizeOf(id, d)
-      if (n > room) {
-        d = skeletonDetail(d)
-        n = sizeOf(id, d)
-      }
+  for (const id of new Set([...first, ...Object.keys(details)])) {
+    let d = details[id]
+    if (!d) continue
+    let n = JSON.stringify(d).length
+    if (used + n > budget) {
+      if (!first.includes(id)) continue
+      d = { ...placeholder(d.runId, d.fetchedAt), state: d.state, questions: d.questions.map((q) => ({ ...q, question: '' })) }
+      n = JSON.stringify(d).length
     }
-    if (n > room) continue
     used += n
     out[id] = d
   }
